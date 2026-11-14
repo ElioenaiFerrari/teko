@@ -75,6 +75,10 @@
     prove: { choice: 'age18', verifier: 'Loja Exemplo', result: null, error: null },
     vote: { choice: 'onca', result: null },
     lockMsg: null,
+    lastAck: false,
+    wiped: false,
+    prevState: null,
+    expectWipe: false,
     wipeArmed: false,
     busy: false,
     prompt: null,
@@ -187,7 +191,7 @@
       return await fn();
     } catch (e) {
       if (!silent) toast(friendly(e));
-      if (e.code === 'DeviceWiped') { resetSession(); await poll(); }
+      if (e.code === 'DeviceWiped') { resetSession(); S.wiped = true; await poll(); }
       return undefined;
     }
   }
@@ -218,6 +222,11 @@
       const was = S.dev;
       S.dev = r;
       if (was.connected && !r.connected) { resetSession(); toast('Dispositivo desconectado.'); }
+      const stNow = r.connected && r.status ? r.status.state : null;
+      const had = ['initialized', 'credentials_issued'].includes(S.prevState);
+      if (had && (stNow === 'virgin' || stNow === 'firmware_installed') && !S.expectWipe) { resetSession(); S.wiped = true; }
+      if (stNow) S.prevState = stNow;
+      if (stNow === 'initialized' || stNow === 'credentials_issued') S.wiped = false;
       if (r.connected && r.status && r.status.state === 'virgin' && S.civic) resetSession();
     } catch { /* ignora: tenta no próximo ciclo */ }
     render();
@@ -249,7 +258,7 @@
       if (S.genuine && S.genuine.genuine) chips.push(chip('Genuíno', 'ok', 'shield'));
       if (S.genuine && !S.genuine.genuine) chips.push(chip('Falhou', 'bad', 'alert'));
       if (st.state !== 'virgin' && st.state !== 'firmware_installed') chips.push(st.locked ? chip('Bloqueado', 'warn', 'lock') : chip('Desbloqueado', 'info', 'unlock'));
-      if (st.state !== 'virgin' && st.state !== 'firmware_installed' && st.retries_remaining < 8) chips.push(chip(`${st.retries_remaining} tentativas`, st.retries_remaining <= 3 ? 'bad' : 'warn'));
+      if (st.state !== 'virgin' && st.state !== 'firmware_installed' && st.retries_remaining < 8) chips.push(chip(`${st.retries_remaining} ${st.retries_remaining === 1 ? 'tentativa' : 'tentativas'}`, st.retries_remaining <= 3 ? 'bad' : 'warn'));
     } else {
       chips.push(chip('Modo leitura', 'pink', 'globe'));
     }
@@ -347,7 +356,12 @@
       <li class="step ${i < idx ? 'step--done' : i === idx ? 'step--now' : ''}" ${i === idx ? 'aria-current="step"' : ''}>
         <span class="step__n">${i < idx ? ico('check') : i + 1}</span>${esc(label)}</li>`).join('');
     const body = { detect: sDetect, auth: sAuth, firmware: sFirmware, pin: sPin, id: sId, issue: sIssue, done: sDone }[cur]();
-    return `${head('Primeira utilização', 'Vamos configurar seu dispositivo', 'Cada etapa sensível é confirmada na tela e nos botões do dispositivo, nunca neste computador.')}
+    const wipedBanner = S.wiped
+      ? `<div class="callout callout--bad" role="alert">${ico('alert')}<div><strong>Seu dispositivo foi apagado</strong>
+          <p>Houve excesso de tentativas de PIN (ou o dispositivo foi apagado). Chaves, ID Cívico e credencial foram <strong>destruídos</strong> e não há seed para recuperar. É preciso configurar de novo e refazer a emissão da credencial (na vida real, presencialmente na autoridade).</p>
+          <div class="row" style="margin-top:8px"><button class="btn btn--ghost btn--sm" data-act="dismisswipe">Entendi</button></div></div></div>`
+      : '';
+    return `${wipedBanner}${head('Primeira utilização', 'Vamos configurar seu dispositivo', 'Cada etapa sensível é confirmada na tela e nos botões do dispositivo, nunca neste computador.')}
       <ol class="stepper" aria-label="Etapas">${stepper}</ol>${body}`;
   }
 
@@ -450,12 +464,23 @@
   // ───────────────────────── desbloqueio ─────────────────────────
   function vUnlock() {
     const st = S.dev.status;
+    const r = st.retries_remaining;
+    const last = r <= 1;
+    let warn = '';
+    if (last) {
+      warn = callout('bad', 'alert', 'ÚLTIMA TENTATIVA', `<p>Se o PIN estiver errado, o dispositivo <strong>apaga chaves e credencial</strong> e será preciso refazer a emissão. Não tem certeza do PIN? No emulador, deixe o PIN vazio e aperte Enter: isso <strong>cancela sem gastar a tentativa</strong>.</p>`);
+    } else if (r <= 3) {
+      warn = callout('warn', 'alert', `Atenção: restam ${r} tentativas`, `<p>Ao zerar, o dispositivo se apaga. Para desistir sem gastar tentativa, deixe o PIN vazio no emulador e aperte Enter.</p>`);
+    }
+    const blocked = last && !S.lastAck;
     return `${head('Dispositivo bloqueado', 'Desbloqueie no dispositivo', 'Ao conectar, o dispositivo sempre começa bloqueado.')}
       <article class="card">
         <div class="card__head"><div class="card__ico card__ico--onca">${ico('lock')}</div><h2>Digite o PIN no terminal do emulador</h2></div>
-        <p class="muted">A Suite só pede o desbloqueio; quem lê o PIN é o dispositivo. Tentativas restantes: <strong>${st.retries_remaining}</strong>. Após esgotar, o dispositivo se apaga.</p>
+        <p class="muted">A Suite só pede o desbloqueio; quem lê o PIN é o dispositivo. Tentativas restantes: <strong>${r}</strong> de 8.</p>
+        ${warn}
         ${S.lockMsg ? callout('bad', 'alert', '', `<p>${esc(S.lockMsg)}</p>`) : ''}
-        <div class="row"><button class="btn" data-act="unlock">${ico('unlock')}Desbloquear</button></div>
+        ${last ? `<label class="row"><input type="checkbox" data-act="lastack" ${S.lastAck ? 'checked' : ''}> <span>Entendo que, se errar, o dispositivo será apagado.</span></label>` : ''}
+        <div class="row"><button class="btn" data-act="unlock" ${blocked ? 'disabled' : ''}>${ico('unlock')}Desbloquear</button></div>
       </article>`;
   }
 
@@ -615,9 +640,11 @@
       });
       S.lastKey = ''; await poll();
     },
+    lastack(b) { S.lastAck = b.checked; S.lastKey = ''; render(); },
+    dismisswipe() { S.wiped = false; S.lastKey = ''; render(); },
     gohome() { S.route = 'identity'; S.userPicked = true; S.lastKey = ''; loadId(); render(); },
     async unlock() {
-      S.lockMsg = null;
+      S.lockMsg = null; S.lastAck = false;
       await guarded(async () => {
         const r = await call('unlock');
         if (r.result === 'wrong_pin') { S.lockMsg = `PIN incorreto. Restam ${r.remaining} tentativa(s) antes do apagamento.`; }
@@ -639,7 +666,9 @@
     wipearm() { S.wipeArmed = true; S.lastKey = ''; render(); },
     wipecancel() { S.wipeArmed = false; S.lastKey = ''; render(); },
     async wipe() {
+      S.expectWipe = true;
       await guarded(async () => { await call('wipe'); toast('Dispositivo apagado.', 'ok'); resetSession(); });
+      S.expectWipe = false;
       S.userPicked = false; S.lastKey = ''; await poll();
     },
     copy(b) { navigator.clipboard.writeText(b.dataset.text).then(() => toast('Copiado.', 'ok'), () => toast('Não consegui copiar.')); },

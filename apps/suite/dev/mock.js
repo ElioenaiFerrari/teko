@@ -14,7 +14,7 @@
     state: q === 'virgin' ? 'virgin' : q === 'ready' || q === 'locked' ? 'credentials_issued' : 'virgin',
     locked: q === 'locked',
     fw: q === 'virgin' || q === 'none' ? 0 : 1,
-    retries: 8,
+    retries: Number(new URLSearchParams(location.search).get('retries') || 8),
   };
   const status = () => ({
     connected: dev.connected, busy: false, addr: '127.0.0.1:7878', trust_ok: true, error: null,

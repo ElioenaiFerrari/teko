@@ -396,6 +396,41 @@ fn exponential_delay_between_attempts() {
 }
 
 #[test]
+fn device_screen_warns_when_few_attempts_remain() {
+    let (w, hal, dev, _) = ready();
+    drop(dev);
+    let mut dev = boot(&w, &hal, 8);
+    hal.set_default_pin(Some("135792"));
+    for attempt in 1..=7u32 {
+        hal.advance_ms(10_000_000);
+        hal.clear_screens();
+        dev.handle(Request::Unlock(Unlock {}));
+        let shown = hal
+            .screens()
+            .into_iter()
+            .find(|s| s.title == "DIGITE O PIN")
+            .unwrap()
+            .lines
+            .concat();
+        let remaining = 8 - (attempt - 1);
+        assert!(
+            shown.contains(&format!("restantes: {remaining}")),
+            "{shown}"
+        );
+        assert_eq!(
+            shown.contains("ATENÇÃO"),
+            (2..=3).contains(&remaining),
+            "{remaining}: {shown}"
+        );
+        assert_eq!(
+            shown.contains("ÚLTIMA TENTATIVA"),
+            remaining == 1,
+            "{remaining}: {shown}"
+        );
+    }
+}
+
+#[test]
 fn counter_is_persisted_before_the_pin_is_checked() {
     let (w, hal, dev, _) = ready();
     drop(dev);

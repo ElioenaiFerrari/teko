@@ -577,15 +577,20 @@ impl<H: Hal, R: RngCore + CryptoRng> Device<H, R> {
                 return Err(f);
             }
         }
-        self.hal.show(&Screen::new(
-            "DIGITE O PIN",
-            Vec::from([format!(
-                "Tentativas restantes: {}",
-                self.cfg
-                    .max_pin_attempts
-                    .saturating_sub(self.p.pin_fail_count)
-            )]),
-        ));
+        let remaining = self
+            .cfg
+            .max_pin_attempts
+            .saturating_sub(self.p.pin_fail_count);
+        let mut lines = Vec::from([format!("Tentativas restantes: {remaining}")]);
+        if remaining <= 1 {
+            lines.push(String::from("ÚLTIMA TENTATIVA!"));
+            lines.push(String::from("Se errar, o dispositivo APAGA"));
+            lines.push(String::from("chaves e credenciais."));
+        } else if remaining <= 3 {
+            lines.push(String::from("ATENÇÃO: errar demais APAGA"));
+            lines.push(String::from("o dispositivo."));
+        }
+        self.hal.show(&Screen::new("DIGITE O PIN", lines));
         self.hal.notify(&Response::ButtonRequest(ButtonRequest {
             kind: ButtonKind::PinEntry as i32,
         }));

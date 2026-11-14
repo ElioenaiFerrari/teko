@@ -286,7 +286,8 @@ svg.i { width: 20px; height: 20px; flex: none; fill: none; stroke: currentColor;
 .callout--info .i { color: var(--arara); }
 .callout--pink { background: var(--tint-boto); border-color: color-mix(in srgb, var(--boto) 35%, transparent); }
 .callout--pink .i { color: var(--boto); }
-.callout strong { display: block; }
+.callout > div > strong:first-child { display: block; }
+input[type="checkbox"] { width: 20px; height: 20px; accent-color: var(--primary); flex: none; cursor: pointer; }
 
 .fw { display: grid; gap: 10px; }
 .fw__item { display: grid; grid-template-columns: 1fr auto; gap: 8px 16px; align-items: center; padding: 14px 16px; border: 1px solid var(--border); border-radius: 14px; background: var(--surface); }

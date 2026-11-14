@@ -9,8 +9,9 @@ mod signed_doc;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use prost::Message;
-use rand::RngCore;
-use rand::rngs::OsRng;
+use rand::Rng;
+use rand::rand_core::UnwrapErr;
+use rand::rngs::SysRng;
 use serde::Serialize;
 use sha3::{Digest, Sha3_256};
 use teko_attestation::{
@@ -205,7 +206,7 @@ impl<T: Transport> DeviceClient<T> {
         policy: &TrustPolicy,
     ) -> Result<AuthenticityReport, ClientError> {
         let mut nonce = [0u8; 32];
-        OsRng.fill_bytes(&mut nonce);
+        UnwrapErr(SysRng).fill_bytes(&mut nonce);
         let a = match self.expect(
             Request::AttestationChallenge(AttestationChallenge {
                 nonce: nonce.to_vec(),
@@ -430,7 +431,7 @@ impl<T: Transport> DeviceClient<T> {
         verifier_name: &str,
     ) -> Result<AttributeResult, ClientError> {
         let mut nonce = [0u8; 16];
-        OsRng.fill_bytes(&mut nonce);
+        UnwrapErr(SysRng).fill_bytes(&mut nonce);
         let proof = self.expect(
             Request::ProveAttribute(ProveAttribute {
                 predicate: Some(predicate),

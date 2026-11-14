@@ -1,8 +1,12 @@
-# cargo-deny — supply chain (princípio 4). NÃO TESTADO localmente (cargo-deny não está instalado
-# nesta máquina); roda no CI. Se a lista de licenças reclamar de alguma dependência, revise e ajuste.
+# cargo-deny — supply chain (princípio 4). Roda no CI (não instalado localmente).
+# Se a lista de licenças reclamar de alguma dependência, revise e ajuste.
 [advisories]
 version = 2
 yanked = "deny"
+ignore = [
+  # proc-macro-error: "não mantido" (não é vulnerabilidade); macro de build, vem do Tauri. Reavaliar ao atualizar o Tauri.
+  { id = "RUSTSEC-2024-0370", reason = "unmaintained, build-time proc macro via Tauri; sem correção disponível" },
+]
 
 [licenses]
 version = 2

@@ -16,17 +16,18 @@ members = [
 version = "0.1.0"
 edition = "2024"
 license = "MIT OR Apache-2.0"
+publish = false
 
 [workspace.dependencies]
 prost = { version = "0.13", default-features = false, features = ["derive"] }
 sha3 = { version = "0.10", default-features = false }
-p256 = { version = "0.13", default-features = false, features = ["ecdsa"] }
+p256 = { version = "0.14", default-features = false, features = ["ecdsa"] }
 bech32 = { version = "0.11", default-features = false, features = ["alloc"] }
 zeroize = { version = "1", default-features = false, features = ["alloc", "derive"] }
 subtle = { version = "2", default-features = false }
 thiserror = { version = "2", default-features = false }
-rand_core = { version = "0.6", default-features = false }
-rand = "0.8"
+rand_core = { version = "0.10", default-features = false }
+rand = "0.10"
 proptest = "1"
 
 teko-protocol = { path = "crates/teko-protocol" }

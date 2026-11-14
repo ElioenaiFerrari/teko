@@ -4,7 +4,7 @@ use alloc::vec::Vec;
 use core::fmt;
 
 use prost::Message;
-use rand_core::{CryptoRng, RngCore};
+use rand_core::{CryptoRng, Rng};
 use teko_attestation::{
     BlobHasher, FactoryData, FirmwareError, FirmwareManifest, TrustPolicy, issue_request_message,
     manifest_fingerprint, sign_attestation, verify_blob, verify_manifest,
@@ -51,7 +51,7 @@ struct FwUpload {
     received: u64,
 }
 
-pub struct Device<H: Hal, R: RngCore + CryptoRng> {
+pub struct Device<H: Hal, R: Rng + CryptoRng> {
     hal: H,
     rng: R,
     cfg: DeviceConfig,
@@ -65,7 +65,7 @@ pub struct Device<H: Hal, R: RngCore + CryptoRng> {
     shown_home: (i32, bool, u32),
 }
 
-impl<H: Hal, R: RngCore + CryptoRng> Drop for Device<H, R> {
+impl<H: Hal, R: Rng + CryptoRng> Drop for Device<H, R> {
     fn drop(&mut self) {
         self.p.k_root.zeroize();
         self.p.voter_secret.zeroize();
@@ -74,7 +74,7 @@ impl<H: Hal, R: RngCore + CryptoRng> Drop for Device<H, R> {
     }
 }
 
-impl<H: Hal, R: RngCore + CryptoRng> Device<H, R> {
+impl<H: Hal, R: Rng + CryptoRng> Device<H, R> {
     /// Boots the device. Loads persisted state or starts `Virgin`
     /// (with the factory attestation material, if provided).
     pub fn new(

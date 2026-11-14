@@ -11,7 +11,8 @@ use std::time::Duration;
 use device_emulator::{LinkSlot, Linked, serve};
 use issuer_cli::{Issuer, Subject, scratch_dir};
 use prost::Message;
-use rand::rngs::OsRng;
+use rand::rand_core::UnwrapErr;
+use rand::rngs::SysRng;
 use teko_attestation::{FirmwareManifest, TrustPolicy};
 use teko_client::{
     ClientError, DeviceClient, UnlockOutcome, inspect_firmware, verify_signed_document,
@@ -47,7 +48,7 @@ fn start() -> Rig {
         };
         let mut dev = Device::new(
             Linked::new(hal2, slot.clone()),
-            OsRng,
+            UnwrapErr(SysRng),
             cfg,
             trust2,
             Some(factory),

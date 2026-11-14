@@ -3,6 +3,7 @@ name = "teko-suite"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
+publish.workspace = true
 description = "Teko Suite: desktop companion for the Teko civic identity device"
 
 [build-dependencies]

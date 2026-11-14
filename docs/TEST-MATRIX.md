@@ -54,5 +54,5 @@ Legenda: **P** = `proptest` (muitos casos), **U** = unitário, **E** = ponta a p
 - **Tempo constante da comparação do PIN:** o código usa `subtle::ConstantTimeEq`, mas não há teste de temporização.
 - **`--listen` só em loopback:** verificado manualmente (recusa `0.0.0.0`); falta teste automatizado.
 - **A janela da Suite (Tauri) e a UI JS:** não há teste automatizado de interface; a UI foi exercitada com o mock no navegador e o app real só foi aberto até conectar no emulador.
-- **`no_std` em alvo embarcado real:** só no CI (ainda não executado). Localmente: as libs compilam com `#![no_std]` no host e as dependências de runtime não ativam `std`.
+- **`no_std` em alvo embarcado real:** o CI compila o núcleo para `thumbv7em-none-eabihf` (passou em 2026-11-14); não há teste de execução em hardware.
 - **Fuzzing contínuo do parser:** só `proptest`; sem `cargo-fuzz`.

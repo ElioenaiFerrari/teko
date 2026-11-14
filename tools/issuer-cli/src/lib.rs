@@ -15,8 +15,9 @@ use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use prost::Message;
-use rand::RngCore;
-use rand::rngs::OsRng;
+use rand::Rng;
+use rand::rand_core::UnwrapErr;
+use rand::rngs::SysRng;
 use teko_attestation::{
     FactoryData, FirmwareManifest, TrustPolicy, blob_hash, issue_batch_cert, issue_request_message,
     sign_manifest, verify_batch_chain,
@@ -115,7 +116,7 @@ impl Issuer {
             ));
         }
         fs::create_dir_all(&self.dir)?;
-        let mut rng = OsRng;
+        let mut rng = UnwrapErr(SysRng);
         let root = generate_signing_key(&mut rng);
         save_key(&self.dir.join("root.key"), &root)?;
         let mut signers = Vec::new();
@@ -207,7 +208,7 @@ impl Issuer {
     /// Fresh random nonce the device must sign into its identity request.
     pub fn new_nonce() -> Vec<u8> {
         let mut n = vec![0u8; 32];
-        OsRng.fill_bytes(&mut n);
+        UnwrapErr(SysRng).fill_bytes(&mut n);
         n
     }
 
@@ -252,7 +253,7 @@ impl Issuer {
         let attributes = build_attributes(subject, now)?;
         let root = load_key(&self.dir.join("root.key"))?;
         let mut credential_id = [0u8; 16];
-        OsRng.fill_bytes(&mut credential_id);
+        UnwrapErr(SysRng).fill_bytes(&mut credential_id);
         let issued = credential::issue(
             &root,
             ISSUER_NAME,
@@ -261,7 +262,7 @@ impl Issuer {
             now + CREDENTIAL_YEARS * 365 * 24 * 3600,
             credential_id,
             &attributes,
-            &mut OsRng,
+            &mut UnwrapErr(SysRng),
         );
         // Authority-side registry of issuance (identity side only; never touches voting).
         let line = format!(
@@ -358,7 +359,7 @@ fn build_attributes(subject: &Subject, now: u64) -> Result<Vec<(String, String)>
         return Err(invalid("nacionalidade deve ter 2 letras (ex.: BR)"));
     }
     let mut reg = [0u8; 4];
-    OsRng.fill_bytes(&mut reg);
+    UnwrapErr(SysRng).fill_bytes(&mut reg);
     let mut attrs = vec![
         ("name".to_string(), name.to_string()),
         (
@@ -405,7 +406,7 @@ mod tests {
         nonce: &[u8],
         good_pop: bool,
     ) -> (IdentityRequest, SigningKey) {
-        let id_key = generate_signing_key(&mut OsRng);
+        let id_key = generate_signing_key(&mut UnwrapErr(SysRng));
         let pk = public_key_bytes(&id_key);
         let msg = issue_request_message(nonce, &pk);
         let factory = issuer.provision_device().unwrap();
@@ -413,7 +414,7 @@ mod tests {
         let signer = if good_pop {
             id_key.clone()
         } else {
-            generate_signing_key(&mut OsRng)
+            generate_signing_key(&mut UnwrapErr(SysRng))
         };
         (
             IdentityRequest {
@@ -503,7 +504,7 @@ mod tests {
         ));
 
         let (mut forged, _) = fake_request(&issuer, &nonce, true);
-        let rogue = generate_signing_key(&mut OsRng);
+        let rogue = generate_signing_key(&mut UnwrapErr(SysRng));
         let msg = issue_request_message(&nonce, &forged.pk_identity);
         forged.attestation_signature = teko_crypto::sign_tagged(&rogue, tags::ISSUE_ATTEST, &msg);
         assert!(matches!(

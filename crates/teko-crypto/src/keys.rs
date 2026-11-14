@@ -1,7 +1,8 @@
 use alloc::vec::Vec;
 
 use p256::ecdsa::{SigningKey, VerifyingKey};
-use rand_core::{CryptoRng, RngCore};
+use p256::elliptic_curve::Generate;
+use rand_core::CryptoRng;
 use sha3::{Digest, Sha3_256};
 use zeroize::Zeroizing;
 
@@ -38,16 +39,13 @@ pub fn derive_signing_key(root: &[u8; 32], tag: &str) -> Result<SigningKey, Cryp
     Err(CryptoError::Derivation)
 }
 
-pub fn generate_signing_key<R: RngCore + CryptoRng>(rng: &mut R) -> SigningKey {
-    SigningKey::random(rng)
+pub fn generate_signing_key<R: CryptoRng + ?Sized>(rng: &mut R) -> SigningKey {
+    SigningKey::generate_from_rng(rng)
 }
 
 /// SEC1 compressed public key (33 bytes).
 pub fn public_key_bytes(key: &SigningKey) -> Vec<u8> {
-    key.verifying_key()
-        .to_encoded_point(true)
-        .as_bytes()
-        .to_vec()
+    key.verifying_key().to_sec1_point(true).as_bytes().to_vec()
 }
 
 pub fn verifying_key_from_bytes(bytes: &[u8]) -> Result<VerifyingKey, CryptoError> {

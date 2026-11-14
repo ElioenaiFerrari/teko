@@ -10,7 +10,7 @@ use alloc::vec::Vec;
 
 use p256::ecdsa::SigningKey;
 use prost::Message;
-use rand_core::{CryptoRng, RngCore};
+use rand_core::{CryptoRng, Rng};
 
 use crate::error::CryptoError;
 use crate::keys::{public_key_bytes, tagged_hash};
@@ -89,7 +89,7 @@ fn presentation_signing_bytes(p: &Presentation) -> Vec<u8> {
 }
 
 #[allow(clippy::too_many_arguments)]
-pub fn issue<R: RngCore + CryptoRng>(
+pub fn issue<R: Rng + CryptoRng>(
     issuer_key: &SigningKey,
     issuer_name: &str,
     subject_key: &[u8],

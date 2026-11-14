@@ -9,7 +9,7 @@ Status: **parcialmente implementado**. Cada item diz o que existe hoje e o que f
 | Código aberto, dependências travadas (`Cargo.lock`, `--locked`) | Existe |
 | Toolchain fixada (`rust-toolchain.toml`, Rust 1.100.0) | Existe |
 | `make repro`: compila `device-emulator` e `issuer-cli` duas vezes, em diretórios diferentes, e compara os hashes | **Existe e passou** (mesmo hash, nesta máquina) |
-| Reprodutibilidade entre **máquinas/SOs diferentes** | **Não verificada** (só um ambiente testado) |
+| Reprodutibilidade em **Linux (CI do GitHub)** e na máquina de desenvolvimento (macOS), cada uma comparando dois diretórios | **Passou em cada ambiente.** Comparar o hash **entre** macOS e Linux: **não verificado** |
 | Reprodutibilidade da **Suite (Tauri)** | **Não verificada** (inclui assets embutidos e bibliotecas do sistema; precisa de teste próprio) |
 | `make release-check`: o build normal não contém os botões automáticos (`test-buttons`) | **Existe e passou** |
 
@@ -40,7 +40,12 @@ A Suite envia um desafio aleatório; o dispositivo assina com a chave de lote e 
 
 ## 5. Dependências
 
-`deny.toml` (cargo-deny: advisories, licenças, fontes) e o workflow de CI estão escritos, mas **ainda não foram executados** (cargo-deny não está instalado aqui e o repositório não tem remoto). Rode uma vez e ajuste a lista de licenças antes de confiar.
+`deny.toml` (cargo-deny: advisories, licenças, fontes) e o CI **rodaram no GitHub em 2026-11-14** e já pagaram o investimento:
+- **RUSTSEC-2026-0387** (tempo constante em `crypto-bigint 0.5.5`, vindo do `p256 0.13`) → corrigido migrando para `p256 0.14` (ver ADR-0002).
+- **RUSTSEC-2024-0370** (`proc-macro-error` não mantido, macro de build vinda do Tauri) → **ignorado conscientemente** em `deny.toml`, com justificativa; reavaliar ao atualizar o Tauri.
+- Crates do workspace marcadas `publish = false` (o cargo-deny tratava as dependências de caminho como curinga).
+
+Resultado do primeiro CI: `core` (fmt, clippy, testes, `release-check`, `repro-build` **em Linux**) e `no-std` (compila para `thumbv7em-none-eabihf`) e `suite` (macOS) passaram.
 
 ## 6. Perguntas em aberto
 

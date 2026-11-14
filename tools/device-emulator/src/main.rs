@@ -5,7 +5,8 @@ use std::process::ExitCode;
 use device_emulator::{FileStorage, TerminalHal};
 use device_emulator::{LinkSlot, Linked, serve};
 use prost::Message;
-use rand::rngs::OsRng;
+use rand::rand_core::UnwrapErr;
+use rand::rngs::SysRng;
 use teko_attestation::{FactoryData, TrustPolicy};
 use teko_device_core::{Device, DeviceConfig};
 
@@ -118,8 +119,8 @@ fn run() -> Result<(), String> {
     macro_rules! launch {
         ($hal:expr) => {{
             let hal = Linked::new($hal, slot.clone());
-            let mut dev =
-                Device::new(hal, OsRng, cfg, trust, factory).map_err(|e| e.to_string())?;
+            let mut dev = Device::new(hal, UnwrapErr(SysRng), cfg, trust, factory)
+                .map_err(|e| e.to_string())?;
             serve(&listener, &mut dev, &slot, |m| println!("[usb] {m}")).map_err(|e| e.to_string())
         }};
     }

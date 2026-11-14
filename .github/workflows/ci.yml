@@ -1,5 +1,5 @@
-# CI do Teko. Escrito mas AINDA NÃO EXECUTADO (o repositório não tem remoto/commits).
-# Antes de confiar: fixe as actions por SHA (hoje por tag) e rode uma vez para ajustar.
+# CI do Teko. Primeira execução: core, no-std e suite passaram; deny achou 3 itens (tratados).
+# Pendente: fixar as actions por SHA (hoje por tag).
 name: CI
 on: [push, pull_request]
 

@@ -3,6 +3,7 @@ name = "teko-device-core"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
+publish.workspace = true
 
 [features]
 # Scripted HAL (automated buttons) for tests/e2e. NEVER enabled in normal builds.

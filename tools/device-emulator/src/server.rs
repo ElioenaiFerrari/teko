@@ -2,7 +2,7 @@ use std::io;
 use std::net::{TcpListener, TcpStream};
 use std::time::Duration;
 
-use rand_core::{CryptoRng, RngCore};
+use rand_core::{CryptoRng, Rng};
 use teko_device_core::{Device, Hal};
 use teko_protocol::{ErrorCode, ProtocolError, Request, Response};
 use teko_transport::{StreamTransport, Transport, TransportError};
@@ -23,7 +23,7 @@ pub const IDLE_TIMEOUT: Duration = Duration::from_secs(30);
 
 /// Serves ONE host connection until it closes. A new connection starts LOCKED
 /// (like replugging a USB device): the PIN is needed again.
-pub fn handle_connection<H: Hal, R: RngCore + CryptoRng>(
+pub fn handle_connection<H: Hal, R: Rng + CryptoRng>(
     dev: &mut Device<Linked<H>, R>,
     slot: &LinkSlot,
     stream: TcpStream,
@@ -31,7 +31,7 @@ pub fn handle_connection<H: Hal, R: RngCore + CryptoRng>(
     handle_connection_with(dev, slot, stream, IDLE_TIMEOUT)
 }
 
-pub fn handle_connection_with<H: Hal, R: RngCore + CryptoRng>(
+pub fn handle_connection_with<H: Hal, R: Rng + CryptoRng>(
     dev: &mut Device<Linked<H>, R>,
     slot: &LinkSlot,
     stream: TcpStream,
@@ -86,7 +86,7 @@ pub fn handle_connection_with<H: Hal, R: RngCore + CryptoRng>(
 }
 
 /// Accepts connections one at a time, forever (the device has one USB port).
-pub fn serve<H: Hal, R: RngCore + CryptoRng>(
+pub fn serve<H: Hal, R: Rng + CryptoRng>(
     listener: &TcpListener,
     dev: &mut Device<Linked<H>, R>,
     slot: &LinkSlot,
@@ -107,7 +107,8 @@ pub fn serve<H: Hal, R: RngCore + CryptoRng>(
 mod tests {
     #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
     use super::*;
-    use rand::rngs::OsRng;
+    use rand::rand_core::UnwrapErr;
+    use rand::rngs::SysRng;
     use std::time::Instant;
     use teko_attestation::TrustPolicy;
     use teko_device_core::DeviceConfig;
@@ -128,7 +129,7 @@ mod tests {
             };
             let mut dev = Device::new(
                 Linked::new(ScriptedHal::new(), slot.clone()),
-                OsRng,
+                UnwrapErr(SysRng),
                 DeviceConfig::default(),
                 trust,
                 None,

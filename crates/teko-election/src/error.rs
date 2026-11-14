@@ -28,4 +28,12 @@ pub enum ElectionError {
     MissingReason,
     #[error("unknown phase value")]
     UnknownPhase,
+    #[error("unknown contest `{0}`")]
+    UnknownContest(alloc::string::String),
+    #[error("transition is bound to a different version of this contest")]
+    WrongContest,
+    #[error("invalid manifest revision: {0}")]
+    InvalidRevision(&'static str),
+    #[error("invalid jurisdiction: {0}")]
+    InvalidJurisdiction(&'static str),
 }

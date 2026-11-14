@@ -139,6 +139,11 @@ Não implementadas; ver `PHASE-2-VOTING.md`. Cada linha vira teste quando houver
 | V8 | Censura/queda do quadro na janela de votação | Espelhos/witnesses; janela longa | Depende de quem opera |
 | V9 | Provador no host vê a chave de eleitor | Credencial = par de chaves; o provador só vê assinatura/nullifier | Bug no protocolo de prova |
 | V10 | Eleitor perdido/clonado | Sem seed; revogação sem ligar identidade (ADR-0003 × ADR-0008) | Problema aberto |
+| V11 | **Ligar os votos de um mesmo eleitor entre pleitos** (presidente × governador × prefeito) e reduzir o anonimato ao menor conjunto | Chave de eleitor **por pleito** (`election_id ‖ contest_id`), nullifier por pleito | Falha no isolamento de chaves |
+| V12 | **Conjunto de anonimato pequeno** em município pequeno (centenas de eleitores) | Limiar mínimo de eleitores por pleito (ADR-0017); aviso na UI | Em município muito pequeno o sigilo é fraco por natureza |
+| V13 | Registrar-se em jurisdição onde não mora (domicílio falso) | A **autoridade** valida o domicílio ao conceder o direito de registro; o dispositivo não decide | Autoridade/cadastro errado ou fraudado |
+| V14 | Correlação por **tempo e rede** entre os registros de vários pleitos | Registrar cada pleito em sessão/canal/horário distintos | Só mitigação operacional |
+| V15 | Mudança de domicílio perto da eleição (voto duplo em dois lugares ou perda do direito) | Data de corte e fotografia da lista (decisão #10) | Casos de borda |
 
 ## 6. Perguntas em aberto
 

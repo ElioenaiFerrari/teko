@@ -53,6 +53,10 @@ Legenda: **P** = `proptest` (muitos casos), **U** = unitário, **E** = ponta a p
 
 | Garantia | Teste |
 |---|---|
+| **Elegibilidade por jurisdição**: Presidente é de todos; Governador só da UF; Prefeito só do município (propriedade sobre qualquer UF/município) | election: `president_is_national_governor_state_mayor_municipal`, `scopes_and_domiciles_are_validated`, `eligibility_matches_the_jurisdiction_exactly` (P) |
+| **Vários pleitos independentes**, cada um com suas datas e seu estado; abrir/cancelar um não afeta os outros | election: `contests_run_independently_with_their_own_dates`, `opening_one_contest_does_not_open_another_...`, `cancelling_one_contest_leaves_the_others_running` |
+| Transição amarrada ao pleito exato (hash); pleito desconhecido recusado | election: `transitions_are_bound_to_one_exact_contest` |
+| Cargo incompatível com a jurisdição recusado; revisões só acrescentam pleitos (2º turno), nunca alteram/removem | election: `structural_rules_are_enforced`, `revisions_may_add_contests_but_never_change_or_drop_one`, `a_runoff_added_in_a_later_revision_keeps_earlier_history_valid` |
 | Manifesto só vale com M-de-N assinaturas distintas; duplicadas e estranhos valem zero | election: `accepted_iff_m_distinct_valid_signers`, `duplicates_and_outsiders_count_zero` (P) |
 | Qualquer alteração do conteúdo invalida as assinaturas; o hash ignora assinaturas | election: `tampering_invalidates_signatures`, `hash_ignores_signatures_but_not_content` (P) |
 | Opções, calendário e textos inválidos/enganosos (bidi, quebra de linha, índices com buraco, duplicatas) são recusados | election: `structural_rules_are_enforced`, `text::rejects_spoofing_and_empty` |

@@ -25,3 +25,4 @@ pub const ELECTION_TRANSITION: &str = "teko/v2/election-transition";
 pub const BULLETIN_LEAF: &str = "teko/v2/bulletin-leaf";
 pub const BULLETIN_NODE: &str = "teko/v2/bulletin-node";
 pub const BULLETIN_HEAD: &str = "teko/v2/bulletin-head";
+pub const CONTEST: &str = "teko/v2/contest";

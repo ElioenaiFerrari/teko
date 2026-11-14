@@ -1,10 +1,10 @@
 # Fase 2 — Votação e governança eleitoral (especificação para revisão)
 
-Status: **spec em revisão; etapas 1 e 2 do plano já implementadas** (as que não dependem das decisões de criptografia): `teko-election` (§7) e `teko-bulletin` (§5). **Nada** de registro anônimo, prova ZK, apuração ou cédula foi escrito: depende das decisões do §10. Toda decisão de produto/segurança abaixo continua **PENDENTE** com alternativas e recomendação.
+Status: **spec em revisão; etapas 1 e 2 do plano já implementadas** (as que não dependem das decisões de criptografia): `teko-election` (§3.1 e §7) e `teko-bulletin` (§5). **Nada** de registro anônimo, prova ZK, apuração ou cédula foi escrito: depende das decisões do §10. Toda decisão de produto/segurança abaixo continua **PENDENTE** com alternativas e recomendação.
 
 | Etapa do §9 | Estado |
 |---|---|
-| 1. `teko-election` (manifesto, M-de-N, ciclo de vida) | **Feito** (16 testes) |
+| 1. `teko-election` (eleição com vários pleitos, jurisdições, M-de-N, ciclo de vida por pleito) | **Feito** (21 testes) |
 | 2. `teko-bulletin` (log Merkle append-only, provas de inclusão/consistência, head assinado, arquivo) | **Feito** (13 testes + 3 de integração) |
 | 3–9 | Não iniciadas |
 
@@ -50,6 +50,7 @@ O código atual (`teko_crypto::voter::commitment/nullifier`, mensagens `GetVoter
 | **Cidadão/eleitor** | Dispositivo + Suite | — |
 | **Autoridade de identidade** | Já existe (emite credencial). Na Fase 2 também diz "esta pessoa é elegível para a eleição E" | Não deve conseguir ligar identidade a cédula |
 | **Administrador da eleição** | Define candidatos, datas, regras; publica o manifesto | Assinatura M-de-N; auditável |
+| **Cadastro eleitoral** | Atesta o **domicílio eleitoral** (UF e município) de cada cidadão; no Brasil é a Justiça Eleitoral, distinta da autoridade de identidade civil (ADR-0017) | Mesma exigência de não ligar identidade a cédula |
 | **Registro (registrar)** | Aceita chaves de eleitor `pk_v` anônimas e publica a árvore | Não vê identidade |
 | **Quadro de avisos / blockchain** | Armazena manifestos, árvore, cédulas e provas, append-only | Não-confiável, mas verificável |
 | **Curadores (trustees)** | (Se houver cédula cifrada) guardam fatias da chave de apuração | Limiar t-de-n |
@@ -75,11 +76,38 @@ O código atual (`teko_crypto::voter::commitment/nullifier`, mensagens `GetVoter
 
 ---
 
+### 3.1 Cargos, jurisdições e calendários (ADR-0017)
+
+Uma eleição real não é uma única pergunta: há **vários cargos**, cada um com **sua jurisdição, seus candidatos e seus prazos**, e o cidadão só vota nos pleitos do seu domicílio (com o Presidente aberto a todos). O modelo:
+
+- **Eleição** = contêiner com um manifesto assinado M-de-N (ex.: "Eleições 2026").
+- **Pleito (*contest*)** = uma disputa: cargo, jurisdição, candidatos, **calendário próprio** e **ciclo de vida próprio**.
+
+| Cargo | Jurisdição | Quem pode votar | Exemplo de código |
+|---|---|---|---|
+| Presidente | Nacional | **Todos** | (vazio) |
+| Governador, Senador, Deputado federal/estadual | Estado | Domicílio eleitoral nessa UF | `SP` |
+| Prefeito, Vereador | Município | Domicílio eleitoral nesse município | `3550308` (código IBGE) |
+| Plebiscito/referendo | Qualquer nível | Conforme a jurisdição declarada | — |
+
+**Regras já implementadas em `teko-election`:**
+- O cargo precisa combinar com a jurisdição (um "Governador" com escopo nacional é rejeitado).
+- `is_eligible(domicílio, escopo)`: nacional ⇒ todos; estadual ⇒ mesma UF; municipal ⇒ mesmo município. Um carioca não vota para governador de SP; um paulista do interior vota para governador de SP mas não para prefeito da capital.
+- **Cada pleito tem suas datas** (registro, abertura, encerramento) e **sua máquina de estados**; abrir ou fechar um pleito não mexe nos outros. A sequência de decisões de governança é global (para auditoria), mas os horários só não podem voltar **dentro** de um mesmo pleito.
+- As transições se amarram ao **hash do pleito** (não do manifesto inteiro). Assim uma **revisão posterior pode acrescentar pleitos** (por exemplo, um **2º turno** depois da apuração do 1º) sem invalidar o histórico dos existentes; revisão que **altere ou remova** um pleito é recusada.
+
+**O que isso muda na privacidade** (novas ameaças V11–V15 no THREAT-MODEL):
+1. **Conjunto de anonimato = quem pode votar naquele pleito.** Presidente: todo o país. Prefeito de um município pequeno: poucos milhares, às vezes centenas. O sigilo do voto municipal é estruturalmente mais fraco.
+2. **A chave de eleitor tem que ser por pleito, não por eleição.** Com a mesma chave no voto de presidente e no de prefeito, qualquer um liga os dois votos, e o anonimato do presidente **encolhe para o tamanho do município**. Por isso `pk_v` é derivada com `election_id` **e** `contest_id` (§4.1).
+3. **Registros em momentos e canais separados:** registrar todos os pleitos de uma vez, pela mesma conexão, liga as chaves por tempo/rede.
+4. **O domicílio é revelado ao registro** (inevitável: ele precisa saber em qual pleito o `pk_v` entra), mas não a identidade.
+5. **O domicílio vale numa data de corte** (cadastro eleitoral fecha antes da eleição); a lista de elegíveis é uma fotografia. Decisão em aberto (§10, #10).
+
 ## 4. Credencial de eleitor e prova (ADR-0006, 0008, 0013)
 
 ### 4.1 Chaves de eleitor
 - Raiz de eleitor `K_v` (32 bytes, **entropia separada** da identidade, já decidido) fica no dispositivo.
-- Por eleição: `(sk_v,E, pk_v,E) = KDF(K_v, "teko/v2/voter" ‖ election_id)`, assim o mesmo eleitor não é ligável entre eleições.
+- **Por pleito:** `(sk_v,E,C, pk_v,E,C) = KDF(K_v, "teko/v2/voter" ‖ election_id ‖ contest_id)`. O mesmo eleitor **não é ligável** entre eleições **nem entre pleitos da mesma eleição** (presidente, governador, prefeito usam chaves independentes). Ver §3.1, ponto 2.
 - A **autoridade nunca** vê `pk_v,E`.
 
 ### 4.2 Registro anônimo (ADR-0008) — alternativas
@@ -138,11 +166,11 @@ O quadro guarda, em ordem e imutável: manifestos assinados, âncoras da árvore
 
 ## 7. Manifesto de eleição e governança (ADR-0016)
 
-**Manifesto** (assinado M-de-N pelas instituições administradoras): `election_id`, título, datas de cada fase, lista **ordenada** de candidatos/opções (nome, número), regras (tipo de cédula, regra de apuração), raiz de confiança (chaves da Autoridade, do Registro, dos curadores), parâmetros de prova. O **dispositivo verifica a assinatura M-de-N** e mostra o nome do candidato **a partir do manifesto**, nunca a partir do host.
+**Manifesto** (assinado M-de-N pelas instituições administradoras): `election_id`, título, **lista de pleitos** (cada um com `contest_id`, cargo, título exibido, **jurisdição**, lista **ordenada** de candidatos/opções com nome e número, e **calendário próprio**), tipo de cédula, chave do registro, `revision`. (Regra de apuração, curadores e parâmetros de prova entram quando as decisões do §10 saírem.) O **dispositivo verifica a assinatura M-de-N** e mostra o nome do candidato **a partir do manifesto**, nunca a partir do host.
 
-**Ciclo de vida** (máquina de estados, cada transição é uma mensagem assinada M-de-N no quadro):
+**Ciclo de vida, por pleito** (máquina de estados; cada transição é uma mensagem assinada M-de-N no quadro e amarrada ao hash daquele pleito):
 `Rascunho → CandidatosPublicados → RegistroAberto → VotacaoAberta → VotacaoEncerrada → Apurada → Auditada`
-(+ `Cancelada` com justificativa). Nada volta de estado; alterações viram novo manifesto versionado.
+(+ `Cancelada` com justificativa, só até a apuração; cancelar um pleito não afeta os outros). Nada volta de estado. Mudanças viram **nova revisão do manifesto que só pode acrescentar pleitos** (ex.: 2º turno).
 
 **Governança:** quem são as N instituições, quanto vale M, como rotacionar chaves e como contestar uma eleição são **decisões de produto fora do escopo técnico**, mas o sistema precisa expor os pontos de decisão. **PENDENTE.**
 
@@ -187,6 +215,11 @@ Invariantes novas a testar: a cédula só é assinada se o candidato exibido vei
 | 6 | **Governança** (ADR-0016): N instituições, M, rotação de chaves | Reusar o M-de-N da atestação (2-de-3 em teste) |
 | 7 | **Quem apura?** Apuração aberta (cédula em claro) vs. curadores com limiar | Aberta no estudo |
 | 8 | Aceitar que a **primeira versão não resiste à compra de voto** | Sim, declarado na UI e nos docs |
+| 9 | **Quem atesta o domicílio eleitoral** (ADR-0017): a mesma autoridade de identidade ou um cadastro eleitoral separado | Conceitualmente separado; no estudo, o `issuer-cli` simula os dois papéis |
+| 10 | **Data de corte** do domicílio (fotografia da lista de elegíveis) e o que acontece com quem se muda | Fotografia fixa no manifesto; mudança só vale na próxima eleição |
+| 11 | **Voto em branco e nulo**, e cargos **proporcionais/multi-vaga** (deputado, vereador: voto em candidato ou legenda) | Branco/nulo como opções explícitas; proporcional fica para depois do majoritário |
+| 12 | **Eleitor no exterior** (vota só para Presidente) e outras exceções de domicílio | Modelar como domicílio especial; fora do primeiro corte |
+| 13 | **Encerramento antecipado** de um pleito (hoje o sistema recusa fechar antes do horário) | Manter recusa; emergência vira cancelamento motivado |
 
 ## 11. Riscos e perguntas em aberto
 

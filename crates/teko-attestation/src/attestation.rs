@@ -162,6 +162,7 @@ mod tests {
             fw_signers: alloc::vec![public_key_bytes(&root)],
             fw_threshold: 1,
             revoked_batches: Vec::new(),
+            ..TrustPolicy::default()
         };
         (root, batch, policy, alloc::vec![cert.encode_to_vec()])
     }

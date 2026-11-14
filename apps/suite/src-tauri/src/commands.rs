@@ -9,8 +9,8 @@ use tauri::{AppHandle, Emitter, Manager, State};
 use teko_attestation::TrustPolicy;
 use teko_client::{
     AttributeResult, AuthenticityReport, CivicIdInfo, ClientError, DeviceClient, DeviceStatus,
-    FirmwareInfo, SignedDocument, UnlockOutcome, VerifiedDocument, inspect_firmware,
-    resolve_dev_dir, verify_signed_document,
+    ElectionSummary, FirmwareInfo, SignedBallot, SignedDocument, UnlockOutcome, VerifiedDocument,
+    inspect_firmware, resolve_dev_dir, verify_signed_document,
 };
 use teko_crypto::hex;
 use teko_protocol::{ButtonKind, Predicate, PredicateKind};
@@ -65,6 +65,8 @@ fn prompt_name(kind: ButtonKind) -> &'static str {
         ButtonKind::SignDocument => "sign_document",
         ButtonKind::ProveAttribute => "prove_attribute",
         ButtonKind::ExportCommitment => "export_commitment",
+        ButtonKind::LoadElection => "load_election",
+        ButtonKind::VoterKey => "voter_key",
         ButtonKind::SignBallot => "sign_ballot",
         ButtonKind::Wipe => "wipe",
         ButtonKind::IssueIdentity => "issue_identity",
@@ -344,11 +346,15 @@ pub async fn issue_credential(
     name: String,
     birth_date: String,
     nationality: String,
+    state: String,
+    municipality: String,
 ) -> Result<(), UiError> {
     let subject = Subject {
         name,
         birth_date,
         nationality,
+        electoral_state: state,
+        electoral_municipality: municipality,
     };
     with_device(app, suite.inner().clone(), move |c| {
         let issuer = Issuer::open(resolve_dev_dir());
@@ -517,19 +523,67 @@ pub async fn prove_attribute(
     .await
 }
 
-// ───────────────────────── voting (stub) & wipe ─────────────────────────
+// ───────────────────────── elections & wipe ─────────────────────────
 
-/// Wired to the device-side `SignBallot` stub. Expected result today:
-/// the device asks for confirmation, then answers `NotImplemented`.
+/// Gives the device the demo election (`dev/election.bundle`). The Suite checks
+/// governance first; the device checks again and asks the user to confirm.
 #[tauri::command]
-pub async fn cast_vote(
+pub async fn election_load(
     app: AppHandle,
     suite: State<'_, Suite>,
-    election: String,
-    choice: String,
-) -> Result<(), UiError> {
+) -> Result<ElectionSummary, UiError> {
+    let trust = load_trust()?;
+    let bytes = read_bundle()?;
     with_device(app, suite.inner().clone(), move |c| {
-        c.sign_ballot(&election, &choice)
+        c.load_election(&trust, &bytes)
+    })
+    .await
+}
+
+fn read_bundle() -> Result<Vec<u8>, UiError> {
+    fs::read(resolve_dev_dir().join("election.bundle")).map_err(|_| {
+        ui_err(
+            "NoElection",
+            "Não encontrei dev/election.bundle. Rode: make setup",
+        )
+    })
+}
+
+/// Reads the election the device already holds (no confirmation).
+#[tauri::command]
+pub async fn election_get(
+    app: AppHandle,
+    suite: State<'_, Suite>,
+) -> Result<ElectionSummary, UiError> {
+    let trust = load_trust()?;
+    let bytes = read_bundle()?;
+    with_device(app, suite.inner().clone(), move |c| {
+        if !c.has_election() {
+            // After a reconnection: re-verify the bundle on the host (no device traffic).
+            c.use_election_bundle(&trust, &bytes)?;
+        }
+        c.election()
+    })
+    .await
+}
+
+/// PROTOTYPE: the device signs the ballot after the user confirms on ITS screen
+/// (candidate name from the verified manifest). Nothing is submitted anywhere.
+#[tauri::command]
+pub async fn election_vote(
+    app: AppHandle,
+    suite: State<'_, Suite>,
+    election_id: String,
+    contest_id: String,
+    option_index: u32,
+) -> Result<SignedBallot, UiError> {
+    let trust = load_trust()?;
+    let bytes = read_bundle()?;
+    with_device(app, suite.inner().clone(), move |c| {
+        if !c.has_election() {
+            c.use_election_bundle(&trust, &bytes)?;
+        }
+        c.sign_ballot(&election_id, &contest_id, option_index)
     })
     .await
 }

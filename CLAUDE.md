@@ -74,7 +74,7 @@ make                                   # lista todos os atalhos (check, repro, r
 
 ## Próxima fase
 
-**Fase 2 (votação e governança eleitoral): especificação em [docs/PHASE-2-VOTING.md](docs/PHASE-2-VOTING.md), aguardando revisão. Etapas 1-2 implementadas (`teko-election`, `teko-bulletin`); o resto depende das decisões do §10.** Decisões pendentes listadas em §10 de lá. Achado importante: o stub `GetVoterCommitment` da Fase 1 será substituído por credencial de eleitor baseada em par de chaves.
+**Fase 2 (votação e governança eleitoral): especificação em [docs/PHASE-2-VOTING.md](docs/PHASE-2-VOTING.md), aguardando revisão. Etapas 1-3 implementadas (`teko-election` com vários pleitos/jurisdições, `teko-bulletin`, dispositivo + Suite votando por pleito, cédula assinada mas NÃO enviada); o resto depende das decisões do §10.** Decisões pendentes listadas em §10 de lá. Achado importante: o stub `GetVoterCommitment` da Fase 1 será substituído por credencial de eleitor baseada em par de chaves.
 
 ## Fora de escopo nesta fase
 

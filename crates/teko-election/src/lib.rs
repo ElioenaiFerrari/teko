@@ -15,6 +15,7 @@
 
 extern crate alloc;
 
+mod ballot;
 mod eligibility;
 mod error;
 mod lifecycle;
@@ -22,6 +23,7 @@ mod manifest;
 mod policy;
 mod text;
 
+pub use ballot::{BallotBody, ElectionBundle, sign_ballot, verify_ballot};
 pub use eligibility::{Domicile, Scope, ScopeLevel, is_eligible};
 pub use error::ElectionError;
 pub use lifecycle::{

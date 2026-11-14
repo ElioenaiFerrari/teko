@@ -27,11 +27,18 @@ use teko_crypto::{
     SigningKey, civic_id, generate_signing_key, hex, public_key_bytes, tagged_hash, tags,
     verify_tagged,
 };
+use teko_election::{
+    BALLOT_KIND_PUBLIC, Contest, Domicile, ElectionBundle, ElectionManifest, ElectionOption,
+    Office, Phase, Schedule, Scope, Transition, contest_hash,
+    sign_manifest as sign_election_manifest, sign_transition,
+};
 use teko_protocol::IdentityRequest;
 use thiserror::Error;
 
 pub const FW_SIGNERS: usize = 3;
 pub const FW_THRESHOLD: usize = 2;
+pub const GOV_SIGNERS: usize = 3;
+pub const GOV_THRESHOLD: usize = 2;
 pub const ISSUER_NAME: &str = "Autoridade Cívica (simulada)";
 const CREDENTIAL_YEARS: u64 = 5;
 const AGE_THRESHOLDS: [u32; 4] = [16, 18, 21, 65];
@@ -60,6 +67,10 @@ pub struct Subject {
     pub birth_date: String,
     /// ISO 3166-1 alpha-2, upper case.
     pub nationality: String,
+    /// Electoral domicile (from the electoral registry, simulated here): UF, e.g. `SP`.
+    pub electoral_state: String,
+    /// 7-digit IBGE municipality code, e.g. `3550308`.
+    pub electoral_municipality: String,
 }
 
 fn write_private(path: &Path, content: &str) -> io::Result<()> {
@@ -133,11 +144,19 @@ impl Issuer {
             hex::encode(&cert.encode_to_vec()),
         )?;
 
+        let mut gov = Vec::new();
+        for i in 0..GOV_SIGNERS {
+            let k = generate_signing_key(&mut rng);
+            save_key(&self.dir.join(format!("gov-{i}.key")), &k)?;
+            gov.push(public_key_bytes(&k));
+        }
         let trust = TrustPolicy {
             authority_root: public_key_bytes(&root),
             fw_signers: signers,
             fw_threshold: FW_THRESHOLD,
             revoked_batches: Vec::new(),
+            gov_signers: gov,
+            gov_threshold: GOV_THRESHOLD,
         };
         fs::write(self.dir.join("trust.txt"), trust.to_text())?;
         Ok(trust)
@@ -184,11 +203,23 @@ impl Issuer {
     /// Writes `firmware-v1/v2` (blob + manifest) and `factory.bin`.
     /// v1 is signed by signers {0,1}; v2 by {1,2}. Idempotent.
     pub fn dev_setup(&self) -> Result<TrustPolicy, IssuerError> {
-        let trust = if self.is_initialized() {
+        let mut trust = if self.is_initialized() {
             self.trust()?
         } else {
             self.init(false)?
         };
+        if trust.gov_signers.is_empty() {
+            // Older `dev/` folders predate elections: add governance keys in place.
+            let mut rng = UnwrapErr(SysRng);
+            for i in 0..GOV_SIGNERS {
+                let k = generate_signing_key(&mut rng);
+                save_key(&self.dir.join(format!("gov-{i}.key")), &k)?;
+                trust.gov_signers.push(public_key_bytes(&k));
+            }
+            trust.gov_threshold = GOV_THRESHOLD;
+            fs::write(self.dir.join("trust.txt"), trust.to_text())?;
+        }
+        self.dev_election(now_secs())?;
         for (version, signers) in [(1u32, [0usize, 1]), (2, [1, 2])] {
             let blob = make_firmware_blob(version, 48 * 1024);
             let manifest = self.sign_firmware(version, &blob, &signers)?;
@@ -203,6 +234,155 @@ impl Issuer {
             self.provision_device()?.encode_to_vec(),
         )?;
         Ok(trust)
+    }
+
+    /// Writes `election.bundle`: a demo election with FOUR contests on DIFFERENT
+    /// dates, so every phase is visible: President (voting open), Governor of SP
+    /// (registration only, voting opens tomorrow), Governor of RJ (voting open but
+    /// a different state), Mayor of São Paulo (candidates announced only).
+    /// Dates are relative to `now`. Re-running refreshes them.
+    pub fn dev_election(&self, now: u64) -> Result<(), IssuerError> {
+        const DAY: u64 = 86_400;
+        let gov: Vec<SigningKey> = (0..GOV_SIGNERS)
+            .map(|i| load_key(&self.dir.join(format!("gov-{i}.key"))))
+            .collect::<Result<_, _>>()?;
+        let opts = |names: &[&str], first: u32| -> Vec<ElectionOption> {
+            names
+                .iter()
+                .enumerate()
+                .map(|(i, n)| ElectionOption {
+                    index: i as u32,
+                    name: (*n).to_string(),
+                    number: format!("{}", first + i as u32),
+                })
+                .collect()
+        };
+        let contest = |id: &str,
+                       office: Office,
+                       title: &str,
+                       scope: Scope,
+                       o: Vec<ElectionOption>,
+                       s: (u64, u64, u64)| Contest {
+            contest_id: id.to_string(),
+            office: office as i32,
+            title: title.to_string(),
+            scope: Some(scope),
+            options: o,
+            schedule: Some(Schedule {
+                registration_opens: s.0,
+                voting_opens: s.1,
+                voting_closes: s.2,
+            }),
+        };
+        let mut manifest = ElectionManifest {
+            format_version: 2,
+            election_id: "eleicoes-exemplo-2026".to_string(),
+            title: "Eleições de exemplo 2026 (protótipo)".to_string(),
+            contests: vec![
+                contest(
+                    "presidente",
+                    Office::President,
+                    "Presidente da República",
+                    Scope::national(),
+                    opts(
+                        &[
+                            "Candidata Onça-Pintada",
+                            "Candidato Boto-Cor-de-Rosa",
+                            "Candidata Arara-Azul",
+                        ],
+                        10,
+                    ),
+                    (now - 5 * DAY, now - DAY, now + 3 * DAY),
+                ),
+                contest(
+                    "governador-sp",
+                    Office::Governor,
+                    "Governador de São Paulo",
+                    Scope::state("SP"),
+                    opts(&["Candidato Guará", "Candidata Vitória-Régia"], 20),
+                    (now - 3 * DAY, now + DAY, now + 5 * DAY),
+                ),
+                contest(
+                    "governador-rj",
+                    Office::Governor,
+                    "Governador do Rio de Janeiro",
+                    Scope::state("RJ"),
+                    opts(&["Candidato Mico-Leão-Dourado", "Candidata Capivara"], 40),
+                    (now - 4 * DAY, now - DAY, now + 2 * DAY),
+                ),
+                contest(
+                    "prefeito-3550308",
+                    Office::Mayor,
+                    "Prefeito de São Paulo",
+                    Scope::municipality("3550308"),
+                    opts(&["Candidata Jaguatirica", "Candidato Tucano"], 30),
+                    (now + DAY, now + 3 * DAY, now + 4 * DAY),
+                ),
+            ],
+            ballot_kind: BALLOT_KIND_PUBLIC.to_string(),
+            registry_key: Vec::new(),
+            revision: 1,
+            signatures: Vec::new(),
+        };
+        manifest.signatures = [0usize, 1]
+            .iter()
+            .map(|i| sign_election_manifest(&gov[*i], &manifest))
+            .collect();
+
+        // Governance decisions, each contest on ITS OWN schedule.
+        let targets = [
+            ("presidente", Phase::VotingOpen),
+            ("governador-sp", Phase::RegistrationOpen),
+            ("governador-rj", Phase::VotingOpen),
+            ("prefeito-3550308", Phase::CandidatesPublished),
+        ];
+        let mut transitions: Vec<Transition> = Vec::new();
+        for (id, upto) in targets {
+            let Some(c) = manifest.contest(id) else {
+                continue;
+            };
+            let s = c.schedule.clone().unwrap_or_default();
+            let steps = [
+                (
+                    Phase::Draft,
+                    Phase::CandidatesPublished,
+                    s.registration_opens.saturating_sub(DAY / 2),
+                ),
+                (
+                    Phase::CandidatesPublished,
+                    Phase::RegistrationOpen,
+                    s.registration_opens,
+                ),
+                (Phase::RegistrationOpen, Phase::VotingOpen, s.voting_opens),
+            ];
+            for (from, to, at) in steps {
+                if (from as i32) >= (upto as i32) {
+                    break;
+                }
+                let mut t = Transition {
+                    election_id: manifest.election_id.clone(),
+                    contest_id: id.to_string(),
+                    contest_hash: contest_hash(c).to_vec(),
+                    from_phase: from as i32,
+                    to_phase: to as i32,
+                    seq: transitions.len() as u64 + 1,
+                    at,
+                    reason: String::new(),
+                    signatures: Vec::new(),
+                };
+                t.signatures = [1usize, 2]
+                    .iter()
+                    .map(|k| sign_transition(&gov[*k], &t))
+                    .collect();
+                transitions.push(t);
+            }
+        }
+        let bundle = ElectionBundle {
+            manifest: manifest.encode_to_vec(),
+            transitions: transitions.iter().map(|t| t.encode_to_vec()).collect(),
+        };
+        fs::write(self.dir.join("election.bundle"), bundle.encode_to_vec())?;
+        Ok(())
     }
 
     /// Fresh random nonce the device must sign into its identity request.
@@ -358,6 +538,13 @@ fn build_attributes(subject: &Subject, now: u64) -> Result<Vec<(String, String)>
     if nat.len() != 2 || !nat.chars().all(|c| c.is_ascii_alphabetic()) {
         return Err(invalid("nacionalidade deve ter 2 letras (ex.: BR)"));
     }
+    let domicile = Domicile::new(
+        subject.electoral_state.trim(),
+        subject.electoral_municipality.trim(),
+    )
+    .map_err(|_| {
+        invalid("domicílio eleitoral: UF com 2 letras maiúsculas e município com 7 dígitos (IBGE)")
+    })?;
     let mut reg = [0u8; 4];
     UnwrapErr(SysRng).fill_bytes(&mut reg);
     let mut attrs = vec![
@@ -373,6 +560,8 @@ fn build_attributes(subject: &Subject, now: u64) -> Result<Vec<(String, String)>
             format!("TK-{}", hex::encode(&reg).to_uppercase()),
         ),
     ];
+    attrs.push(("electoral_state".to_string(), domicile.state));
+    attrs.push(("electoral_municipality".to_string(), domicile.municipality));
     for t in AGE_THRESHOLDS {
         attrs.push((format!("age_over_{t}"), (age >= i64::from(t)).to_string()));
     }
@@ -432,6 +621,8 @@ mod tests {
             name: "Maria da Silva".into(),
             birth_date: "1990-05-17".into(),
             nationality: "br".into(),
+            electoral_state: "SP".into(),
+            electoral_municipality: "3550308".into(),
         }
     }
 
@@ -542,6 +733,8 @@ mod tests {
                 name: n.into(),
                 birth_date: b.into(),
                 nationality: c.into(),
+                electoral_state: "SP".into(),
+                electoral_municipality: "3550308".into(),
             };
             assert!(
                 matches!(
@@ -551,6 +744,86 @@ mod tests {
                 "{n:?} {b} {c}"
             );
         }
+    }
+
+    #[test]
+    fn credential_carries_the_electoral_domicile_and_rejects_a_bad_one() {
+        let issuer = Issuer::open(scratch_dir("domicile"));
+        issuer.dev_setup().unwrap();
+        let nonce = Issuer::new_nonce();
+        let (req, _) = fake_request(&issuer, &nonce, true);
+        let issued = issuer
+            .issue_credential_at(&nonce, &req, &subject(), 1_900_000_000)
+            .unwrap();
+        let claim = |n: &str| {
+            issued
+                .claims
+                .iter()
+                .find(|c| c.name == n)
+                .unwrap()
+                .value
+                .clone()
+        };
+        assert_eq!(
+            (
+                claim("electoral_state").as_str(),
+                claim("electoral_municipality").as_str()
+            ),
+            ("SP", "3550308")
+        );
+        for (uf, mun) in [
+            ("sp", "3550308"),
+            ("SP", "355"),
+            ("", ""),
+            ("SPA", "3550308"),
+        ] {
+            let mut sbj = subject();
+            sbj.electoral_state = uf.into();
+            sbj.electoral_municipality = mun.into();
+            assert!(
+                matches!(
+                    build_attributes(&sbj, 1_900_000_000),
+                    Err(IssuerError::InvalidSubject(_))
+                ),
+                "{uf} {mun}"
+            );
+        }
+        let _ = fs::remove_dir_all(issuer.dir());
+    }
+
+    #[test]
+    fn demo_election_is_signed_by_governance_and_replays_with_four_phases() {
+        use teko_election::{GovernancePolicy, Phase, replay};
+        let issuer = Issuer::open(scratch_dir("election"));
+        let trust = issuer.dev_setup().unwrap();
+        assert_eq!((trust.gov_signers.len(), trust.gov_threshold), (3, 2));
+        let bundle = ElectionBundle::decode(
+            fs::read(issuer.dir().join("election.bundle"))
+                .unwrap()
+                .as_slice(),
+        )
+        .unwrap();
+        let manifest = ElectionManifest::decode(bundle.manifest.as_slice()).unwrap();
+        let ts: Vec<Transition> = bundle
+            .transitions
+            .iter()
+            .map(|t| Transition::decode(t.as_slice()).unwrap())
+            .collect();
+        let policy = GovernancePolicy::new(trust.gov_signers.clone(), trust.gov_threshold).unwrap();
+        let status = replay(&policy, &manifest, &ts).unwrap();
+        assert_eq!(status.phase_of("presidente"), Some(Phase::VotingOpen));
+        assert_eq!(
+            status.phase_of("governador-sp"),
+            Some(Phase::RegistrationOpen)
+        );
+        assert_eq!(status.phase_of("governador-rj"), Some(Phase::VotingOpen));
+        assert_eq!(
+            status.phase_of("prefeito-3550308"),
+            Some(Phase::CandidatesPublished)
+        );
+        // re-running refreshes the dates but keeps the keys (idempotent)
+        assert_eq!(issuer.dev_setup().unwrap(), trust);
+        let _ = fs::remove_dir_all(issuer.dir());
     }
 
     #[test]

@@ -73,7 +73,14 @@
     file: null,          // { name, bytes, hash }
     verifyRes: null,
     prove: { choice: 'age18', verifier: 'Loja Exemplo', result: null, error: null },
-    vote: { choice: 'onca', result: null },
+    election: null,      // resumo vindo do dispositivo
+    elecLoading: false,
+    elecChecked: false,
+    idTried: false,       // evitam laços de re-tentativa em loadId/loadFirmware
+    fwTried: false,
+    fwLoading: false,   // já perguntei ao dispositivo por uma eleição nesta visita?
+    picks: {},           // contest_id -> índice escolhido
+    ballots: {},         // contest_id -> cédula assinada (protótipo)
     lockMsg: null,
     lastAck: false,
     wiped: false,
@@ -130,7 +137,9 @@
     pairwise_id: ['Confirme no dispositivo', 'Será gerado um identificador exclusivo para este serviço.'],
     issue_identity: ['Autorize a emissão no dispositivo', 'O dispositivo vai provar à autoridade que é genuíno e que possui a chave.'],
     load_credential: ['Confirme a instalação da credencial', 'Confira o emissor e os dados mostrados no dispositivo.'],
-    sign_ballot: ['Confirme o voto no dispositivo', 'Etapa de votação ainda é um stub: nada será assinado.'],
+    sign_ballot: ['Confirme o voto no dispositivo', 'Confira o cargo, a jurisdição e o NOME do candidato que o dispositivo mostra. Só confirme se for o seu voto.'],
+    load_election: ['Confirme a eleição no dispositivo', 'O dispositivo verificou as assinaturas das instituições. Confira o título e os pleitos.'],
+    voter_key: ['Confirme no dispositivo', 'Será exportada a chave PÚBLICA de eleitor deste pleito.'],
     export_commitment: ['Confirme no dispositivo', 'Exportar o compromisso de eleitor.'],
     wipe: ['Confirme o apagamento no dispositivo', 'No dispositivo, digite APAGAR para confirmar. Isso é irreversível.'],
     unknown: ['Aguardando o dispositivo', 'Olhe a tela do dispositivo.'],
@@ -210,7 +219,7 @@
   function resetSession() {
     S.genuine = null; S.authAck = false; S.fw = null; S.civic = null; S.identity = null;
     S.pairwise = null; S.signed = null; S.file = null; S.verifyRes = null; S.prove.result = null;
-    S.vote.result = null; S.wipeArmed = false; S.lastKey = '';
+    S.election = null; S.elecChecked = false; S.idTried = false; S.fwTried = false; S.picks = {}; S.ballots = {}; S.wipeArmed = false; S.lastKey = '';
   }
 
   // ───────────────────────── polling ─────────────────────────
@@ -390,7 +399,9 @@
   function sFirmware() {
     const fw = S.fw;
     const list = !fw
-      ? `<div class="row">${ico('spin', 'spin')}<span>Lendo firmwares assinados…</span></div>`
+      ? (S.fwTried && !S.fwLoading
+        ? `${callout('warn', 'alert', 'Não consegui ler os firmwares', '<p>Veja a mensagem acima. Se faltou o ambiente de teste, rode <code>make setup</code>.</p>')}<div class="row"><button class="btn btn--ghost" data-act="fwretry">Tentar de novo</button></div>`
+        : `<div class="row">${ico('spin', 'spin')}<span>Lendo firmwares assinados…</span></div>`)
       : fw.length === 0
         ? callout('warn', 'alert', 'Nenhum firmware encontrado', '<p>Rode <code>cargo run -p issuer-cli -- dev-setup</code>.</p>')
         : `<div class="fw">${fw.map(fwItem).join('')}</div>`;
@@ -443,7 +454,10 @@
         <div class="field"><label for="f-name">Nome completo</label><input class="input" id="f-name" value="Maria da Silva" autocomplete="off"></div>
         <div class="field"><label for="f-birth">Data de nascimento</label><input class="input" id="f-birth" type="date" value="1990-05-17"></div>
         <div class="field"><label for="f-nat">Nacionalidade</label><input class="input" id="f-nat" value="BR" maxlength="2" autocomplete="off"><span class="hint">2 letras (ex.: BR)</span></div>
+        <div class="field"><label for="f-uf">Domicílio eleitoral: UF</label><input class="input" id="f-uf" value="SP" maxlength="2" autocomplete="off"><span class="hint">Define em quais pleitos você vota (governador)</span></div>
+        <div class="field"><label for="f-mun">Domicílio eleitoral: município (IBGE)</label><input class="input" id="f-mun" value="3550308" maxlength="7" autocomplete="off" inputmode="numeric"><span class="hint">7 dígitos; 3550308 = São Paulo (prefeito)</span></div>
       </div>
+      <p class="muted">Quem atesta o domicílio no mundo real é o cadastro eleitoral; aqui o <code>issuer-cli</code> simula esse papel.</p>
       <div class="row"><button class="btn" data-act="issue">${ico('badge')}Emitir credencial</button></div>
     </article>`;
   }
@@ -583,20 +597,50 @@
       </article>` : ''}`;
   }
 
-  // ───────────────────────── votar (stub) ─────────────────────────
+  // ───────────────────────── votar (protótipo): vários pleitos ─────────────────────────
+  const PHASES = {
+    draft: ['Em preparação', ''], candidates_published: ['Candidatos publicados', 'info'], registration_open: ['Registro aberto', 'info'],
+    voting_open: ['Votação aberta', 'ok'], voting_closed: ['Votação encerrada', 'warn'], tallied: ['Apurada', ''], audited: ['Auditada', ''], cancelled: ['Cancelada', 'bad'],
+  };
+  const fmtDate = (secs) => (secs ? new Date(secs * 1000).toLocaleString('pt-BR', { dateStyle: 'short', timeStyle: 'short' }) : '—');
+  const scopeLabel = (c) => (c.scope === 'national' ? 'Nacional' : c.scope === 'state' ? `Estado ${c.scope_code}` : `Município ${c.scope_code}`);
+
+  function contestCard(c) {
+    const [phaseLabel, phaseKind] = PHASES[c.phase] || [c.phase, ''];
+    const canVote = c.phase === 'voting_open' && c.eligible && !c.voted;
+    const ballot = S.ballots[c.contest_id];
+    const why = !c.eligible ? 'Fora do seu domicílio eleitoral: o dispositivo recusa.'
+      : c.voted ? 'Este dispositivo já votou neste pleito.'
+      : c.phase !== 'voting_open' ? `Ainda não dá para votar: ${phaseLabel.toLowerCase()}.` : '';
+    const opts = c.option_names.map((n, i) => `
+      <label class="option"><input type="radio" name="cand-${esc(c.contest_id)}" value="${i}" ${S.picks[c.contest_id] === i ? 'checked' : ''} ${canVote ? '' : 'disabled'}>
+        <span>${esc(n)}</span></label>`).join('');
+    return `<article class="card" ${c.eligible ? '' : 'style="opacity:.82"'}>
+      <div class="card__head"><div class="card__ico card__ico--${c.scope === 'national' ? 'arara' : c.scope === 'state' ? 'onca' : 'boto'}">${ico(c.scope === 'national' ? 'globe' : 'ballot')}</div>
+        <div><h2>${esc(c.title)}</h2>
+        <div class="row" style="gap:6px;margin-top:6px">${chip(scopeLabel(c), 'info')}${chip(phaseLabel, phaseKind)}${c.eligible ? chip(c.scope === 'national' ? 'Todos votam' : 'Seu domicílio', 'ok', 'check') : chip('Fora do seu domicílio', 'bad', 'lock')}${c.voted ? chip('Você já votou', 'ok', 'badge') : ''}</div></div></div>
+      <p class="muted">Votação: ${esc(fmtDate(c.voting_opens))} até ${esc(fmtDate(c.voting_closes))}</p>
+      <div class="options" role="radiogroup" aria-label="Candidatos: ${esc(c.title)}">${opts}</div>
+      ${why ? `<p class="muted">${esc(why)}</p>` : ''}
+      ${canVote ? `<div class="row"><button class="btn btn--gold" data-act="vote" data-contest="${esc(c.contest_id)}">${ico('ballot')}Votar neste pleito</button></div>` : ''}
+      ${ballot ? callout('info', 'shield', 'Cédula assinada pelo dispositivo (protótipo)', `<p>Voto em <strong>${esc(ballot.option_name)}</strong>. Assinatura <span class="mono">${esc(short(ballot.signature, 10, 8))}</span> conferida pela Suite. <strong>Não foi enviada a nenhum quadro</strong> e ainda não há prova de elegibilidade.</p>`) : ''}
+    </article>`;
+  }
+
   function vVote() {
-    const cands = [['onca', 'Candidata Onça', '#B4600F', 'O'], ['boto', 'Candidato Boto', '#B8365F', 'B'], ['arara', 'Candidata Arara', '#1F4BB8', 'A']];
-    const r = S.vote.result;
-    return `${head('Votação', 'Votar com sigilo', 'A votação usará uma credencial separada da sua identidade. Esta etapa ainda é um protótipo (stub).')}
-      ${callout('warn', 'alert', 'Protótipo', '<p>O botão está ligado ao dispositivo: ele pede sua confirmação e responde que a votação ainda não existe. Nada é assinado nem enviado. Nomes abaixo são exemplos.</p>')}
-      <article class="card">
-        <div class="card__head"><div class="card__ico card__ico--onca">${ico('ballot')}</div><h2>Eleição de exemplo</h2></div>
-        <div class="grid">${cands.map(([k, n, c, l]) => `
-          <label class="option"><input type="radio" name="cand" value="${k}" ${S.vote.choice === k ? 'checked' : ''}>
-            <span><span class="avatar" style="background:${c}">${l}</span>${esc(n)}</span></label>`).join('')}</div>
-        <div class="row"><button class="btn btn--gold" data-act="vote">${ico('ballot')}Votar</button></div>
+    const e = S.election;
+    return `${head('Votação', 'Vote em cada pleito do seu domicílio', 'O Presidente é de todos; governador e prefeito, só do seu estado e município. Quem decide se você pode votar é o dispositivo.')}
+      ${callout('warn', 'alert', 'Protótipo', '<p>A cédula é assinada de verdade pelo dispositivo (com o candidato mostrado na tela dele), mas <strong>ainda não é enviada, não tem prova ZK e a primeira versão não resiste à compra de voto</strong>. Os nomes são exemplos.</p>')}
+      ${!e ? `<article class="card">
+        <div class="card__head"><div class="card__ico card__ico--onca">${ico('ballot')}</div><h2>Carregar a eleição no dispositivo</h2></div>
+        <p class="muted">O dispositivo confere as assinaturas das instituições (2 de 3) e o histórico de cada pleito, e pede a sua confirmação. Cada pleito tem as suas próprias datas.</p>
+        <div class="row"><button class="btn" data-act="loadelection" ${S.elecLoading ? 'disabled' : ''}>${ico('upload')}Carregar eleição</button></div>
+      </article>`
+      : `<article class="card card--flat">
+        <div class="row"><div><h2>${esc(e.title)}</h2><p class="muted">Revisão ${e.revision} · ${e.contests.length} pleitos · histórico de governança #${e.seq}</p></div>
+          <span class="spacer"></span><button class="btn btn--ghost btn--sm" data-act="loadelection">${ico('upload')}Recarregar</button></div>
       </article>
-      ${r ? callout('info', 'shield', 'Resposta do dispositivo', `<p>${esc(r)}</p>`) : ''}`;
+      ${e.contests.map(contestCard).join('')}`}`;
   }
 
   // ───────────────────────── ações ─────────────────────────
@@ -605,6 +649,8 @@
       const id = b.dataset.id;
       if (!routeAllowed(id)) { toast(id === 'onboarding' ? 'A configuração já foi concluída.' : 'Conecte e desbloqueie seu dispositivo para usar esta área.', 'bad'); return; }
       S.route = id; S.userPicked = true; S.lastKey = '';
+      if (id === 'vote') S.elecChecked = false;
+      if (id === 'identity') S.idTried = false;
       if (id === 'identity') loadId();
       render();
     },
@@ -614,7 +660,8 @@
       await guarded(async () => { S.genuine = await call('verify_authenticity', {}, { delay: 600 }); });
       S.authRunning = false; S.lastKey = ''; render();
     },
-    authnext() { S.authAck = true; S.fw = null; S.lastKey = ''; render(); loadFirmware(); },
+    fwretry() { S.fw = null; S.fwTried = false; S.lastKey = ''; render(); },
+    authnext() { S.authAck = true; S.fw = null; S.fwTried = false; S.lastKey = ''; render(); loadFirmware(); },
     async fwinstall(b) {
       const v = Number(b.dataset.v);
       S.fwProgress = 0.02;
@@ -622,7 +669,7 @@
         await call('install_firmware', { version: v }, { expect: { label: 'Impressão digital do firmware', value: b.dataset.fp } });
         toast(`Firmware v${v} instalado e verificado.`, 'ok');
       });
-      S.fwProgress = null; S.fw = null; S.lastKey = ''; await poll(); loadFirmware();
+      S.fwProgress = null; S.fw = null; S.fwTried = false; S.lastKey = ''; await poll(); loadFirmware();
     },
     async pin() {
       await guarded(async () => { await call('setup_pin'); toast('PIN definido no dispositivo.', 'ok'); });
@@ -634,8 +681,9 @@
     },
     async issue() {
       const name = $('#f-name').value, birth = $('#f-birth').value, nat = $('#f-nat').value;
+      const state = $('#f-uf').value.trim().toUpperCase(), municipality = $('#f-mun').value.trim();
       await guarded(async () => {
-        await call('issue_credential', { name, birthDate: birth, nationality: nat });
+        await call('issue_credential', { name, birthDate: birth, nationality: nat, state, municipality });
         toast('Credencial emitida e instalada no dispositivo.', 'ok');
       });
       S.lastKey = ''; await poll();
@@ -709,26 +757,47 @@
       });
       S.lastKey = ''; render();
     },
-    async vote() {
-      S.vote.result = null;
+    async loadelection() {
+      S.elecLoading = true;
+      await guarded(async () => { S.election = await call('election_load'); toast('Eleição carregada e verificada pelo dispositivo.', 'ok'); });
+      S.elecLoading = false; S.lastKey = ''; render();
+    },
+    async vote(b) {
+      const id = b.dataset.contest;
+      const idx = S.picks[id];
+      if (idx === undefined) { toast('Escolha um candidato antes de votar.'); return; }
       await guarded(async () => {
-        try { await call('cast_vote', { election: 'Eleição de exemplo', choice: S.vote.choice }); S.vote.result = 'Voto registrado.'; }
-        catch (e) { if (e.code === 'NotImplemented') S.vote.result = 'A votação ainda é um stub: o dispositivo pediu sua confirmação, mas não assinou nem enviou nada. Ela chega com a fase da blockchain de votação.'; else throw e; }
+        const ballot = await call('election_vote', { electionId: S.election.election_id, contestId: id, optionIndex: idx });
+        S.ballots[id] = ballot;
+        S.election = await call('election_get');
+        toast('Cédula assinada pelo dispositivo (protótipo: não enviada).', 'ok');
       });
       S.lastKey = ''; render();
     },
   };
 
   async function loadFirmware() {
-    if (S.fw) return;
+    if (S.fw || S.fwTried) return;
+    S.fwTried = true; S.fwLoading = true;
     await guarded(async () => { S.fw = await call('firmware_catalog', {}, { delay: 5000 }); }, { silent: false });
-    S.lastKey = ''; render();
+    S.fwLoading = false;
+    S.lastKey = ''; render();   // uma vez: mostra a lista ou o botão "Tentar de novo"
+  }
+
+  async function loadElec() {
+    // UMA tentativa por visita à tela: sem isso, "nenhuma eleição carregada" dispara
+    // render -> afterRender -> loadElec em laço infinito.
+    if (S.election || S.elecChecked || phase() !== 'ready') return;
+    S.elecChecked = true;
+    try { S.election = await call('election_get', {}, { delay: 5000 }); } catch { S.election = null; }
+    if (S.election) { S.lastKey = ''; render(); }
   }
 
   async function loadId() {
-    if (S.civic || phase() !== 'ready') return;
+    if (S.civic || S.idTried || phase() !== 'ready') return;
+    S.idTried = true;
     await guarded(async () => { S.civic = await call('civic_id', {}, { delay: 5000 }); }, { silent: true });
-    S.lastKey = ''; render();
+    if (S.civic) { S.lastKey = ''; render(); }
   }
 
   async function readFile(file) {
@@ -745,6 +814,7 @@
     if (S.route === 'onboarding' && onboardStep() === 'auth' && !S.genuine && !S.authRunning && !S.busy) act.auth();
     if (S.route === 'onboarding' && onboardStep() === 'firmware') loadFirmware();
     if (S.route === 'identity') loadId();
+    if (S.route === 'vote') loadElec();
     const dz = $('#dz');
     if (dz) {
       ['dragenter', 'dragover'].forEach((ev) => dz.addEventListener(ev, (e) => { e.preventDefault(); dz.classList.add('is-over'); }));
@@ -754,7 +824,7 @@
     const fi = $('#f-file');
     if (fi) fi.addEventListener('change', () => { if (fi.files[0]) readFile(fi.files[0]); });
     document.querySelectorAll('input[name="choice"]').forEach((r) => r.addEventListener('change', () => { S.prove.choice = r.value; S.prove.result = null; S.prove.error = null; }));
-    document.querySelectorAll('input[name="cand"]').forEach((r) => r.addEventListener('change', () => { S.vote.choice = r.value; }));
+    document.querySelectorAll('input[name^="cand-"]').forEach((r) => r.addEventListener('change', () => { S.picks[r.name.slice(5)] = Number(r.value); }));
   }
 
   // ───────────────────────── tema ─────────────────────────

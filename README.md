@@ -21,7 +21,7 @@ cargo run -p teko-suite
 ```
 
 Na Suite, siga **Configurar dispositivo**: autenticidade → firmware → PIN (digitado no emulador) → ID Cívico → credencial.
-Depois: ver identidade, assinar documentos, provar atributos, votar (stub). Sem emulador ligado, a Suite abre no **Explorador público** (placeholder).
+Depois: ver identidade, assinar documentos, provar atributos e **votar por pleito** (protótipo: Presidente para todos; governador e prefeito só do seu estado/município; a cédula é assinada pelo dispositivo mas ainda não é enviada). Sem emulador ligado, a Suite abre no **Explorador público** (placeholder).
 
 - Apagar o estado do dispositivo (voltar a "virgem"): `cargo run -p device-emulator -- --reset`
 - Outro endereço: `TEKO_DEVICE_ADDR=127.0.0.1:9000 cargo run -p teko-suite` (e `--listen` no emulador)

@@ -19,7 +19,9 @@ USO:
   issuer-cli sign-firmware [--dir dev] --version N --blob ARQ --signers 0,1 --out ARQ.manifest
   issuer-cli provision [--dir dev] --out factory.bin
   issuer-cli nonce
-  issuer-cli issue [--dir dev] --nonce HEX --request ARQ --name NOME --birth AAAA-MM-DD
+  issuer-cli dev-election [--dir dev]
+      Recria dev/election.bundle (eleição de exemplo com 4 pleitos, datas relativas a agora).
+  issuer-cli issue [--dir dev] --nonce HEX --request ARQ --name NOME --birth AAAA-MM-DD --state SP --municipality 3550308
                    --nationality BR --out credencial.bin
   issuer-cli trust [--dir dev]
   issuer-cli verify-firmware [--dir dev] --manifest ARQ --blob ARQ [--installed N]
@@ -78,7 +80,14 @@ fn run(args: Vec<String>) -> Result<(), String> {
                 t.fw_threshold,
                 t.fw_signers.len()
             );
-            println!("  arquivos:     trust.txt factory.bin firmware-v{{1,2}}.{{blob,manifest}}");
+            println!(
+                "  governança:   {}-de-{} (eleições)",
+                t.gov_threshold,
+                t.gov_signers.len()
+            );
+            println!(
+                "  arquivos:     trust.txt factory.bin firmware-v{{1,2}}.{{blob,manifest}} election.bundle"
+            );
             println!("Agora rode: cargo run -p device-emulator   e   cargo run -p teko-suite");
         }
         "init" => {
@@ -155,6 +164,17 @@ fn run(args: Vec<String>) -> Result<(), String> {
                 .map_err(|x| format!("FALHOU: {x}"))?;
             println!("OK: firmware aceitável (M-de-N válido, hash confere, sem downgrade)");
         }
+        "dev-election" => {
+            let now = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_secs())
+                .unwrap_or(0);
+            issuer.dev_election(now).map_err(e)?;
+            println!(
+                "Eleição de exemplo gravada em {}/election.bundle",
+                dir.display()
+            );
+        }
         "nonce" => println!("{}", hex::encode(&Issuer::new_nonce())),
         "issue" => {
             let nonce = hex::decode(need(&flags, "nonce")?).map_err(|_| "nonce inválido")?;
@@ -165,6 +185,8 @@ fn run(args: Vec<String>) -> Result<(), String> {
                 name: need(&flags, "name")?.clone(),
                 birth_date: need(&flags, "birth")?.clone(),
                 nationality: need(&flags, "nationality")?.clone(),
+                electoral_state: need(&flags, "state")?.clone(),
+                electoral_municipality: need(&flags, "municipality")?.clone(),
             };
             let issued = issuer.issue_credential(&nonce, &req, &subject).map_err(e)?;
             fs::write(need(&flags, "out")?, issued.encode_to_vec()).map_err(io)?;

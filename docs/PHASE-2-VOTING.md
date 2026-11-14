@@ -6,7 +6,18 @@ Status: **spec em revisão; etapas 1 e 2 do plano já implementadas** (as que n�
 |---|---|
 | 1. `teko-election` (eleição com vários pleitos, jurisdições, M-de-N, ciclo de vida por pleito) | **Feito** (21 testes) |
 | 2. `teko-bulletin` (log Merkle append-only, provas de inclusão/consistência, head assinado, arquivo) | **Feito** (13 testes + 3 de integração) |
-| 3–9 | Não iniciadas |
+| 3. Dispositivo: `LoadElection`, `GetElection`, `GetVoterKey`, `SignBallot` real (jurisdição, fase, um voto por pleito, nome do candidato vindo do manifesto), chave de eleitor por pleito; `issuer-cli` com domicílio eleitoral, governança e eleição de exemplo; Suite com a tela de votação por pleito | **Feito** (protótipo: cédula assinada, **não enviada**) |
+| 4. `tools/election-admin-cli` | Não iniciada (hoje `issuer-cli dev-election` gera uma eleição de exemplo) |
+| 5–9 | Não iniciadas (registro anônimo, prova de voto, apuração, explorador com dados reais) |
+
+**Etapa 3 (o que o dispositivo faz hoje):**
+- Verifica a eleição sozinho (M-de-N do manifesto **e** de cada transição, replay do histórico) e **a re-verifica a cada uso**, então adulterar o armazenamento não adianta.
+- **Recusa histórico mais antigo** que o já conhecido (`Downgrade`): sem isso, um host reapresentaria um histórico em que um pleito já encerrado ainda está aberto.
+- Decide **elegibilidade pelo domicílio da própria credencial**: nacional ⇒ todos; estadual/municipal ⇒ só o seu. Pleito de outro estado ⇒ `NotEligible`; fase errada ⇒ `WrongPhase`; sem nenhum prompt ao usuário.
+- **A tela mostra cargo, jurisdição e o NOME do candidato vindos do manifesto verificado**; o host só envia o **índice**. As linhas quebram por palavra (um nome nunca é cortado no meio).
+- **Um voto por pleito por dispositivo** (`AlreadyVoted`), persistido; recusar na tela não gasta o voto. O registro é gravado **antes** de liberar a assinatura.
+- A chave de eleitor é **por pleito**; a assinatura cobre `election_id`, `contest_id`, `contest_hash` e o índice.
+- A Suite confere a assinatura da cédula antes de mostrá-la.
 
 **Regras de ciclo de vida que implementei como proposta (revise, ADR-0016):** só avança um passo por vez; `Cancelada` só até a apuração e exige motivo; cada transição exige M-de-N, número de sequência sem buracos, horário não-decrescente e vínculo ao hash do manifesto; **não se abre registro/votação antes do horário do manifesto e não se encerra a votação antes do horário previsto** (encerramento antecipado é decisão de governança: **PENDENTE**).
 

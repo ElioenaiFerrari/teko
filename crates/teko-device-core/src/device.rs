@@ -14,11 +14,16 @@ use teko_crypto::{
     SigningKey, canonical_service_id, civic_id, derive_key, derive_signing_key, pairwise_id,
     public_key_bytes, sign_tagged, tags, voter,
 };
+use teko_election::{
+    BallotBody, Domicile, ElectionBundle, ElectionError, ElectionManifest, ElectionStatus,
+    GovernancePolicy, Phase, ScopeLevel, Transition, contest_hash, is_eligible, manifest_hash,
+    replay, sign_ballot, validate_revision,
+};
 use teko_protocol::{
-    AttestationResponse, AttributeProof, ButtonKind, ButtonRequest, CivicId, CredentialLoaded,
-    DeviceState, DocumentSignature, ErrorCode, Failure, Features, FirmwareStatus, IdentityRequest,
-    PROTO_VERSION, PairwiseId, PinSet, PinWrong, Predicate, PredicateKind, Request, Response,
-    Success, Unlocked, VoterCommitment, WipeDone,
+    AttestationResponse, AttributeProof, BallotSignature, ButtonKind, ButtonRequest, CivicId,
+    ContestInfo, CredentialLoaded, DeviceState, DocumentSignature, ElectionLoaded, ErrorCode,
+    Failure, Features, FirmwareStatus, IdentityRequest, PROTO_VERSION, PairwiseId, PinSet,
+    PinWrong, Predicate, PredicateKind, Request, Response, Success, Unlocked, VoterKey, WipeDone,
 };
 use zeroize::{Zeroize, Zeroizing};
 
@@ -373,8 +378,12 @@ impl<H: Hal, R: Rng + CryptoRng> Device<H, R> {
             Request::ProveAttribute(m) => {
                 self.prove_attribute(m.predicate, &m.verifier_nonce, &m.verifier_name)
             }
-            Request::GetVoterCommitment(_) => self.get_voter_commitment(),
-            Request::SignBallot(m) => self.sign_ballot(&m.election_id, &m.ballot_hash, &m.summary),
+            Request::LoadElection(m) => self.load_election(&m.manifest, &m.transitions),
+            Request::GetElection(_) => self.get_election(),
+            Request::GetVoterKey(m) => self.get_voter_key(&m.election_id, &m.contest_id),
+            Request::SignBallot(m) => {
+                self.sign_ballot(&m.election_id, &m.contest_id, m.option_index)
+            }
             Request::Wipe(_) => self.wipe(),
             Request::GetIdentityRequest(m) => {
                 self.get_identity_request(&m.authority_nonce, &m.authority_name)
@@ -741,51 +750,322 @@ impl<H: Hal, R: Rng + CryptoRng> Device<H, R> {
         }))
     }
 
-    // ───────────────────────── voting (stubs) ─────────────────────────
+    // ───────────────────────── elections (Phase 2) ─────────────────────────
 
-    fn get_voter_commitment(&mut self) -> Result<Response, Failure> {
+    fn governance(&self) -> Result<GovernancePolicy, Failure> {
+        GovernancePolicy::new(self.trust.gov_signers.clone(), self.trust.gov_threshold).map_err(
+            |_| {
+                fail(
+                    ErrorCode::InvalidState,
+                    "eleições desativadas: sem governança configurada",
+                )
+            },
+        )
+    }
+
+    /// Electoral domicile from the credential (issued by the authority).
+    fn domicile(&self) -> Option<Domicile> {
+        let issued = IssuedCredential::decode(self.p.credential.as_slice()).ok()?;
+        let claim = |n: &str| {
+            issued
+                .claims
+                .iter()
+                .find(|c| c.name == n)
+                .map(|c| c.value.clone())
+        };
+        Domicile::new(
+            &claim("electoral_state")?,
+            &claim("electoral_municipality")?,
+        )
+        .ok()
+    }
+
+    fn eligible_for(&self, scope: &teko_election::Scope) -> bool {
+        match scope.level() {
+            ScopeLevel::National => true,
+            _ => self.domicile().is_some_and(|d| is_eligible(&d, scope)),
+        }
+    }
+
+    /// The stored election, RE-VERIFIED (M-of-N + history replay) on every use:
+    /// the persisted bytes are never trusted just because they are stored.
+    fn stored_election(&self) -> Result<(ElectionManifest, ElectionStatus), Failure> {
+        if self.p.election.is_empty() {
+            return Err(fail(ErrorCode::InvalidState, "nenhuma eleição carregada"));
+        }
+        let bundle = ElectionBundle::decode(self.p.election.as_slice())
+            .map_err(|_| fail(ErrorCode::Internal, "eleição armazenada ilegível"))?;
+        self.verify_bundle(&bundle.manifest, &bundle.transitions)
+    }
+
+    fn verify_bundle(
+        &self,
+        manifest_bytes: &[u8],
+        transition_bytes: &[Vec<u8>],
+    ) -> Result<(ElectionManifest, ElectionStatus), Failure> {
+        let policy = self.governance()?;
+        let manifest = ElectionManifest::decode(manifest_bytes)
+            .map_err(|_| fail(ErrorCode::InvalidArgument, "manifesto malformado"))?;
+        let mut transitions = Vec::with_capacity(transition_bytes.len());
+        for t in transition_bytes {
+            transitions.push(
+                Transition::decode(t.as_slice())
+                    .map_err(|_| fail(ErrorCode::InvalidArgument, "transição malformada"))?,
+            );
+        }
+        let status = replay(&policy, &manifest, &transitions).map_err(election_failure)?;
+        Ok((manifest, status))
+    }
+
+    fn contest_infos(
+        &self,
+        manifest: &ElectionManifest,
+        status: &ElectionStatus,
+    ) -> Vec<ContestInfo> {
+        manifest
+            .contests
+            .iter()
+            .map(|c| {
+                let scope = c.scope.clone().unwrap_or_default();
+                let sched = c.schedule.clone().unwrap_or_default();
+                ContestInfo {
+                    contest_id: c.contest_id.clone(),
+                    title: c.title.clone(),
+                    phase: status.phase_of(&c.contest_id).unwrap_or(Phase::Draft) as u32,
+                    scope_level: scope.level as u32,
+                    scope_code: scope.code.clone(),
+                    option_names: c.options.iter().map(|o| o.name.clone()).collect(),
+                    eligible: self.eligible_for(&scope),
+                    voted: self
+                        .p
+                        .ballots_signed
+                        .iter()
+                        .any(|h| h.as_slice() == contest_hash(c).as_slice()),
+                    voting_opens: sched.voting_opens,
+                    voting_closes: sched.voting_closes,
+                }
+            })
+            .collect()
+    }
+
+    fn load_election(
+        &mut self,
+        manifest_bytes: &[u8],
+        transition_bytes: &[Vec<u8>],
+    ) -> Result<Response, Failure> {
         self.require_ready()?;
+        if manifest_bytes.len() > 32 * 1024
+            || transition_bytes.len() > 256
+            || transition_bytes.iter().any(|t| t.len() > 4 * 1024)
+        {
+            return Err(fail(ErrorCode::InvalidArgument, "eleição grande demais"));
+        }
+        let (manifest, status) = self.verify_bundle(manifest_bytes, transition_bytes)?;
+
+        // Anti-rollback: never accept an OLDER view of an election we already
+        // know (e.g. a replayed history in which a closed contest is still open).
+        if !self.p.election.is_empty() {
+            let (old, old_status) = self.stored_election()?;
+            if old.election_id == manifest.election_id {
+                if manifest.revision < old.revision || status.seq < old_status.seq {
+                    return Err(fail(
+                        ErrorCode::Downgrade,
+                        "histórico da eleição mais antigo que o já conhecido",
+                    ));
+                }
+                if manifest.revision == old.revision
+                    && manifest_hash(&manifest) != manifest_hash(&old)
+                {
+                    return Err(fail(
+                        ErrorCode::InvalidArgument,
+                        "manifesto diferente na mesma revisão",
+                    ));
+                }
+                if manifest.revision > old.revision {
+                    validate_revision(&old, &manifest).map_err(election_failure)?;
+                }
+            }
+        }
+
+        let policy = self.governance()?;
+        let infos = self.contest_infos(&manifest, &status);
+        let mut lines = Vec::from([String::from("Eleição:")]);
+        lines.extend(wrap(&manifest.title, 28));
+        lines.push(format!(
+            "Governança: {} de {}",
+            policy.threshold(),
+            policy.signers().len()
+        ));
+        for i in infos.iter().take(6) {
+            let tag = if i.eligible {
+                "voce vota"
+            } else {
+                "fora do seu domicilio"
+            };
+            lines.extend(wrap(&format!("- {} [{}]", i.title, tag), 28));
+        }
+        if infos.len() > 6 {
+            lines.push(format!("(+{} pleitos)", infos.len() - 6));
+        }
         self.confirm(
-            ButtonKind::ExportCommitment,
-            Screen::new(
-                "EXPORTAR COMMITMENT?",
-                Vec::from([
-                    String::from("Compromisso de eleitor."),
-                    String::from("Não identifica você."),
-                    String::from("(STUB: SHA3, não Poseidon)"),
-                ]),
-            ),
+            ButtonKind::LoadElection,
+            Screen::new("CARREGAR ELEIÇÃO?", lines),
         )?;
-        let s = self.voter_secret()?;
-        Ok(Response::VoterCommitment(VoterCommitment {
-            commitment: voter::commitment(&s).to_vec(),
+
+        self.p.election = ElectionBundle {
+            manifest: manifest_bytes.to_vec(),
+            transitions: transition_bytes.to_vec(),
+        }
+        .encode_to_vec();
+        self.save()?;
+        Ok(Response::ElectionLoaded(ElectionLoaded {
+            election_id: manifest.election_id.clone(),
+            title: manifest.title.clone(),
+            revision: manifest.revision,
+            seq: status.seq,
+            contests: infos,
+        }))
+    }
+
+    fn get_election(&mut self) -> Result<Response, Failure> {
+        self.require_ready()?;
+        let (manifest, status) = self.stored_election()?;
+        Ok(Response::ElectionLoaded(ElectionLoaded {
+            election_id: manifest.election_id.clone(),
+            title: manifest.title.clone(),
+            revision: manifest.revision,
+            seq: status.seq,
+            contests: self.contest_infos(&manifest, &status),
+        }))
+    }
+
+    fn voter_root(&self) -> Result<Zeroizing<[u8; 32]>, Failure> {
+        self.voter_secret()
+    }
+
+    fn get_voter_key(&mut self, election_id: &str, contest_id: &str) -> Result<Response, Failure> {
+        self.require_ready()?;
+        let (manifest, status) = self.stored_election()?;
+        if manifest.election_id != election_id {
+            return Err(fail(ErrorCode::InvalidArgument, "outra eleição"));
+        }
+        let contest = manifest
+            .contest(contest_id)
+            .ok_or_else(|| fail(ErrorCode::InvalidArgument, "pleito desconhecido"))?;
+        let scope = contest.scope.clone().unwrap_or_default();
+        if !self.eligible_for(&scope) {
+            return Err(fail(
+                ErrorCode::NotEligible,
+                "fora do seu domicílio eleitoral",
+            ));
+        }
+        let phase = status.phase_of(contest_id).unwrap_or(Phase::Draft);
+        if !phase.can_register() {
+            return Err(fail(
+                ErrorCode::WrongPhase,
+                "registro não está aberto neste pleito",
+            ));
+        }
+        let mut lines = Vec::from([String::from("Pleito:")]);
+        lines.extend(wrap(&contest.title, 28));
+        lines.push(jurisdiction_label(&scope));
+        lines.push(String::from("Exportar a chave PÚBLICA"));
+        lines.push(String::from("de eleitor deste pleito."));
+        self.confirm(ButtonKind::VoterKey, Screen::new("CHAVE DE ELEITOR", lines))?;
+        let root = self.voter_root()?;
+        let key = voter::derive_voter_key(&root, election_id, contest_id)
+            .map_err(|_| fail(ErrorCode::Internal, "chave de eleitor"))?;
+        Ok(Response::VoterKey(VoterKey {
+            voter_key: public_key_bytes(&key),
         }))
     }
 
     fn sign_ballot(
         &mut self,
-        election: &str,
-        ballot_hash: &[u8],
-        summary: &str,
+        election_id: &str,
+        contest_id: &str,
+        option_index: u32,
     ) -> Result<Response, Failure> {
         self.require_ready()?;
-        if ballot_hash.len() != 32 || election.trim().is_empty() {
-            return Err(fail(ErrorCode::InvalidArgument, "voto inválido"));
+        let (manifest, status) = self.stored_election()?;
+        if manifest.election_id != election_id {
+            return Err(fail(ErrorCode::InvalidArgument, "outra eleição"));
         }
-        let election = sanitize(election, 60)
-            .ok_or_else(|| fail(ErrorCode::InvalidArgument, "eleição inválida"))?;
-        let summary = sanitize(summary, 80)
-            .ok_or_else(|| fail(ErrorCode::InvalidArgument, "resumo inválido"))?;
-        let mut lines = Vec::from([String::from("STUB: nada será assinado")]);
-        lines.extend(wrap(&election, 28));
-        lines.extend(wrap(&summary, 28));
-        lines.extend(hex_lines(ballot_hash, 8));
-        self.confirm(ButtonKind::SignBallot, Screen::new("VOTAR (STUB)", lines))?;
-        // Voting arrives with the blockchain phase; never emit a ballot signature.
-        Err(fail(
-            ErrorCode::NotImplemented,
-            "votação ainda não implementada (stub)",
-        ))
+        let contest = manifest
+            .contest(contest_id)
+            .ok_or_else(|| fail(ErrorCode::InvalidArgument, "pleito desconhecido"))?;
+        let scope = contest.scope.clone().unwrap_or_default();
+        if !self.eligible_for(&scope) {
+            return Err(fail(
+                ErrorCode::NotEligible,
+                "fora do seu domicílio eleitoral",
+            ));
+        }
+        let phase = status.phase_of(contest_id).unwrap_or(Phase::Draft);
+        if !phase.can_vote() {
+            return Err(fail(
+                ErrorCode::WrongPhase,
+                "a votação não está aberta neste pleito",
+            ));
+        }
+        let chash = contest_hash(contest);
+        if self
+            .p
+            .ballots_signed
+            .iter()
+            .any(|h| h.as_slice() == chash.as_slice())
+        {
+            return Err(fail(
+                ErrorCode::AlreadyVoted,
+                "este dispositivo já votou neste pleito",
+            ));
+        }
+        let option = contest
+            .options
+            .iter()
+            .find(|o| o.index == option_index)
+            .ok_or_else(|| fail(ErrorCode::InvalidArgument, "opção inexistente"))?;
+
+        // EVERYTHING shown comes from the verified manifest, never from the host.
+        let mut lines = Vec::from([String::from("Eleição:")]);
+        lines.extend(wrap(&manifest.title, 28));
+        lines.push(String::from("Pleito:"));
+        lines.extend(wrap(&contest.title, 28));
+        lines.push(jurisdiction_label(&scope));
+        lines.push(String::from("SEU VOTO:"));
+        let label = if option.number.is_empty() {
+            option.name.clone()
+        } else {
+            format!("{} - {}", option.number, option.name)
+        };
+        lines.extend(wrap(&label, 28));
+        lines.push(String::from("(protótipo: não é enviado"));
+        lines.push(String::from("ao quadro; sem prova ZK)"));
+        self.confirm(
+            ButtonKind::SignBallot,
+            Screen::new("CONFIRMAR VOTO?", lines),
+        )?;
+
+        let root = self.voter_root()?;
+        let key = voter::derive_voter_key(&root, election_id, contest_id)
+            .map_err(|_| fail(ErrorCode::Internal, "chave de eleitor"))?;
+        let signature = sign_ballot(
+            &key,
+            &BallotBody {
+                election_id: String::from(election_id),
+                contest_id: String::from(contest_id),
+                contest_hash: chash.to_vec(),
+                option_index,
+            },
+        );
+        // Record BEFORE releasing the signature: a crash can lose the delivery,
+        // but can never leave a signature out that the device forgot it made.
+        self.p.ballots_signed.push(chash.to_vec());
+        self.save()?;
+        Ok(Response::BallotSignature(BallotSignature {
+            signature,
+            voter_key: public_key_bytes(&key),
+        }))
     }
 
     // ───────────────────────── wipe ─────────────────────────
@@ -890,6 +1170,23 @@ impl<H: Hal, R: Rng + CryptoRng> Device<H, R> {
         self.save()?;
         Ok(Response::CredentialLoaded(CredentialLoaded {}))
     }
+}
+
+fn jurisdiction_label(scope: &teko_election::Scope) -> String {
+    match scope.level() {
+        ScopeLevel::National => String::from("Jurisdição: Nacional"),
+        ScopeLevel::State => format!("Jurisdição: Estado {}", scope.code),
+        ScopeLevel::Municipality => format!("Jurisdição: Município {}", scope.code),
+        ScopeLevel::Unspecified => String::from("Jurisdição: ?"),
+    }
+}
+
+fn election_failure(e: ElectionError) -> Failure {
+    let code = match e {
+        ElectionError::InsufficientSignatures { .. } => ErrorCode::InsufficientSignatures,
+        _ => ErrorCode::InvalidArgument,
+    };
+    fail(code, &format!("eleição recusada: {e}"))
 }
 
 fn constant_time_eq(a: &[u8], b: &[u8]) -> bool {

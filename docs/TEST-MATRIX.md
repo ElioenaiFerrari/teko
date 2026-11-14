@@ -69,11 +69,29 @@ Legenda: **P** = `proptest` (muitos casos), **U** = unitário, **E** = ponta a p
 | Arquivo truncado/corrompido é **recusado**, não reparado; adulteração muda a raiz | bulletin: `truncated_or_corrupt_log_files_are_refused_not_repaired`, `flipping_a_stored_byte_changes_the_root_...` |
 | Auditor independente refaz a eleição só com o quadro e a política; transição forjada não passa mesmo com operador cúmplice | bulletin (integração): `an_auditor_replays_the_whole_election_from_the_board`, `a_forged_transition_does_not_pass_the_audit_...` |
 
+## Fase 2, etapa 3: o dispositivo e a votação por pleito
+
+| Garantia | Teste |
+|---|---|
+| Eleição exige M-de-N (manifesto e transições); manifesto forjado ou sem governança configurada é recusado, sem prompt | device-core: `an_election_needs_m_of_n_governance_signatures_and_a_configured_policy`; e2e `a_forged_or_old_election_never_reaches_a_vote` (Suite e dispositivo) |
+| Fase e elegibilidade por pleito, calculadas pelo dispositivo a partir do domicílio da credencial | device-core: `loading_an_election_reports_each_contest_phase_and_eligibility`; e2e `election_flow_president_for_all_governor_and_mayor_by_domicile` |
+| Presidente para todos; governador de outro estado recusado; prefeito/governador fora da fase recusados; nenhum prompt para pedido recusado | device-core: `you_cannot_vote_outside_your_jurisdiction_or_outside_the_voting_phase`; e2e idem |
+| A tela mostra cargo, jurisdição e o nome do candidato **do manifesto**; a assinatura amarra eleição, pleito, versão do pleito e opção | device-core: `the_ballot_screen_shows_the_candidate_from_the_manifest_and_the_signature_verifies`; election: `signature_binds_every_field` |
+| Um voto por pleito, persistido; rejeitar na tela não gasta o voto | device-core: `a_device_votes_once_per_contest_and_remembers_across_restarts` |
+| Pleitos abrem em datas próprias; **histórico mais antigo é recusado** (anti-rollback) | device-core: `contests_open_on_their_own_dates_and_old_history_is_refused` |
+| Chaves de eleitor distintas por pleito, estáveis, nunca a chave de identidade; raiz de eleitor ≠ raiz de identidade | device-core: `voter_keys_are_per_contest_stable_and_never_the_identity_key`; crypto: `deterministic_and_independent_across_contests_elections_and_roots`, `voter_keys_are_domain_separated_from_the_identity_key` |
+| Eleição armazenada é re-verificada a cada uso (adulterar o armazenamento não ajuda) | device-core: `the_stored_election_is_reverified_so_tampering_with_storage_does_not_help` |
+| Wipe remove eleição e registro de voto | device-core: `wiping_removes_the_election_and_the_vote_record` |
+| Nenhuma resposta vaza chave/segredo (inclui `GetVoterKey`/`SignBallot`) | device-core: `no_response_exposes_secrets` |
+| Credencial traz o domicílio e rejeita domicílio inválido; eleição de exemplo reproduz com 4 fases | issuer: `credential_carries_the_electoral_domicile_and_rejects_a_bad_one`, `demo_election_is_signed_by_governance_and_replays_with_four_phases` |
+| Governança no `trust.txt` é tudo-ou-nada | attestation: `governance_is_all_or_nothing` |
+| Tela do dispositivo quebra por palavra (nome de candidato nunca cortado) | device-core: `text::wrap_breaks_on_words_and_hard_splits_only_what_cannot_fit` |
+
 ## O que **não** está coberto por teste automático (honestidade)
 
 - **Tempo constante da comparação do PIN:** o código usa `subtle::ConstantTimeEq`, mas não há teste de temporização.
 - **`--listen` só em loopback:** verificado manualmente (recusa `0.0.0.0`); falta teste automatizado.
-- **A janela da Suite (Tauri) e a UI JS:** não há teste automatizado de interface; a UI foi exercitada com o mock no navegador e o app real só foi aberto até conectar no emulador.
+- **A janela da Suite (Tauri) e a UI JS:** não há teste automatizado de interface (a tela de votação foi exercitada só com o mock no navegador; ali um laço de re-render travou a página e foi corrigido); a UI foi exercitada com o mock no navegador e o app real só foi aberto até conectar no emulador.
 - **`no_std` em alvo embarcado real:** o CI compila o núcleo para `thumbv7em-none-eabihf` (passou em 2026-11-14); não há teste de execução em hardware.
 - **Quadro de avisos de operador único:** sem testemunhas independentes, um operador pode mostrar logs diferentes a pessoas diferentes (*split view*). Só um head fixado e comparado por terceiros detecta isso; não há essa comparação implementada.
 - **Fuzzing contínuo do parser:** só `proptest`; sem `cargo-fuzz`.

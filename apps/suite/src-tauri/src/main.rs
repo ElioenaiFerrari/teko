@@ -35,7 +35,9 @@ fn main() {
             commands::save_signed_document,
             commands::verify_document,
             commands::prove_attribute,
-            commands::cast_vote,
+            commands::election_load,
+            commands::election_get,
+            commands::election_vote,
             commands::wipe,
         ])
         .run(tauri::generate_context!());

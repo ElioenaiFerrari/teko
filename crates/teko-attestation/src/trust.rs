@@ -13,6 +13,8 @@ use thiserror::Error;
 /// fw_threshold=2
 /// fw_signer=<hex>   (N lines)
 /// revoked_batch=<id>
+/// gov_threshold=2   (optional: election governance, Phase 2)
+/// gov_signer=<hex> (N lines)
 /// ```
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct TrustPolicy {
@@ -21,6 +23,9 @@ pub struct TrustPolicy {
     pub fw_signers: Vec<Vec<u8>>,
     pub fw_threshold: usize,
     pub revoked_batches: Vec<String>,
+    /// Institutions that govern ELECTIONS (Phase 2). Empty = elections disabled.
+    pub gov_signers: Vec<Vec<u8>>,
+    pub gov_threshold: usize,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Error)]
@@ -55,6 +60,14 @@ impl TrustPolicy {
                     .fw_signers
                     .push(hex::decode(v).map_err(|_| TrustError::Invalid("bad fw_signer"))?),
                 "revoked_batch" => p.revoked_batches.push(String::from(v)),
+                "gov_threshold" => {
+                    p.gov_threshold = v
+                        .parse()
+                        .map_err(|_| TrustError::Invalid("bad gov_threshold"))?
+                }
+                "gov_signer" => p
+                    .gov_signers
+                    .push(hex::decode(v).map_err(|_| TrustError::Invalid("bad gov_signer"))?),
                 _ => return Err(TrustError::Invalid("unknown key")),
             }
         }
@@ -63,6 +76,13 @@ impl TrustPolicy {
         }
         if p.fw_threshold == 0 || p.fw_threshold > p.fw_signers.len() {
             return Err(TrustError::Invalid("fw_threshold must be in 1..=N"));
+        }
+        if p.gov_signers.is_empty() != (p.gov_threshold == 0)
+            || p.gov_threshold > p.gov_signers.len()
+        {
+            return Err(TrustError::Invalid(
+                "gov_threshold must be in 1..=N when governance is set",
+            ));
         }
         Ok(p)
     }
@@ -77,6 +97,12 @@ impl TrustPolicy {
         }
         for b in &self.revoked_batches {
             let _ = writeln!(s, "revoked_batch={b}");
+        }
+        if !self.gov_signers.is_empty() {
+            let _ = writeln!(s, "gov_threshold={}", self.gov_threshold);
+            for k in &self.gov_signers {
+                let _ = writeln!(s, "gov_signer={}", hex::encode(k));
+            }
         }
         s
     }
@@ -97,8 +123,33 @@ mod tests {
             fw_signers: alloc::vec![alloc::vec![2; 33], alloc::vec![3; 33], alloc::vec![4; 33]],
             fw_threshold: 2,
             revoked_batches: alloc::vec![String::from("batch-x")],
+            gov_signers: alloc::vec![alloc::vec![5; 33], alloc::vec![6; 33]],
+            gov_threshold: 2,
         };
         assert_eq!(TrustPolicy::parse(&p.to_text()).unwrap(), p);
+    }
+
+    #[test]
+    fn governance_is_all_or_nothing() {
+        let base = "authority_root=02\nfw_threshold=1\nfw_signer=02\n";
+        assert!(
+            TrustPolicy::parse(base).is_ok(),
+            "elections may be disabled"
+        );
+        assert!(
+            TrustPolicy::parse(&alloc::format!("{base}gov_signer=03\n")).is_err(),
+            "signers without threshold"
+        );
+        assert!(
+            TrustPolicy::parse(&alloc::format!("{base}gov_threshold=1\n")).is_err(),
+            "threshold without signers"
+        );
+        assert!(
+            TrustPolicy::parse(&alloc::format!("{base}gov_threshold=2\ngov_signer=03\n")).is_err()
+        );
+        assert!(
+            TrustPolicy::parse(&alloc::format!("{base}gov_threshold=1\ngov_signer=03\n")).is_ok()
+        );
     }
 
     #[test]

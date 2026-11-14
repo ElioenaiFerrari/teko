@@ -1780,6 +1780,7 @@ dependencies = [
  "sha3",
  "teko-attestation",
  "teko-crypto",
+ "teko-election",
  "teko-protocol",
  "thiserror 2.0.21",
 ]
@@ -3973,6 +3974,7 @@ dependencies = [
  "teko-attestation",
  "teko-crypto",
  "teko-device-core",
+ "teko-election",
  "teko-protocol",
  "teko-transport",
  "thiserror 2.0.21",
@@ -4005,6 +4007,7 @@ dependencies = [
  "subtle",
  "teko-attestation",
  "teko-crypto",
+ "teko-election",
  "teko-protocol",
  "zeroize",
 ]

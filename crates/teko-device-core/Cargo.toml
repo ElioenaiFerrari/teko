@@ -13,6 +13,7 @@ testing = []
 teko-protocol.workspace = true
 teko-crypto.workspace = true
 teko-attestation.workspace = true
+teko-election.workspace = true
 prost.workspace = true
 zeroize.workspace = true
 subtle.workspace = true

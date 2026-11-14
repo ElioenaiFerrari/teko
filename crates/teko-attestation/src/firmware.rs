@@ -164,6 +164,7 @@ mod tests {
             fw_signers: keys.iter().map(public_key_bytes).collect(),
             fw_threshold: threshold,
             revoked_batches: Vec::new(),
+            ..TrustPolicy::default()
         };
         let m = FirmwareManifest {
             version: 5,

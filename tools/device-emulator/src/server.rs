@@ -126,6 +126,7 @@ mod tests {
                 fw_signers: vec![vec![2; 33]],
                 fw_threshold: 1,
                 revoked_batches: vec![],
+                ..TrustPolicy::default()
             };
             let mut dev = Device::new(
                 Linked::new(ScriptedHal::new(), slot.clone()),

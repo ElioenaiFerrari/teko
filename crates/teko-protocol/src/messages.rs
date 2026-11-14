@@ -35,6 +35,8 @@ pub enum ButtonKind {
     Wipe = 9,
     IssueIdentity = 10,
     LoadCredential = 11,
+    LoadElection = 12,
+    VoterKey = 13,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, prost::Enumeration)]
@@ -57,6 +59,12 @@ pub enum ErrorCode {
     NotImplemented = 14,
     InvalidArgument = 15,
     Internal = 16,
+    /// The voter's domicile does not cover this contest.
+    NotEligible = 17,
+    /// The contest is not in the right phase (e.g. voting not open).
+    WrongPhase = 18,
+    /// This device already signed a ballot for this contest.
+    AlreadyVoted = 19,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, prost::Enumeration)]
@@ -137,16 +145,36 @@ pub struct ProveAttribute {
     #[prost(string, tag = "3")]
     pub verifier_name: String,
 }
+/// Gives the device an election: manifest (signed M-of-N) plus the governance
+/// transitions so far. The device verifies everything itself.
 #[derive(Clone, PartialEq, prost::Message)]
-pub struct GetVoterCommitment {}
+pub struct LoadElection {
+    #[prost(bytes = "vec", tag = "1")]
+    pub manifest: Vec<u8>,
+    #[prost(bytes = "vec", repeated, tag = "2")]
+    pub transitions: Vec<Vec<u8>>,
+}
+/// Reads the election already stored on the device (re-verified); no confirmation.
+#[derive(Clone, PartialEq, prost::Message)]
+pub struct GetElection {}
+/// The PUBLIC voter key for one contest (e.g. to register it).
+#[derive(Clone, PartialEq, prost::Message)]
+pub struct GetVoterKey {
+    #[prost(string, tag = "1")]
+    pub election_id: String,
+    #[prost(string, tag = "2")]
+    pub contest_id: String,
+}
+/// Sign a ballot. The host names the option by INDEX only: the text shown on the
+/// device (candidate name, office, jurisdiction) comes from the verified manifest.
 #[derive(Clone, PartialEq, prost::Message)]
 pub struct SignBallot {
     #[prost(string, tag = "1")]
     pub election_id: String,
-    #[prost(bytes = "vec", tag = "2")]
-    pub ballot_hash: Vec<u8>,
-    #[prost(string, tag = "3")]
-    pub summary: String,
+    #[prost(string, tag = "2")]
+    pub contest_id: String,
+    #[prost(uint32, tag = "3")]
+    pub option_index: u32,
 }
 #[derive(Clone, PartialEq, prost::Message)]
 pub struct Wipe {}
@@ -247,15 +275,60 @@ pub struct AttributeProof {
     #[prost(bytes = "vec", tag = "1")]
     pub presentation: Vec<u8>,
 }
+/// One race as the DEVICE understands it (after verifying the manifest).
 #[derive(Clone, PartialEq, prost::Message)]
-pub struct VoterCommitment {
+pub struct ContestInfo {
+    #[prost(string, tag = "1")]
+    pub contest_id: String,
+    #[prost(string, tag = "2")]
+    pub title: String,
+    /// 0 Draft, 1 CandidatesPublished, 2 RegistrationOpen, 3 VotingOpen,
+    /// 4 VotingClosed, 5 Tallied, 6 Audited, 7 Cancelled.
+    #[prost(uint32, tag = "3")]
+    pub phase: u32,
+    /// 1 National, 2 State, 3 Municipality.
+    #[prost(uint32, tag = "4")]
+    pub scope_level: u32,
+    #[prost(string, tag = "5")]
+    pub scope_code: String,
+    #[prost(string, repeated, tag = "6")]
+    pub option_names: Vec<String>,
+    /// Computed by the device from ITS credential's electoral domicile.
+    #[prost(bool, tag = "7")]
+    pub eligible: bool,
+    /// This device already signed a ballot for this contest.
+    #[prost(bool, tag = "8")]
+    pub voted: bool,
+    #[prost(uint64, tag = "9")]
+    pub voting_opens: u64,
+    #[prost(uint64, tag = "10")]
+    pub voting_closes: u64,
+}
+#[derive(Clone, PartialEq, prost::Message)]
+pub struct ElectionLoaded {
+    #[prost(string, tag = "1")]
+    pub election_id: String,
+    #[prost(string, tag = "2")]
+    pub title: String,
+    #[prost(uint32, tag = "3")]
+    pub revision: u32,
+    #[prost(uint64, tag = "4")]
+    pub seq: u64,
+    #[prost(message, repeated, tag = "5")]
+    pub contests: Vec<ContestInfo>,
+}
+/// PUBLIC key only.
+#[derive(Clone, PartialEq, prost::Message)]
+pub struct VoterKey {
     #[prost(bytes = "vec", tag = "1")]
-    pub commitment: Vec<u8>,
+    pub voter_key: Vec<u8>,
 }
 #[derive(Clone, PartialEq, prost::Message)]
 pub struct BallotSignature {
     #[prost(bytes = "vec", tag = "1")]
     pub signature: Vec<u8>,
+    #[prost(bytes = "vec", tag = "2")]
+    pub voter_key: Vec<u8>,
 }
 #[derive(Clone, PartialEq, prost::Message)]
 pub struct WipeDone {}
@@ -340,7 +413,7 @@ define_messages! {
         GetPairwiseId(GetPairwiseId) = 0x0007,
         SignDocument(SignDocument) = 0x0008,
         ProveAttribute(ProveAttribute) = 0x0009,
-        GetVoterCommitment(GetVoterCommitment) = 0x000A,
+        GetVoterKey(GetVoterKey) = 0x000A,
         SignBallot(SignBallot) = 0x000B,
         Wipe(Wipe) = 0x000C,
         GetIdentityRequest(GetIdentityRequest) = 0x000D,
@@ -351,6 +424,8 @@ define_messages! {
         FirmwareBegin(FirmwareBegin) = 0x0012,
         FirmwareChunk(FirmwareChunk) = 0x0013,
         FirmwareFinish(FirmwareFinish) = 0x0014,
+        LoadElection(LoadElection) = 0x0015,
+        GetElection(GetElection) = 0x0016,
     }
 }
 
@@ -368,13 +443,14 @@ define_messages! {
         PairwiseId(PairwiseId) = 0x0109,
         DocumentSignature(DocumentSignature) = 0x010A,
         AttributeProof(AttributeProof) = 0x010B,
-        VoterCommitment(VoterCommitment) = 0x010C,
+        VoterKey(VoterKey) = 0x010C,
         BallotSignature(BallotSignature) = 0x010D,
         WipeDone(WipeDone) = 0x010E,
         IdentityRequest(IdentityRequest) = 0x010F,
         CredentialLoaded(CredentialLoaded) = 0x0110,
         Success(Success) = 0x0111,
         Failure(Failure) = 0x0112,
+        ElectionLoaded(ElectionLoaded) = 0x0113,
     }
 }
 

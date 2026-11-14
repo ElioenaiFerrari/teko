@@ -89,6 +89,8 @@ fn onboard(rig: &Rig, c: &mut DeviceClient<TcpTransport>) {
         name: "Maria da Silva".into(),
         birth_date: "1990-05-17".into(),
         nationality: "BR".into(),
+        electoral_state: "SP".into(),
+        electoral_municipality: "3550308".into(),
     };
     let issued = rig.issuer.issue_credential(&nonce, &req, &subject).unwrap();
     c.load_credential(&issued.encode_to_vec()).unwrap();
@@ -166,6 +168,8 @@ fn full_onboarding_and_daily_use() {
         name: "Maria da Silva".into(),
         birth_date: "1990-05-17".into(),
         nationality: "BR".into(),
+        electoral_state: "SP".into(),
+        electoral_municipality: "3550308".into(),
     };
     let issued = rig.issuer.issue_credential(&nonce, &req, &subject).unwrap();
     c.load_credential(&issued.encode_to_vec()).unwrap();
@@ -224,14 +228,9 @@ fn full_onboarding_and_daily_use() {
     );
     assert!(!format!("{proof:?}").contains("1990"));
 
-    // pairwise ids + voting stubs
+    // pairwise ids
     let a = c.pairwise_id("banco.exemplo").unwrap();
     assert_ne!(a, c.pairwise_id("loja.exemplo").unwrap());
-    assert_eq!(c.voter_commitment().unwrap().len(), 64);
-    assert_eq!(
-        device_code(c.sign_ballot("eleicao-2026", "Candidato 13").unwrap_err()),
-        ErrorCode::NotImplemented
-    );
 
     // firmware update v1 -> v2 while unlocked; downgrade refused by Suite AND device
     let (m2, b2) = firmware(&rig, 2);
@@ -357,5 +356,177 @@ fn eight_wrong_pins_wipe_the_device_over_the_wire() {
     rig.hal.advance_ms(10_000_000);
     assert_eq!(device_code(c.unlock().unwrap_err()), ErrorCode::DeviceWiped);
     assert_eq!(c.features().unwrap().state, "firmware_installed");
+    let _ = fs::remove_dir_all(rig.issuer.dir());
+}
+
+// ───────────────────────── elections over the wire ─────────────────────────
+
+fn election_bundle(rig: &Rig) -> Vec<u8> {
+    fs::read(rig.issuer.dir().join("election.bundle")).unwrap()
+}
+
+#[test]
+fn election_flow_president_for_all_governor_and_mayor_by_domicile() {
+    let rig = start();
+    let mut c = connect(&rig);
+    onboard(&rig, &mut c); // the voter lives in SP / São Paulo (3550308)
+
+    // Suite verifies governance first; the device verifies again and asks on ITS screen.
+    let e = c.load_election(&rig.trust, &election_bundle(&rig)).unwrap();
+    assert_eq!(e.contests.len(), 4);
+    let get = |id: &str| e.contests.iter().find(|x| x.contest_id == id).unwrap();
+    // Four contests, four situations at the same moment, decided by the DEVICE:
+    assert_eq!(
+        (get("presidente").phase, get("presidente").eligible),
+        ("voting_open", true)
+    );
+    assert_eq!(
+        (get("governador-sp").phase, get("governador-sp").eligible),
+        ("registration_open", true)
+    );
+    assert_eq!(
+        (get("governador-rj").phase, get("governador-rj").eligible),
+        ("voting_open", false)
+    );
+    assert_eq!(
+        (
+            get("prefeito-3550308").phase,
+            get("prefeito-3550308").eligible
+        ),
+        ("candidates_published", true)
+    );
+    let shown = rig
+        .hal
+        .screens()
+        .into_iter()
+        .rev()
+        .find(|s| s.title == "CARREGAR ELEIÇÃO?")
+        .unwrap();
+    assert!(shown.lines.join(" ").contains("Governança: 2 de 3"));
+
+    // The President belongs to everyone: vote, verify, see the NAME on the device screen.
+    let ballot = c
+        .sign_ballot("eleicoes-exemplo-2026", "presidente", 1)
+        .unwrap();
+    assert_eq!(ballot.option_name, "Candidato Boto-Cor-de-Rosa");
+    let screen = rig
+        .hal
+        .screens()
+        .into_iter()
+        .rev()
+        .find(|s| s.title == "CONFIRMAR VOTO?")
+        .unwrap();
+    let text = screen.lines.join(" ");
+    assert!(
+        text.contains("Candidato Boto-Cor-de-Rosa") && text.contains("Presidente da República"),
+        "{text}"
+    );
+    assert!(!ballot.signature.is_empty() && !ballot.voter_key.is_empty());
+
+    // Rio's governor: voting is open but it is not my state -> refused, no prompt.
+    let before = rig.hal.confirms_requested();
+    assert_eq!(
+        device_code(
+            c.sign_ballot("eleicoes-exemplo-2026", "governador-rj", 0)
+                .unwrap_err()
+        ),
+        ErrorCode::NotEligible
+    );
+    // São Paulo's governor: mine, but voting opens tomorrow.
+    assert_eq!(
+        device_code(
+            c.sign_ballot("eleicoes-exemplo-2026", "governador-sp", 0)
+                .unwrap_err()
+        ),
+        ErrorCode::WrongPhase
+    );
+    // The mayor: mine, but only the candidates are announced.
+    assert_eq!(
+        device_code(
+            c.sign_ballot("eleicoes-exemplo-2026", "prefeito-3550308", 0)
+                .unwrap_err()
+        ),
+        ErrorCode::WrongPhase
+    );
+    assert_eq!(
+        rig.hal.confirms_requested(),
+        before,
+        "refused requests never reach the user"
+    );
+
+    // One ballot per contest.
+    assert_eq!(
+        device_code(
+            c.sign_ballot("eleicoes-exemplo-2026", "presidente", 0)
+                .unwrap_err()
+        ),
+        ErrorCode::AlreadyVoted
+    );
+    assert!(
+        c.election()
+            .unwrap()
+            .contests
+            .iter()
+            .find(|x| x.contest_id == "presidente")
+            .unwrap()
+            .voted
+    );
+
+    // Registration keys are per contest and unrelated to each other.
+    let k_pres = c.voter_key("eleicoes-exemplo-2026", "presidente").unwrap();
+    let k_gov = c
+        .voter_key("eleicoes-exemplo-2026", "governador-sp")
+        .unwrap();
+    assert_ne!(k_pres, k_gov);
+    assert_eq!(
+        k_pres, ballot.voter_key,
+        "the registered key is the one that signs"
+    );
+    assert_eq!(
+        device_code(
+            c.voter_key("eleicoes-exemplo-2026", "prefeito-3550308")
+                .unwrap_err()
+        ),
+        ErrorCode::WrongPhase
+    );
+    let _ = fs::remove_dir_all(rig.issuer.dir());
+}
+
+#[test]
+fn a_forged_or_old_election_never_reaches_a_vote() {
+    let rig = start();
+    let mut c = connect(&rig);
+    onboard(&rig, &mut c);
+    let bundle = election_bundle(&rig);
+
+    // Governance signatures stripped down to one institution: the Suite refuses first...
+    let mut b = teko_election::ElectionBundle::decode(bundle.as_slice()).unwrap();
+    let mut m = teko_election::ElectionManifest::decode(b.manifest.as_slice()).unwrap();
+    m.signatures.truncate(1);
+    b.manifest = m.encode_to_vec();
+    let err = c.load_election(&rig.trust, &b.encode_to_vec()).unwrap_err();
+    assert!(matches!(err, ClientError::Verification(_)), "{err:?}");
+    // ...and a Suite that skips its own check is still stopped by the device.
+    let raw = c.request(teko_protocol::Request::LoadElection(
+        teko_protocol::LoadElection {
+            manifest: b.manifest.clone(),
+            transitions: b.transitions.clone(),
+        },
+    ));
+    assert_eq!(
+        device_code(raw.unwrap_err()),
+        ErrorCode::InsufficientSignatures
+    );
+    assert_eq!(
+        device_code(c.election().unwrap_err()),
+        ErrorCode::InvalidState,
+        "nothing was stored"
+    );
+
+    // Voting without a loaded election is impossible.
+    assert!(matches!(
+        c.sign_ballot("eleicoes-exemplo-2026", "presidente", 0),
+        Err(ClientError::Unexpected(_))
+    ));
     let _ = fs::remove_dir_all(rig.issuer.dir());
 }

@@ -151,6 +151,17 @@ Nota: após `CredenciaisEmitidas` o dispositivo entra em `Bloqueado` no próximo
 - **Predicados:** `AgeAtLeast` (usa a menor claim derivada `age_over_K ≥ N`), `Has` (claim booleana `true`) e `Reveal` (mostra o valor na tela do dispositivo).
 - `SignBallot`: o dispositivo pede confirmação e responde `NotImplemented` (nunca assina).
 
+## 8.2 Mensagens de eleição (Fase 2, implementadas)
+
+| Mensagem | Estados | Confirma? | Resposta / observação |
+|---|---|---|---|
+| `LoadElection{manifest, transitions[]}` | Desbloqueado + credencial | **Sim** | `ElectionLoaded{election_id, title, revision, seq, contests[]}`; verifica M-de-N e o histórico; recusa histórico mais antigo |
+| `GetElection{}` | Desbloqueado + credencial | Não | Mesmo resumo, da eleição armazenada (re-verificada) |
+| `GetVoterKey{election_id, contest_id}` | Idem; registro aberto; elegível | **Sim** | `VoterKey{voter_key}`: chave **pública** do pleito |
+| `SignBallot{election_id, contest_id, option_index}` | Idem; votação aberta; elegível; ainda não votou | **Sim** | `BallotSignature{signature, voter_key}`; a tela mostra o nome vindo do manifesto |
+
+Substituem `GetVoterCommitment` e o stub antigo de `SignBallot`. Novos códigos de erro: `NotEligible`, `WrongPhase`, `AlreadyVoted`. `ContestInfo` informa fase, jurisdição, opções, `eligible` e `voted` (calculados **no dispositivo**).
+
 ## 9. Perguntas em aberto
 
 1. **Serialização** (prost / postcard / CBOR) → ADR-0004. *Recomendação:* `prost`. **PENDENTE**.

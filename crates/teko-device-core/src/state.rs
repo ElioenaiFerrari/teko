@@ -34,4 +34,10 @@ pub struct Persisted {
     /// Encoded `IssuedCredential`.
     #[prost(bytes = "vec", tag = "11")]
     pub credential: Vec<u8>,
+    /// Encoded `ElectionBundle` (manifest + governance transitions), re-verified on use.
+    #[prost(bytes = "vec", tag = "12")]
+    pub election: Vec<u8>,
+    /// `contest_hash` of every contest this device already signed a ballot for.
+    #[prost(bytes = "vec", repeated, tag = "13")]
+    pub ballots_signed: Vec<Vec<u8>>,
 }

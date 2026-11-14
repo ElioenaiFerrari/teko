@@ -13,13 +13,16 @@ use rand::Rng;
 use rand::rand_core::UnwrapErr;
 use rand::rngs::SysRng;
 use serde::Serialize;
-use sha3::{Digest, Sha3_256};
 use teko_attestation::{
     FirmwareManifest, TrustPolicy, blob_hash, count_valid_signers, manifest_fingerprint,
     verify_attestation, verify_blob, verify_manifest,
 };
 use teko_crypto::credential::{self, Presentation};
 use teko_crypto::{civic_id, hex, parse_civic_id};
+use teko_election::{
+    BallotBody, ElectionBundle, ElectionManifest, GovernancePolicy, Transition, contest_hash,
+    replay, verify_ballot,
+};
 use teko_protocol::*;
 use teko_transport::Transport;
 
@@ -33,6 +36,8 @@ pub struct DeviceClient<T: Transport> {
     transport: T,
     next_id: u32,
     on_button: Option<OnButton>,
+    /// Manifest of the election last loaded (to verify ballots against).
+    election: Option<ElectionManifest>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -133,6 +138,7 @@ impl<T: Transport> DeviceClient<T> {
             transport,
             next_id: 1,
             on_button: None,
+            election: None,
         }
     }
 
@@ -456,40 +462,231 @@ impl<T: Transport> DeviceClient<T> {
         })
     }
 
-    // ───────────────────────── voting (stubs) ─────────────────────────
+    // ───────────────────────── elections (Phase 2) ─────────────────────────
 
-    pub fn voter_commitment(&mut self) -> Result<String, ClientError> {
-        self.expect(
-            Request::GetVoterCommitment(GetVoterCommitment {}),
+    /// Verifies a bundle on the HOST only (M-of-N + history replay) and returns
+    /// its manifest and transitions. Nothing is sent to the device.
+    fn check_bundle(
+        policy: &TrustPolicy,
+        bundle_bytes: &[u8],
+    ) -> Result<(ElectionManifest, ElectionBundle), ClientError> {
+        let bundle = ElectionBundle::decode(bundle_bytes)
+            .map_err(|_| ClientError::Verification("pacote de eleição malformado".into()))?;
+        let manifest = ElectionManifest::decode(bundle.manifest.as_slice())
+            .map_err(|_| ClientError::Verification("manifesto malformado".into()))?;
+        let mut transitions = Vec::new();
+        for t in &bundle.transitions {
+            transitions.push(
+                Transition::decode(t.as_slice())
+                    .map_err(|_| ClientError::Verification("transição malformada".into()))?,
+            );
+        }
+        let gov = GovernancePolicy::new(policy.gov_signers.clone(), policy.gov_threshold).map_err(
+            |_| ClientError::Verification("sem política de governança no trust.txt".into()),
+        )?;
+        replay(&gov, &manifest, &transitions)
+            .map_err(|e| ClientError::Verification(format!("eleição recusada: {e}")))?;
+        Ok((manifest, bundle))
+    }
+
+    /// Remembers an election (verified on the host) so ballots can be checked,
+    /// without sending anything to the device. Used after a reconnection.
+    pub fn use_election_bundle(
+        &mut self,
+        policy: &TrustPolicy,
+        bundle_bytes: &[u8],
+    ) -> Result<(), ClientError> {
+        let (manifest, _) = Self::check_bundle(policy, bundle_bytes)?;
+        self.election = Some(manifest);
+        Ok(())
+    }
+
+    pub fn has_election(&self) -> bool {
+        self.election.is_some()
+    }
+
+    /// Gives the device an election bundle (manifest + governance history).
+    /// The Suite verifies M-of-N and replays the history FIRST (fail fast); the
+    /// device then does the same checks itself and asks for confirmation.
+    pub fn load_election(
+        &mut self,
+        policy: &TrustPolicy,
+        bundle_bytes: &[u8],
+    ) -> Result<ElectionSummary, ClientError> {
+        let (manifest, bundle) = Self::check_bundle(policy, bundle_bytes)?;
+        let loaded = self.expect(
+            Request::LoadElection(LoadElection {
+                manifest: bundle.manifest.clone(),
+                transitions: bundle.transitions.clone(),
+            }),
             |r| match r {
-                Response::VoterCommitment(c) => Ok(hex::encode(&c.commitment)),
+                Response::ElectionLoaded(l) => Ok(l),
+                o => Err(o),
+            },
+        )?;
+        self.election = Some(manifest);
+        Ok(summarize(&loaded))
+    }
+
+    /// Reads the election the device already holds (no confirmation needed).
+    pub fn election(&mut self) -> Result<ElectionSummary, ClientError> {
+        let loaded = self.expect(Request::GetElection(GetElection {}), |r| match r {
+            Response::ElectionLoaded(l) => Ok(l),
+            o => Err(o),
+        })?;
+        Ok(summarize(&loaded))
+    }
+
+    /// The PUBLIC voter key of one contest (hex), e.g. to register it.
+    pub fn voter_key(
+        &mut self,
+        election_id: &str,
+        contest_id: &str,
+    ) -> Result<String, ClientError> {
+        self.expect(
+            Request::GetVoterKey(GetVoterKey {
+                election_id: election_id.to_string(),
+                contest_id: contest_id.to_string(),
+            }),
+            |r| match r {
+                Response::VoterKey(k) => Ok(hex::encode(&k.voter_key)),
                 o => Err(o),
             },
         )
     }
 
-    /// Wired to the device stub: the user confirms on the device and the device
-    /// answers `NotImplemented` (voting arrives with the blockchain phase).
+    /// Asks the device to sign a ballot. The device shows the candidate NAME
+    /// from its own verified copy of the manifest; we only send the INDEX.
+    /// The signature is verified here before being handed to the user.
+    /// PROTOTYPE: nothing is submitted anywhere and there is no ZK proof yet.
     pub fn sign_ballot(
         &mut self,
         election_id: &str,
-        choice_summary: &str,
-    ) -> Result<(), ClientError> {
-        let mut h = Sha3_256::new();
-        h.update(election_id.as_bytes());
-        h.update(choice_summary.as_bytes());
-        let ballot_hash: [u8; 32] = h.finalize().into();
-        self.expect(
+        contest_id: &str,
+        option_index: u32,
+    ) -> Result<SignedBallot, ClientError> {
+        let manifest = self
+            .election
+            .clone()
+            .ok_or_else(|| ClientError::Unexpected("carregue a eleição primeiro".into()))?;
+        let contest = manifest
+            .contest(contest_id)
+            .filter(|_| manifest.election_id == election_id)
+            .ok_or_else(|| ClientError::Verification("pleito desconhecido nesta eleição".into()))?;
+        let option_name = contest
+            .option_name(option_index)
+            .ok_or_else(|| ClientError::Verification("opção inexistente".into()))?
+            .to_string();
+        let b = self.expect(
             Request::SignBallot(SignBallot {
                 election_id: election_id.to_string(),
-                ballot_hash: ballot_hash.to_vec(),
-                summary: choice_summary.to_string(),
+                contest_id: contest_id.to_string(),
+                option_index,
             }),
             |r| match r {
-                Response::BallotSignature(_) => Ok(()),
+                Response::BallotSignature(b) => Ok(b),
                 o => Err(o),
             },
-        )
+        )?;
+        let body = BallotBody {
+            election_id: election_id.to_string(),
+            contest_id: contest_id.to_string(),
+            contest_hash: contest_hash(contest).to_vec(),
+            option_index,
+        };
+        verify_ballot(&b.voter_key, &body, &b.signature)
+            .map_err(|_| ClientError::Verification("a assinatura da cédula NÃO confere".into()))?;
+        Ok(SignedBallot {
+            election_id: election_id.to_string(),
+            contest_id: contest_id.to_string(),
+            contest_title: contest.title.clone(),
+            option_index,
+            option_name,
+            voter_key: hex::encode(&b.voter_key),
+            signature: hex::encode(&b.signature),
+        })
+    }
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct ContestSummary {
+    pub contest_id: String,
+    pub title: String,
+    pub phase: &'static str,
+    pub phase_code: u32,
+    pub scope: String,
+    pub scope_code: String,
+    pub option_names: Vec<String>,
+    pub eligible: bool,
+    pub voted: bool,
+    pub voting_opens: u64,
+    pub voting_closes: u64,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct ElectionSummary {
+    pub election_id: String,
+    pub title: String,
+    pub revision: u32,
+    pub seq: u64,
+    pub contests: Vec<ContestSummary>,
+}
+
+/// A ballot signed by the device and verified by the Suite. PROTOTYPE: not submitted.
+#[derive(Debug, Clone, Serialize)]
+pub struct SignedBallot {
+    pub election_id: String,
+    pub contest_id: String,
+    pub contest_title: String,
+    pub option_index: u32,
+    pub option_name: String,
+    pub voter_key: String,
+    pub signature: String,
+}
+
+fn phase_name(code: u32) -> &'static str {
+    match code {
+        0 => "draft",
+        1 => "candidates_published",
+        2 => "registration_open",
+        3 => "voting_open",
+        4 => "voting_closed",
+        5 => "tallied",
+        6 => "audited",
+        7 => "cancelled",
+        _ => "unknown",
+    }
+}
+
+fn summarize(l: &ElectionLoaded) -> ElectionSummary {
+    ElectionSummary {
+        election_id: l.election_id.clone(),
+        title: l.title.clone(),
+        revision: l.revision,
+        seq: l.seq,
+        contests: l
+            .contests
+            .iter()
+            .map(|c| ContestSummary {
+                contest_id: c.contest_id.clone(),
+                title: c.title.clone(),
+                phase: phase_name(c.phase),
+                phase_code: c.phase,
+                scope: match c.scope_level {
+                    1 => "national",
+                    2 => "state",
+                    3 => "municipality",
+                    _ => "unknown",
+                }
+                .to_string(),
+                scope_code: c.scope_code.clone(),
+                option_names: c.option_names.clone(),
+                eligible: c.eligible,
+                voted: c.voted,
+                voting_opens: c.voting_opens,
+                voting_closes: c.voting_closes,
+            })
+            .collect(),
     }
 }
 

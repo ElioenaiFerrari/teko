@@ -17,6 +17,7 @@ path = "src/main.rs"
 teko-crypto.workspace = true
 teko-attestation.workspace = true
 teko-protocol.workspace = true
+teko-election.workspace = true
 prost.workspace = true
 rand.workspace = true
 thiserror = { workspace = true, features = ["std"] }

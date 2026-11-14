@@ -27,7 +27,9 @@ pub struct SuiteInner {
     pub client: Mutex<Option<Client>>,
     pub addr: String,
     /// Incremental tally for the live results view.
-    pub results: Mutex<Option<Tallier>>,
+    /// Incremental tally, keyed by the FIRST entry of the board it was built from, so a
+    /// different chain/election (reset, new network) never reuses stale state.
+    pub results: Mutex<Option<(teko_bulletin::Hash, Tallier)>>,
 }
 
 pub type Suite = Arc<SuiteInner>;
@@ -951,11 +953,16 @@ pub async fn results_snapshot(suite: State<'_, Suite>) -> Result<ResultsReply, U
             return unavailable("O quadro de avisos ainda está vazio: publique a eleição.");
         }
         let mut guard = suite.results.lock().unwrap_or_else(|e| e.into_inner());
-        // A shrunk board (reset/new election) invalidates the incremental state.
-        if guard.as_ref().is_some_and(|t| t.consumed() > board.len()) {
+        // A different board (reset, new network or election) invalidates the incremental
+        // state: it is tied to the first entry, and a shrunk board is detected too.
+        let first = board.entry(0).map_or([0; 32], |e| e.leaf_hash());
+        if guard
+            .as_ref()
+            .is_some_and(|(f, t)| *f != first || t.consumed() > board.len())
+        {
             *guard = None;
         }
-        let tallier = guard.get_or_insert_with(|| admin.new_tallier());
+        let (_, tallier) = guard.get_or_insert_with(|| (first, admin.new_tallier()));
         feed_new(tallier, &board);
         let t = tallier.snapshot();
         let manifest = tallier.manifest().cloned();
@@ -1208,23 +1215,34 @@ pub async fn explorer_snapshot() -> Result<ExplorerReply, UiError> {
             head_root: hex::encode(&board.root()),
             contests,
             governance,
-            ceremony: (0..board.len())
-                .filter_map(|i| board.entry(i))
-                .filter(|e| e.kind == teko_bulletin::EntryKind::DKG)
-                .find_map(|e| {
-                    let rec = <teko_ballot_crypto::dkg_wire::DkgRecord as prost::Message>::decode(
-                        e.payload.as_slice(),
-                    )
-                    .ok()?;
-                    // Re-verified HERE: every proof of possession and the key recomputed.
-                    let v = rec.verify().ok()?;
-                    Some(CeremonyView {
-                        threshold: v.threshold,
-                        validators: v.verification_keys.len(),
-                        matches_manifest: m_tally_key == rec.group_key,
-                        election_key: hex::encode(&rec.group_key),
+            ceremony: {
+                // Every ceremony on the chain is re-verified HERE (proofs of possession,
+                // key recomputed). Prefer the one whose key is the manifest's; if none
+                // matches, show the first one flagged as different (results cannot be
+                // decrypted in that case).
+                let mut views: Vec<CeremonyView> = (0..board.len())
+                    .filter_map(|i| board.entry(i))
+                    .filter(|e| e.kind == teko_bulletin::EntryKind::DKG)
+                    .filter_map(|e| {
+                        let rec =
+                            <teko_ballot_crypto::dkg_wire::DkgRecord as prost::Message>::decode(
+                                e.payload.as_slice(),
+                            )
+                            .ok()?;
+                        let v = rec.verify().ok()?;
+                        Some(CeremonyView {
+                            threshold: v.threshold,
+                            validators: v.verification_keys.len(),
+                            matches_manifest: m_tally_key == rec.group_key,
+                            election_key: hex::encode(&rec.group_key),
+                        })
                     })
-                }),
+                    .collect();
+                match views.iter().position(|v| v.matches_manifest) {
+                    Some(i) => Some(views.swap_remove(i)),
+                    None => views.into_iter().next(),
+                }
+            },
         }
     })
     .await

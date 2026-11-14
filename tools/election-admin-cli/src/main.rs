@@ -18,7 +18,8 @@ USO:
       Anexa ~R cédulas/s durante S segundos: abra a tela de Resultados da Suite e veja os gráficos andarem.
   election-admin tally [--dir dev] [--top 10] [--contest ID]
       Apura o quadro e mostra o ranking de cada pleito.
-  election-admin close-due [--dir dev]
+  election-admin close-due [--dir dev] [--now SEGUNDOS]
+      (--now simula o relógio, só para teste: um valor no futuro fecha tudo agora.)
       Governança SIMULADA: fecha (assinado 2 de 3) os pleitos cujo prazo venceu; depois disso o quadro não conta mais cédulas deles.
   election-admin reset-board [--dir dev]
       Apaga o quadro e o marcador de simulação.
@@ -82,9 +83,13 @@ fn run(args: Vec<String>) -> Result<(), String> {
             );
         }
         "close-due" => {
-            let now = std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .map_or(0, |d| d.as_secs());
+            // `--now SECS` SIMULATES the clock (dev only): a far-future value closes
+            // every contest at once so the results can be seen without waiting for the deadline.
+            let now = num(&f, "now")?.unwrap_or_else(|| {
+                std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .map_or(0, |d| d.as_secs())
+            });
             let n = admin()?.close_due(now).map_err(e)?;
             println!("{n} pleito(s) fechado(s) pela governança (prazo vencido).");
         }

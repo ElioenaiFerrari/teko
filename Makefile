@@ -1,6 +1,6 @@
 # Teko — atalhos. Rode `make` (ou `make help`) para ver tudo.
 .DEFAULT_GOAL := help
-.PHONY: help setup emulator suite reset demo issuer-help preview fmt lint test check build clean-dev verify-fw release-check repro devnet devnet-dkg devnet-stop devnet-status devnet-reset devnet-blocks testnet-help election publish simulate simulate-live tally reset-board
+.PHONY: help setup emulator suite reset demo issuer-help preview fmt lint test check build clean-dev verify-fw release-check repro devnet close devnet-dkg devnet-stop devnet-status devnet-reset devnet-blocks testnet-help election publish simulate simulate-live tally reset-board
 
 CARGO ?= cargo
 PIN   ?= 482913
@@ -37,7 +37,9 @@ devnet-dkg: ## Cerimônia de chave da eleição entre os 3 validadores (cédulas
 	@$(NODE) dkg --dir $(NET)
 
 devnet-stop: ## Para os 3 validadores (os blocos ficam em dev/net/node-*/blocks.log)
-	@$(NODE) stop --dir $(NET)
+	@$(NODE) stop --dir $(NET) 2>/dev/null || true
+	@# Rede apagada ou .pid perdido: mata nós órfãos pelo nome (senão eles seguem ocupando as portas)
+	@pkill -f 'teko-node run --dir $(NET)' 2>/dev/null && echo 'nós órfãos parados' || true
 
 devnet-status: ## Altura, entradas, mempool e pares de cada validador
 	@$(NODE) status --dir $(NET)
@@ -64,6 +66,9 @@ simulate: ## Anexa N eleitores SINTÉTICOS ao quadro de uma vez (DADOS SIMULADOS
 
 simulate-live: ## Anexa ~RATE cédulas/s por SECS s: abra Resultados ao vivo na Suite e veja andar. RATE=15 SECS=120
 	$(CARGO) run -q --release -p election-admin-cli -- simulate --rate $(RATE) --duration $(SECS)
+
+close: ## TESTE: a governança simulada fecha TODOS os pleitos agora; com a rede e a cerimônia, os validadores decifram e os totais aparecem
+	$(CARGO) run -q -p election-admin-cli -- close-due --now 99999999999
 
 tally: ## Apura o quadro e mostra o top 10 de cada pleito no terminal
 	$(CARGO) run -q -p election-admin-cli -- tally
@@ -111,6 +116,6 @@ repro: ## Confere se o build é reproduzível (compila 2x em pastas diferentes e
 build: ## Compila tudo (debug)
 	$(CARGO) build --workspace
 
-clean-dev: ## Apaga a pasta dev/ (chaves de teste e estado). Depois rode `make setup`
+clean-dev: devnet-stop ## Apaga a pasta dev/ (chaves de teste e estado). Para a rede antes. Depois rode `make setup`
 	@printf "Apagar dev/ (chaves de teste e estado do dispositivo)? [s/N] "; read a; \
 	if [ "$$a" = "s" ] || [ "$$a" = "S" ]; then find dev -mindepth 1 ! -name .gitkeep -delete && echo "dev/ limpa."; else echo "cancelado."; fi

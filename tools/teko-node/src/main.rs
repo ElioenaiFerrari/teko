@@ -152,10 +152,15 @@ fn run(args: Vec<String>) -> Result<(), String> {
         "reset" => {
             let net = load_network(&dir).map_err(e)?;
             for i in 0..net.peers.len() {
-                let _ = std::fs::remove_file(teko_node::node_dir(&dir, i).join("blocks.log"));
+                let nd = teko_node::node_dir(&dir, i);
+                let _ = std::fs::remove_file(nd.join("blocks.log"));
+                // The key ceremony lives IN the chain being wiped: its shares and the
+                // public key mean nothing without it (and would poison a new election).
+                let _ = std::fs::remove_file(nd.join("tally-share.key"));
             }
+            let _ = std::fs::remove_file(dir.join("tally-key.pub"));
             println!(
-                "Cadeia de teste apagada (as chaves ficaram). Pare os nós antes: `teko-node stop`."
+                "Cadeia de teste apagada, com a cerimônia da chave (as chaves dos validadores ficaram). Pare os nós antes (`teko-node stop`). Depois: make devnet, make devnet-dkg, make election."
             );
         }
         "status" => {

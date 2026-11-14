@@ -1,0 +1,35 @@
+[package]
+name = "device-emulator"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[lib]
+name = "device_emulator"
+path = "src/lib.rs"
+
+[[bin]]
+name = "device-emulator"
+path = "src/main.rs"
+
+[features]
+# Automated buttons/PIN (--auto-pin) for headless e2e/demo. NEVER in a normal build.
+test-buttons = ["teko-device-core/testing"]
+
+[dependencies]
+teko-device-core.workspace = true
+teko-protocol.workspace = true
+teko-transport.workspace = true
+teko-attestation.workspace = true
+teko-crypto.workspace = true
+prost.workspace = true
+rand.workspace = true
+rand_core = { workspace = true, features = ["std"] }
+zeroize = { workspace = true, features = ["std"] }
+rpassword = "7"
+
+[dev-dependencies]
+teko-device-core = { workspace = true, features = ["testing"] }
+
+[lints]
+workspace = true

@@ -1,0 +1,49 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light dark">
+  <title>Teko Suite</title>
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <div class="flagstripe" aria-hidden="true"></div>
+
+  <div class="shell">
+    <aside class="sidebar" aria-label="Navegação">
+      <div class="brand">
+        <svg class="brand__mark" viewBox="0 0 48 48" aria-hidden="true">
+          <circle cx="24" cy="24" r="21" class="mark-river"/>
+          <path class="mark-leaf" d="M24 9a15 15 0 1 0 15 15H24z"/>
+          <circle cx="24" cy="24" r="5.5" class="mark-sun"/>
+        </svg>
+        <div>
+          <div class="brand__name">Teko</div>
+          <div class="brand__tag">identidade cívica</div>
+        </div>
+      </div>
+
+      <section class="devcard" id="devcard" aria-live="polite"></section>
+
+      <nav class="nav" id="nav"></nav>
+
+      <div class="sidebar__foot">
+        <div class="theme" role="group" aria-label="Tema">
+          <button class="theme__btn" data-theme-set="auto" title="Automático" aria-label="Tema automático"></button>
+          <button class="theme__btn" data-theme-set="light" title="Claro" aria-label="Tema claro"></button>
+          <button class="theme__btn" data-theme-set="dark" title="Escuro" aria-label="Tema escuro"></button>
+        </div>
+        <div class="sidebar__addr" id="addr"></div>
+      </div>
+    </aside>
+
+    <main class="main" id="main" tabindex="-1"></main>
+  </div>
+
+  <div class="overlay" id="overlay" hidden role="alertdialog" aria-modal="true" aria-labelledby="ov-title"></div>
+  <div class="toasts" id="toasts" aria-live="assertive"></div>
+
+  <script src="app.js"></script>
+</body>
+</html>

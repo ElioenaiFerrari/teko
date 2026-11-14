@@ -1,0 +1,29 @@
+[package]
+name = "teko-suite"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Teko Suite: desktop companion for the Teko civic identity device"
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = [] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+prost.workspace = true
+teko-client.workspace = true
+teko-attestation.workspace = true
+teko-protocol.workspace = true
+teko-transport.workspace = true
+teko-crypto.workspace = true
+issuer-cli.workspace = true
+
+[features]
+default = ["custom-protocol"]
+# Serves the embedded UI instead of a dev server (needed for `cargo run`).
+custom-protocol = ["tauri/custom-protocol"]
+
+[lints]
+workspace = true

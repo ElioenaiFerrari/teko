@@ -1,0 +1,25 @@
+[package]
+name = "teko-client"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+teko-protocol.workspace = true
+teko-crypto.workspace = true
+teko-attestation.workspace = true
+teko-transport.workspace = true
+prost.workspace = true
+rand.workspace = true
+sha3 = { workspace = true, features = ["std"] }
+serde = { version = "1", features = ["derive"] }
+thiserror = { workspace = true, features = ["std"] }
+
+[dev-dependencies]
+device-emulator.workspace = true
+issuer-cli.workspace = true
+teko-device-core = { workspace = true, features = ["testing"] }
+rand.workspace = true
+
+[lints]
+workspace = true

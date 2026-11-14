@@ -1,0 +1,49 @@
+[workspace]
+resolver = "3"
+members = [
+  "crates/teko-protocol",
+  "crates/teko-crypto",
+  "crates/teko-attestation",
+  "crates/teko-device-core",
+  "crates/teko-transport",
+  "crates/teko-client",
+  "tools/device-emulator",
+  "tools/issuer-cli",
+  "apps/suite/src-tauri",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+license = "MIT OR Apache-2.0"
+
+[workspace.dependencies]
+prost = { version = "0.13", default-features = false, features = ["derive"] }
+sha3 = { version = "0.10", default-features = false }
+p256 = { version = "0.13", default-features = false, features = ["ecdsa"] }
+bech32 = { version = "0.11", default-features = false, features = ["alloc"] }
+zeroize = { version = "1", default-features = false, features = ["alloc", "derive"] }
+subtle = { version = "2", default-features = false }
+thiserror = { version = "2", default-features = false }
+rand_core = { version = "0.6", default-features = false }
+rand = "0.8"
+proptest = "1"
+
+teko-protocol = { path = "crates/teko-protocol" }
+teko-crypto = { path = "crates/teko-crypto" }
+teko-device-core = { path = "crates/teko-device-core" }
+teko-attestation = { path = "crates/teko-attestation" }
+teko-transport = { path = "crates/teko-transport" }
+teko-client = { path = "crates/teko-client" }
+device-emulator = { path = "tools/device-emulator" }
+issuer-cli = { path = "tools/issuer-cli" }
+
+[workspace.lints.clippy]
+unwrap_used = "deny"
+expect_used = "deny"
+panic = "deny"
+
+[profile.release]
+codegen-units = 1
+debug = false
+strip = true

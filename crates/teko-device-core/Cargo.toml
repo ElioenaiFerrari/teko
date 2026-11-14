@@ -1,0 +1,25 @@
+[package]
+name = "teko-device-core"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[features]
+# Scripted HAL (automated buttons) for tests/e2e. NEVER enabled in normal builds.
+testing = []
+
+[dependencies]
+teko-protocol.workspace = true
+teko-crypto.workspace = true
+teko-attestation.workspace = true
+prost.workspace = true
+zeroize.workspace = true
+subtle.workspace = true
+rand_core.workspace = true
+
+[dev-dependencies]
+proptest.workspace = true
+rand.workspace = true
+
+[lints]
+workspace = true

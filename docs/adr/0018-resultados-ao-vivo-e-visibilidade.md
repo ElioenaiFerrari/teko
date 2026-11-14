@@ -1,6 +1,6 @@
 # ADR-0018 — Resultados em tempo real e política de visibilidade
 
-**Status:** Proposto · **Decisão: PENDENTE (dono do produto)** · **Criticidade: alta** · Fase 2 (`PHASE-2-VOTING.md` §5.1) · **implementação de demonstração em andamento**
+**Status:** Proposto · **Nota (etapa 8):** em eleições com cédula cifrada ([ADR-0019](0019-cedulas-cifradas-elgamal-de-limiar.md)) a distribuição **não existe** antes dos validadores decifrarem, qualquer que seja a política; `after_close` deixa de ser só convenção de tela. · **Decisão: PENDENTE (dono do produto)** · **Criticidade: alta** · Fase 2 (`PHASE-2-VOTING.md` §5.1) · **implementação de demonstração em andamento**
 
 ## Contexto
 Requisito: gráfico por cargo e por estado, top 10, nome e votos, em tempo real. A apuração é uma função pura do log do quadro de avisos, então a parte técnica é direta. O problema é de **segurança e de produto**: resultado parcial divulgado durante a votação.

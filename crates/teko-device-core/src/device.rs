@@ -15,6 +15,7 @@ use teko_crypto::{
     SigningKey, canonical_service_id, civic_id, derive_key, derive_signing_key, pairwise_id,
     public_key_bytes, sign_tagged, tags, voter,
 };
+use teko_election::ballot_ctx;
 use teko_election::{
     BallotBody, Domicile, ElectionBundle, ElectionError, ElectionManifest, ElectionStatus,
     GovernancePolicy, Phase, RegistrationBlinder, ScopeLevel, Transition, contest_hash,
@@ -1207,8 +1208,19 @@ impl<H: Hal, R: Rng + CryptoRng> Device<H, R> {
             format!("{} - {}", option.number, option.name)
         };
         lines.extend(wrap(&label, 28));
-        lines.push(String::from("(protótipo: não é enviado"));
-        lines.push(String::from("ao quadro; sem prova ZK)"));
+        let encrypted_mode = !manifest.tally_key.is_empty();
+        if encrypted_mode {
+            lines.push(String::from("Voto CIFRADO: ninguém vê"));
+            lines.push(String::from("o resultado antes do fim."));
+        } else {
+            lines.push(String::from("(protótipo: voto em claro,"));
+            lines.push(String::from("sem sigilo até o fim)"));
+        }
+        let position = contest
+            .options
+            .iter()
+            .position(|o| o.index == option_index)
+            .ok_or_else(|| fail(ErrorCode::InvalidArgument, "opção inexistente"))?;
         self.confirm(
             ButtonKind::SignBallot,
             Screen::new("CONFIRMAR VOTO?", lines),
@@ -1217,13 +1229,35 @@ impl<H: Hal, R: Rng + CryptoRng> Device<H, R> {
         let root = self.voter_root()?;
         let key = voter::derive_voter_key(&root, election_id, contest_id)
             .map_err(|_| fail(ErrorCode::Internal, "chave de eleitor"))?;
+        let voter_pk = public_key_bytes(&key);
+        // In encrypted mode the DEVICE encrypts and proves: the randomness is made here
+        // and wiped inside `encrypt_ballot`; the host only gets ciphertexts. The signed
+        // body carries the ciphertext hash, never the option.
+        let (body_option, ciphertext_hash, encrypted) = if encrypted_mode {
+            let pk = teko_ballot_crypto::point_from_bytes(&manifest.tally_key)
+                .ok_or_else(|| fail(ErrorCode::Internal, "chave da eleição inválida"))?;
+            let ctx = ballot_ctx(election_id, contest_id, &voter_pk);
+            let eb = teko_ballot_crypto::encrypt_ballot(
+                &pk,
+                contest.options.len(),
+                position,
+                &ctx,
+                &mut self.rng,
+            )
+            .ok_or_else(|| fail(ErrorCode::Internal, "cifra da cédula falhou"))?;
+            let bytes = eb.to_bytes();
+            (0, teko_election::ciphertext_hash(&bytes), bytes)
+        } else {
+            (option_index, Vec::new(), Vec::new())
+        };
         let signature = sign_ballot(
             &key,
             &BallotBody {
                 election_id: String::from(election_id),
                 contest_id: String::from(contest_id),
                 contest_hash: chash.to_vec(),
-                option_index,
+                option_index: body_option,
+                ciphertext_hash,
             },
         );
         // Record BEFORE releasing the signature: a crash can lose the delivery,
@@ -1232,7 +1266,8 @@ impl<H: Hal, R: Rng + CryptoRng> Device<H, R> {
         self.save()?;
         Ok(Response::BallotSignature(BallotSignature {
             signature,
-            voter_key: public_key_bytes(&key),
+            voter_key: voter_pk,
+            encrypted,
         }))
     }
 

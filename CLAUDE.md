@@ -17,6 +17,7 @@ crates/teko-crypto/        2. derivação, tagged hashes, ID Cívico (bech32m), 
 crates/teko-device-core/   3. máquina de estados, PIN, armazenamento (no_std-friendly)
 crates/teko-election/      (Fase 2) manifesto de eleição M-de-N + ciclo de vida (no_std)
 crates/teko-registration/  (Fase 2) assinatura cega RFC 9474 (registro anônimo de eleitor, ADR-0008)
+crates/teko-ballot-crypto/  (Fase 2) ElGamal exponencial de limiar P-256, provas 0/1 e soma, DKG Feldman (sem auditoria)
 crates/teko-chain/         (Fase 2) rede federada PoA: perfis devnet/testnet (mainnet TRAVADA), blocos M-de-N, réplica verificada
 tools/teko-node/           (Fase 2) validador (gossip, rodízio, troca de turno) + cliente que não confia em nós
 crates/teko-bulletin/      (Fase 2) log Merkle append-only, provas, head assinado, leitor tolerante
@@ -79,7 +80,7 @@ make                                   # lista todos os atalhos (check, repro, r
 
 ## Próxima fase
 
-**Fase 2 (votação e governança eleitoral): especificação em [docs/PHASE-2-VOTING.md](docs/PHASE-2-VOTING.md), aguardando revisão. Etapas 1-7 implementadas (a 7 = recuperação **sem seed**: reemissão presencial com revogação, [docs/RECOVERY.md](docs/RECOVERY.md); feature `dev-simulation` isola a autoridade/operador de teste do build de produção) (a 6 = rede de teste federada PoA, ver [docs/NETWORKS.md](docs/NETWORKS.md); `make devnet`) (`teko-election` com vários pleitos/jurisdições e apuração incremental, `teko-bulletin`, dispositivo + Suite votando por pleito, quadro local, resultados ao vivo por cargo/estado, **registro anônimo por assinatura cega RFC 9474** em `teko-registration` com chave RSA por pleito, ADR-0008 aceito provisoriamente; a cédula entra no quadro **local** do protótipo, ainda sem prova ZK nem nullifier); o resto depende das decisões do §10.** Decisões pendentes listadas em §10 de lá. Achado importante: o stub `GetVoterCommitment` da Fase 1 será substituído por credencial de eleitor baseada em par de chaves.
+**Fase 2 (votação e governança eleitoral): especificação em [docs/PHASE-2-VOTING.md](docs/PHASE-2-VOTING.md), aguardando revisão. Etapas 1-8 implementadas (a 8 = **cédulas cifradas** ElGamal de limiar P-256 + DKG entre validadores, ADR-0019; `make devnet-dkg`; só os totais são decifrados no fechamento) (a 7 = recuperação **sem seed**: reemissão presencial com revogação, [docs/RECOVERY.md](docs/RECOVERY.md); feature `dev-simulation` isola a autoridade/operador de teste do build de produção) (a 6 = rede de teste federada PoA, ver [docs/NETWORKS.md](docs/NETWORKS.md); `make devnet`) (`teko-election` com vários pleitos/jurisdições e apuração incremental, `teko-bulletin`, dispositivo + Suite votando por pleito, quadro local, resultados ao vivo por cargo/estado, **registro anônimo por assinatura cega RFC 9474** em `teko-registration` com chave RSA por pleito, ADR-0008 aceito provisoriamente; a cédula entra no quadro **local** do protótipo, ainda sem prova ZK nem nullifier); o resto depende das decisões do §10.** Decisões pendentes listadas em §10 de lá. Achado importante: o stub `GetVoterCommitment` da Fase 1 será substituído por credencial de eleitor baseada em par de chaves.
 
 ## Fora de escopo nesta fase
 

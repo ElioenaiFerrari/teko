@@ -152,6 +152,11 @@ pub struct ElectionManifest {
     /// signed manifest, so it cannot be moved to another network.
     #[prost(string, tag = "10")]
     pub chain_id: String,
+    /// Election public key (P-256, 33 bytes) made by the validators' key ceremony. Set =
+    /// ballots are ENCRYPTED until the voting closes (ADR-0019). Empty = plaintext
+    /// ballots (development only).
+    #[prost(bytes = "vec", tag = "11")]
+    pub tally_key: Vec<u8>,
 }
 
 impl ElectionManifest {
@@ -244,6 +249,19 @@ pub fn validate_manifest(m: &ElectionManifest) -> Result<(), ElectionError> {
     if m.revision == 0 {
         return Err(bad("revision starts at 1"));
     }
+    if !m.tally_key.is_empty() {
+        if teko_ballot_crypto::point_from_bytes(&m.tally_key).is_none() {
+            return Err(bad("tally_key is not a valid P-256 point"));
+        }
+        if m.contests
+            .iter()
+            .any(|c| c.options.len() > teko_ballot_crypto::MAX_OPTIONS)
+        {
+            return Err(bad(
+                "encrypted ballots allow at most 16 options per contest",
+            ));
+        }
+    }
     if m.chain_id.len() > 64 || !m.chain_id.is_ascii() {
         return Err(bad("chain_id must be at most 64 ASCII chars"));
     }
@@ -327,6 +345,9 @@ pub fn validate_revision(
     }
     if prev.ballot_kind != next.ballot_kind {
         return Err(bad("ballot_kind cannot change"));
+    }
+    if prev.tally_key != next.tally_key {
+        return Err(bad("tally_key cannot change"));
     }
     if prev.chain_id != next.chain_id {
         return Err(bad("chain_id cannot change"));
@@ -455,6 +476,7 @@ pub(crate) mod fixtures {
             signatures: Vec::new(),
             results_visibility: ResultsVisibility::Live as i32,
             chain_id: String::new(),
+            tally_key: Vec::new(),
         }
     }
 

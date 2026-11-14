@@ -36,6 +36,7 @@ fn real_ballot(m: &ElectionManifest, contest: &str, root: u8, option: u32) -> Su
         contest_id: contest.into(),
         contest_hash: contest_hash(m.contest(contest).unwrap()).to_vec(),
         option_index: option,
+        ciphertext_hash: Vec::new(),
     };
     SubmittedBallot {
         election_id: body.election_id.clone(),
@@ -44,6 +45,7 @@ fn real_ballot(m: &ElectionManifest, contest: &str, root: u8, option: u32) -> Su
         option_index: option,
         voter_key: public_key_bytes(&key),
         signature: sign_ballot(&key, &body),
+        encrypted: Vec::new(),
     }
 }
 

@@ -379,6 +379,10 @@ pub struct BallotSignature {
     pub signature: Vec<u8>,
     #[prost(bytes = "vec", tag = "2")]
     pub voter_key: Vec<u8>,
+    /// Encrypted mode (election has a `tally_key`): the encrypted ballot the DEVICE made.
+    /// The signature covers its hash. Empty in plaintext mode.
+    #[prost(bytes = "vec", tag = "3")]
+    pub encrypted: Vec<u8>,
 }
 #[derive(Clone, PartialEq, prost::Message)]
 pub struct WipeDone {}

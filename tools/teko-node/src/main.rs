@@ -19,6 +19,7 @@ USO:
   teko-node stop   [--dir dev/net]                  para os validadores iniciados com `run` (pelos arquivos .pid)
   teko-node reset  [--dir dev/net]                  apaga SÓ os blocos (blocks.log) de cada nó; mantém as chaves
   teko-node status [--dir dev/net]                  altura, raiz e pares de cada nó
+  teko-node dkg    [--dir dev/net] [--threshold M]  cerimônia de chave da eleição entre os nós EM EXECUÇÃO (ninguém guarda a chave inteira)
   teko-node blocks [--dir dev/net]                  blocos verificados (cliente que não confia em nós)
 A mainnet está TRAVADA nesta fase.
 ";
@@ -93,6 +94,12 @@ fn run(args: Vec<String>) -> Result<(), String> {
                 index,
                 peers: net.peers,
                 allow_remote: false,
+                // `dev/net` sits next to `dev/trust.txt` (governance keys + bound network).
+                trust: dir
+                    .parent()
+                    .map(|p| p.join("trust.txt"))
+                    .and_then(|f| std::fs::read_to_string(f).ok())
+                    .and_then(|t| teko_attestation::TrustPolicy::parse(&t).ok()),
             };
             let h = Node::start(cfg, addr).map_err(e)?;
             let _ = std::fs::write(
@@ -108,6 +115,25 @@ fn run(args: Vec<String>) -> Result<(), String> {
             loop {
                 sleep(Duration::from_secs(3600));
             }
+        }
+        "dkg" => {
+            let net = load_network(&dir).map_err(e)?;
+            let t = f
+                .get("threshold")
+                .map_or(Ok(net.profile.threshold), |v| v.parse())
+                .map_err(|_| "--threshold inválido")?;
+            let session = format!("{}|tally-key", net.profile.chain_id);
+            let rec =
+                teko_node::run_ceremony(&NodeClient::new(net.peers), &dir, session.as_bytes(), t)
+                    .map_err(e)?;
+            println!(
+                "Cerimônia concluída: chave da eleição de {} validadores, {} de {} decifram.\nChave pública (registrada na cadeia e em {}/tally-key.pub): {}",
+                rec.n,
+                rec.threshold,
+                rec.n,
+                dir.display(),
+                teko_crypto::hex::encode(&rec.group_key)
+            );
         }
         "stop" => {
             let net = load_network(&dir).map_err(e)?;

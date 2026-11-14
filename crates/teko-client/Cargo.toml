@@ -10,6 +10,7 @@ teko-protocol.workspace = true
 teko-crypto.workspace = true
 teko-attestation.workspace = true
 teko-election.workspace = true
+teko-ballot-crypto.workspace = true
 teko-transport.workspace = true
 teko-registration.workspace = true
 prost.workspace = true
@@ -19,6 +20,7 @@ serde = { version = "1", features = ["derive"] }
 thiserror = { workspace = true, features = ["std"] }
 
 [dev-dependencies]
+p256.workspace = true
 device-emulator.workspace = true
 issuer-cli.workspace = true
 election-admin = { workspace = true, features = ["operator"] }

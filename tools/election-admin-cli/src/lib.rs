@@ -65,6 +65,8 @@ pub fn log_kind(k: EntryKind) -> Option<LogKind> {
         EntryKind::MANIFEST => Some(LogKind::Manifest),
         EntryKind::TRANSITION => Some(LogKind::Transition),
         EntryKind::REGISTRATION => Some(LogKind::Registration),
+        EntryKind::DKG => Some(LogKind::Dkg),
+        EntryKind::RESULT => Some(LogKind::Result),
         EntryKind::BALLOT => Some(LogKind::Ballot),
         _ => None,
     }
@@ -131,10 +133,13 @@ pub struct PublishReport {
 }
 
 #[cfg(feature = "operator")]
-#[derive(Debug, Default, Clone, Copy)]
+#[derive(Debug, Default, Clone)]
 pub struct SimReport {
     pub ballots: u64,
     pub contests: u64,
+    /// SIMULATION ORACLE: the votes the simulator actually cast per contest and option.
+    /// Lets a test prove that the decrypted totals equal what was planted.
+    pub planted: Vec<(String, Vec<u64>)>,
 }
 
 // ───────────────────────── tiny deterministic PRNG (simulation only) ─────────────────────────
@@ -182,6 +187,8 @@ struct SimContest {
     /// Authority key of this contest, when it requires registration. SIMULATION:
     /// the simulator plays the authority for its synthetic voters.
     registration: Option<(IssuerKey, Vec<u8>)>,
+    /// The election's public key when ballots are ENCRYPTED (else empty).
+    tally_key: Vec<u8>,
 }
 
 impl Admin {
@@ -423,6 +430,7 @@ impl Admin {
                 cdf,
                 weight: synthetic_weight(&c.contest_id),
                 registration,
+                tally_key: manifest.tally_key.clone(),
             });
         }
         Ok((manifest.election_id, out))
@@ -446,8 +454,9 @@ impl Admin {
         voter: u64,
         seed: u64,
         rng: &mut Prng,
+        planted: &mut std::collections::BTreeMap<String, Vec<u64>>,
     ) -> Vec<Entry> {
-        let Some(ballot) = Self::make_ballot(election, c, voter, seed, rng) else {
+        let Some((ballot, chosen)) = Self::make_ballot(election, c, voter, seed, rng) else {
             return Vec::new();
         };
         let mut out = Vec::with_capacity(2);
@@ -475,6 +484,12 @@ impl Admin {
             ));
         }
         out.push(Entry::new(EntryKind::BALLOT, ballot.encode_to_vec()));
+        let row = planted
+            .entry(c.id.clone())
+            .or_insert_with(|| vec![0; c.cdf.len()]);
+        if let Some(n) = row.get_mut(chosen as usize) {
+            *n += 1;
+        }
         out
     }
 
@@ -485,7 +500,7 @@ impl Admin {
         voter: u64,
         seed: u64,
         rng: &mut Prng,
-    ) -> Option<SubmittedBallot> {
+    ) -> Option<(SubmittedBallot, u32)> {
         let root = tagged_hash(
             "teko/sim/voter-root",
             &[&seed.to_be_bytes(), &voter.to_be_bytes()],
@@ -497,20 +512,44 @@ impl Admin {
             .iter()
             .position(|x| u <= *x)
             .unwrap_or(c.cdf.len() - 1) as u32;
+        let voter_key = public_key_bytes(&key);
+        // Encrypted election: build a REAL encrypted ballot with real proofs (what the
+        // device does); the body then names no option, only the ciphertext hash.
+        let (body_option, ciphertext_hash, encrypted) = if c.tally_key.is_empty() {
+            (option_index, Vec::new(), Vec::new())
+        } else {
+            let pk = teko_ballot_crypto::point_from_bytes(&c.tally_key)?;
+            let ctx = teko_election::ballot_ctx(election, &c.id, &voter_key);
+            let mut brng = rand::rand_core::UnwrapErr(rand::rngs::SysRng);
+            let eb = teko_ballot_crypto::encrypt_ballot(
+                &pk,
+                c.cdf.len(),
+                option_index as usize,
+                &ctx,
+                &mut brng,
+            )?;
+            let bytes = eb.to_bytes();
+            (0, teko_election::ciphertext_hash(&bytes), bytes)
+        };
         let body = BallotBody {
             election_id: election.to_string(),
             contest_id: c.id.clone(),
             contest_hash: c.hash.clone(),
-            option_index,
+            option_index: body_option,
+            ciphertext_hash,
         };
-        Some(SubmittedBallot {
-            election_id: body.election_id.clone(),
-            contest_id: body.contest_id.clone(),
-            contest_hash: body.contest_hash.clone(),
+        Some((
+            SubmittedBallot {
+                election_id: body.election_id.clone(),
+                contest_id: body.contest_id.clone(),
+                contest_hash: body.contest_hash.clone(),
+                option_index: body_option,
+                voter_key,
+                signature: sign_ballot(&key, &body),
+                encrypted,
+            },
             option_index,
-            voter_key: public_key_bytes(&key),
-            signature: sign_ballot(&key, &body),
-        })
+        ))
     }
 
     /// Appends `voters` SYNTHETIC voters (President gets `voters`, each governor a
@@ -521,11 +560,19 @@ impl Admin {
         let start = self.next_index();
         let mut rng = Prng(seed.wrapping_add(start));
         let mut entries = Vec::new();
+        let mut planted = std::collections::BTreeMap::new();
         for (ci, c) in contests.iter().enumerate() {
             let n = (voters as f64 * c.weight).round() as u64;
             for i in 0..n {
                 let voter = start + (ci as u64) * 1_000_000_000 + i;
-                entries.extend(Self::voter_entries(&election, c, voter, seed, &mut rng));
+                entries.extend(Self::voter_entries(
+                    &election,
+                    c,
+                    voter,
+                    seed,
+                    &mut rng,
+                    &mut planted,
+                ));
             }
         }
         let ballots = entries
@@ -542,6 +589,7 @@ impl Admin {
         Ok(SimReport {
             ballots,
             contests: contests.len() as u64,
+            planted: planted.into_iter().collect(),
         })
     }
 
@@ -580,7 +628,14 @@ impl Admin {
                 let Some(c) = c else { break };
                 counter += 1;
                 let voter = counter + 7_000_000_000;
-                entries.extend(Self::voter_entries(&election, c, voter, seed, &mut rng));
+                entries.extend(Self::voter_entries(
+                    &election,
+                    c,
+                    voter,
+                    seed,
+                    &mut rng,
+                    &mut std::collections::BTreeMap::new(),
+                ));
             }
             sent += entries
                 .iter()
@@ -596,6 +651,7 @@ impl Admin {
         Ok(SimReport {
             ballots: sent,
             contests: contests.len() as u64,
+            planted: Vec::new(),
         })
     }
 }

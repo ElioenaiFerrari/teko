@@ -11,6 +11,7 @@ use std::time::Duration;
 use device_emulator::{LinkSlot, Linked, serve};
 use issuer_cli::{Issuer, Subject, scratch_dir};
 use prost::Message;
+use rand::SeedableRng;
 use rand::rand_core::UnwrapErr;
 use rand::rngs::SysRng;
 use teko_attestation::{FirmwareManifest, TrustPolicy};
@@ -563,6 +564,7 @@ fn election_flow_president_for_all_governor_and_mayor_by_domicile() {
                 option_index: b.option_index,
                 voter_key: teko_crypto::hex::decode(&b.voter_key).unwrap(),
                 signature: teko_crypto::hex::decode(&b.signature).unwrap(),
+                encrypted: Vec::new(),
             })
             .unwrap();
     }
@@ -728,5 +730,83 @@ fn losing_the_device_means_reissue_the_old_credential_is_revoked_and_the_citizen
             .sign_registration(&eid, "governador-sp", &req3, now)
             .is_ok()
     );
+    let _ = fs::remove_dir_all(rig.issuer.dir());
+}
+
+#[test]
+fn an_encrypted_election_the_device_encrypts_the_vote_and_the_public_tally_cannot_see_it() {
+    use p256::elliptic_curve::Field;
+    use teko_ballot_crypto::{Point, Scalar, point_to_bytes};
+    let rig = start();
+    // The election carries a key (here a test key: the ceremony itself is tested elsewhere).
+    let x = Scalar::random(&mut rand::rngs::StdRng::seed_from_u64(5));
+    let net = rig.issuer.dir().join("net");
+    fs::create_dir_all(&net).unwrap();
+    fs::write(
+        net.join("tally-key.pub"),
+        teko_crypto::hex::encode(&point_to_bytes(&(Point::GENERATOR * x))),
+    )
+    .unwrap();
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_secs();
+    rig.issuer.dev_election(now).unwrap();
+
+    let mut c = connect(&rig);
+    onboard(&rig, &mut c);
+    let e = c.load_election(&rig.trust, &election_bundle(&rig)).unwrap();
+    let eid = e.election_id.clone();
+
+    // Register (anonymously), then vote: the DEVICE encrypts; the client verifies the proofs.
+    let req = c.begin_registration(&eid, "presidente").unwrap();
+    let sig = rig
+        .issuer
+        .sign_registration(&eid, "presidente", &req, now)
+        .unwrap();
+    let token = c.finish_registration(&eid, "presidente", &sig).unwrap();
+    let ballot = c.sign_ballot(&eid, "presidente", 1).unwrap();
+    assert!(
+        !ballot.encrypted.is_empty(),
+        "an encrypted ballot came back"
+    );
+    let screen = rig
+        .hal
+        .screens()
+        .into_iter()
+        .rev()
+        .find(|s| s.title == "CONFIRMAR VOTO?")
+        .unwrap();
+    assert!(screen.lines.join(" ").contains("CIFRADO"));
+
+    // Publish through the public path: the tally counts it but cannot see the choice.
+    let admin = election_admin::Admin::open(rig.issuer.dir()).unwrap();
+    admin.publish().unwrap();
+    admin
+        .submit_registration(&teko_election::SubmittedRegistration {
+            election_id: eid.clone(),
+            contest_id: "presidente".into(),
+            voter_key: token.voter_key,
+            token: token.token,
+        })
+        .unwrap();
+    admin
+        .submit_ballot(&teko_election::SubmittedBallot {
+            election_id: ballot.election_id.clone(),
+            contest_id: ballot.contest_id.clone(),
+            contest_hash: teko_crypto::hex::decode(&ballot.contest_hash).unwrap(),
+            option_index: 0,
+            voter_key: teko_crypto::hex::decode(&ballot.voter_key).unwrap(),
+            signature: teko_crypto::hex::decode(&ballot.signature).unwrap(),
+            encrypted: teko_crypto::hex::decode(&ballot.encrypted).unwrap(),
+        })
+        .unwrap();
+    let t = admin.tally().unwrap();
+    let p = t.contest("presidente").unwrap();
+    assert_eq!(
+        (p.accepted, p.rejected.total(), p.encrypted, p.revealed),
+        (1, 0, true, false)
+    );
+    assert!(p.options.iter().all(|o| o.votes == 0));
     let _ = fs::remove_dir_all(rig.issuer.dir());
 }

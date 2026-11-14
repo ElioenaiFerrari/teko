@@ -923,6 +923,7 @@ fn election_manifest(w: &World) -> ElectionManifest {
         registry_key: vec![],
         revision: 1,
         signatures: vec![],
+        tally_key: Vec::new(),
     };
     m.signatures = [0usize, 1]
         .iter()
@@ -1177,6 +1178,7 @@ fn the_ballot_screen_shows_the_candidate_from_the_manifest_and_the_signature_ver
         contest_id: "presidente".into(),
         contest_hash: contest_hash(m.contest("presidente").unwrap()).to_vec(),
         option_index: 1,
+        ciphertext_hash: Vec::new(),
     };
     assert!(verify_ballot(&b.voter_key, &body, &b.signature).is_ok());
     assert!(
@@ -1733,4 +1735,141 @@ fn a_device_bound_to_a_network_refuses_elections_of_any_other_network() {
         dev.handle(load_req(&m, &ts)),
         Response::ElectionLoaded(_)
     ));
+}
+
+// ───────────────────────── encrypted ballots (ADR-0019) ─────────────────────────
+
+mod encrypted {
+    use super::*;
+    use p256::elliptic_curve::Field;
+    use teko_ballot_crypto::{
+        EncryptedBallot, Point, Scalar, point_to_bytes, solve_small_dlog,
+        verify_ballot as verify_eb,
+    };
+    use teko_election::{ballot_ctx, ciphertext_hash};
+
+    /// Election whose manifest carries a `tally_key` (secret `x` known to the test).
+    fn setup() -> (World, ScriptedHal, Dev, Scalar, ElectionManifest) {
+        let (w, hal, mut dev, _) = ready();
+        let x = Scalar::random(&mut StdRng::seed_from_u64(77));
+        let mut m = election_manifest(&w);
+        m.tally_key = point_to_bytes(&(Point::GENERATOR * x)).to_vec();
+        m.signatures = [0usize, 1]
+            .iter()
+            .map(|i| sign_election(&w.gov[*i], &m))
+            .collect();
+        let ts = history(&m, &w);
+        assert!(matches!(
+            dev.handle(load_req(&m, &ts)),
+            Response::ElectionLoaded(_)
+        ));
+        (w, hal, dev, x, m)
+    }
+
+    #[test]
+    fn the_device_encrypts_and_proves_and_the_signed_body_never_names_the_option() {
+        let (_, hal, mut dev, x, m) = setup();
+        let Response::BallotSignature(b) = vote(&mut dev, "presidente", 2) else {
+            panic!("no ballot")
+        };
+        assert!(!b.encrypted.is_empty());
+        // The signature covers the ciphertext hash and option 0.
+        let c = m.contest("presidente").unwrap();
+        let body = BallotBody {
+            election_id: m.election_id.clone(),
+            contest_id: "presidente".into(),
+            contest_hash: contest_hash(c).to_vec(),
+            option_index: 0,
+            ciphertext_hash: ciphertext_hash(&b.encrypted),
+        };
+        assert!(verify_ballot(&b.voter_key, &body, &b.signature).is_ok());
+        let plain = BallotBody {
+            option_index: 2,
+            ciphertext_hash: Vec::new(),
+            ..body.clone()
+        };
+        assert!(
+            verify_ballot(&b.voter_key, &plain, &b.signature).is_err(),
+            "not a plaintext ballot"
+        );
+        // Proofs verify for THIS election, contest and voter key, and only those.
+        let pk = Point::GENERATOR * x;
+        let n = c.options.len();
+        let eb = EncryptedBallot::from_bytes(n, &b.encrypted).unwrap();
+        let ctx = ballot_ctx(&m.election_id, "presidente", &b.voter_key);
+        assert!(verify_eb(&pk, n, &ctx, &eb));
+        assert!(!verify_eb(
+            &pk,
+            n,
+            &ballot_ctx(&m.election_id, "governador-sp", &b.voter_key),
+            &eb
+        ));
+        assert!(!verify_eb(
+            &pk,
+            n,
+            &ballot_ctx(&m.election_id, "presidente", &[9; 33]),
+            &eb
+        ));
+        // Decrypting with the election secret shows the one-hot choice (only the test can).
+        let bits: Vec<u64> = eb
+            .cts
+            .iter()
+            .map(|ct| solve_small_dlog(&(ct.c2 - ct.c1 * x), 1).unwrap())
+            .collect();
+        assert_eq!(bits, [0, 0, 1], "option position 2");
+        // The screen told the voter the vote is encrypted.
+        let screen = hal
+            .screens()
+            .into_iter()
+            .find(|s| s.title == "CONFIRMAR VOTO?")
+            .unwrap();
+        assert!(screen.lines.join(" ").contains("CIFRADO"));
+    }
+
+    #[test]
+    fn the_randomness_never_appears_in_any_response() {
+        let (_, _, mut dev, x, _) = setup();
+        let Response::BallotSignature(b) = vote(&mut dev, "presidente", 0) else {
+            panic!()
+        };
+        let secret = teko_ballot_crypto::scalar_to_bytes(&x);
+        let hay = [
+            b.encrypted.as_slice(),
+            b.signature.as_slice(),
+            b.voter_key.as_slice(),
+        ]
+        .concat();
+        assert!(!hay.windows(32).any(|w| w == secret.as_slice()));
+    }
+
+    #[test]
+    fn a_manifest_with_a_bad_tally_key_or_too_many_options_is_refused() {
+        let (w, _, mut dev, _) = ready();
+        let sign = |m: &mut ElectionManifest| {
+            m.signatures = [0usize, 1]
+                .iter()
+                .map(|i| sign_election(&w.gov[*i], m))
+                .collect();
+        };
+        let mut m = election_manifest(&w);
+        m.tally_key = vec![5; 33]; // invalid SEC1 prefix: never a curve point
+        sign(&mut m);
+        let ts = history(&m, &w);
+        assert!(failure_code(&dev.handle(load_req(&m, &ts))).is_some());
+        let mut m = election_manifest(&w);
+        m.tally_key = point_to_bytes(&Point::GENERATOR).to_vec();
+        for i in 0..20 {
+            m.contests[0].options.push(ElectionOption {
+                index: 100 + i,
+                name: format!("X{i}"),
+                number: format!("{}", 900 + i),
+            });
+        }
+        sign(&mut m);
+        let ts = history(&m, &w);
+        assert!(
+            failure_code(&dev.handle(load_req(&m, &ts))).is_some(),
+            "more than 16 options"
+        );
+    }
 }

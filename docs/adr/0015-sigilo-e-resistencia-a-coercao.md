@@ -1,6 +1,6 @@
 # ADR-0015 — Sigilo do voto, cédula aberta ou cifrada e resistência à coerção
 
-**Status:** Proposto · **Decisão: PENDENTE (dono do produto)** · **Criticidade: máxima** · Fase 2 (§6)
+**Status:** Proposto · **Decisão: PENDENTE (dono do produto)** · **Criticidade: máxima** · Fase 2 (§6) · **Cédula cifrada: decidido e implementado no [ADR-0019](0019-cedulas-cifradas-elgamal-de-limiar.md)**; coerção/receipt-freeness seguem abertos
 
 ## Contexto
 Anonimato por não-ligação (identidade ↔ cédula) **não** impede compra de voto: se o eleitor consegue provar como votou (recibo), alguém pode pagar por isso. Resistir a isso muda a arquitetura inteira.

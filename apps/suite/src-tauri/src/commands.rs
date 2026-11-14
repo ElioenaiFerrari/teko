@@ -811,9 +811,15 @@ fn submit_to_board(b: &SignedBallot) -> Result<u64, String> {
         election_id: b.election_id.clone(),
         contest_id: b.contest_id.clone(),
         contest_hash: h(&b.contest_hash)?,
-        option_index: b.option_index,
+        // Encrypted mode: the vote lives only in the ciphertexts; the signed body has option 0.
+        option_index: if b.encrypted.is_empty() {
+            b.option_index
+        } else {
+            0
+        },
         voter_key: h(&b.voter_key)?,
         signature: h(&b.signature)?,
+        encrypted: h(&b.encrypted)?,
     };
     admin
         .submit_ballot(&ballot)
@@ -845,6 +851,10 @@ pub struct ContestView {
     /// Whether the contest requires anonymous registration, and how many keys did.
     registration_required: bool,
     registered: u64,
+    /// Ballots are encrypted: the distribution exists only after the validators decrypt.
+    encrypted: bool,
+    /// The totals were decrypted by enough validators and verified.
+    revealed: bool,
     distribution_visible: bool,
     top: Vec<OptionView>,
     others_votes: u64,
@@ -987,6 +997,8 @@ pub async fn results_snapshot(suite: State<'_, Suite>) -> Result<ResultsReply, U
                     rejected: c.rejected.total(),
                     registration_required: c.registration_required,
                     registered: c.registered,
+                    encrypted: c.encrypted,
+                    revealed: c.revealed,
                     distribution_visible: show,
                     top: if show {
                         ranked
@@ -1076,6 +1088,18 @@ pub struct ExplorerReply {
     head_root: String,
     contests: Vec<ExplorerContest>,
     governance: Vec<GovernanceStep>,
+    /// The validators' key ceremony, re-verified here (None if the election has no encrypted ballots).
+    ceremony: Option<CeremonyView>,
+}
+
+#[derive(Serialize)]
+pub struct CeremonyView {
+    threshold: usize,
+    validators: usize,
+    /// The election public key every ballot is encrypted to.
+    election_key: String,
+    /// Does it match the key in the signed manifest?
+    matches_manifest: bool,
 }
 
 fn explorer_unavailable(reason: &str) -> ExplorerReply {
@@ -1089,6 +1113,7 @@ fn explorer_unavailable(reason: &str) -> ExplorerReply {
         head_root: String::new(),
         contests: Vec::new(),
         governance: Vec::new(),
+        ceremony: None,
     }
 }
 
@@ -1116,6 +1141,7 @@ pub async fn explorer_snapshot() -> Result<ExplorerReply, UiError> {
         let (Some(m), snap) = (t.manifest().cloned(), t.snapshot()) else {
             return explorer_unavailable("Nenhuma eleição válida no quadro.");
         };
+        let m_tally_key = m.tally_key.clone();
         let contests = m
             .contests
             .iter()
@@ -1182,6 +1208,23 @@ pub async fn explorer_snapshot() -> Result<ExplorerReply, UiError> {
             head_root: hex::encode(&board.root()),
             contests,
             governance,
+            ceremony: (0..board.len())
+                .filter_map(|i| board.entry(i))
+                .filter(|e| e.kind == teko_bulletin::EntryKind::DKG)
+                .find_map(|e| {
+                    let rec = <teko_ballot_crypto::dkg_wire::DkgRecord as prost::Message>::decode(
+                        e.payload.as_slice(),
+                    )
+                    .ok()?;
+                    // Re-verified HERE: every proof of possession and the key recomputed.
+                    let v = rec.verify().ok()?;
+                    Some(CeremonyView {
+                        threshold: v.threshold,
+                        validators: v.verification_keys.len(),
+                        matches_manifest: m_tally_key == rec.group_key,
+                        election_key: hex::encode(&rec.group_key),
+                    })
+                }),
         }
     })
     .await

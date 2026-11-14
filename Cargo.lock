@@ -926,7 +926,9 @@ version = "0.1.0"
 dependencies = [
  "issuer-cli",
  "prost",
+ "rand",
  "teko-attestation",
+ "teko-ballot-crypto",
  "teko-bulletin",
  "teko-chain",
  "teko-crypto",
@@ -4029,6 +4031,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "teko-ballot-crypto"
+version = "0.1.0"
+dependencies = [
+ "p256",
+ "proptest",
+ "prost",
+ "rand",
+ "rand_core",
+ "teko-crypto",
+ "zeroize",
+]
+
+[[package]]
 name = "teko-bulletin"
 version = "0.1.0"
 dependencies = [
@@ -4061,11 +4076,13 @@ dependencies = [
  "device-emulator",
  "election-admin-cli",
  "issuer-cli",
+ "p256",
  "prost",
  "rand",
  "serde",
  "sha3",
  "teko-attestation",
+ "teko-ballot-crypto",
  "teko-crypto",
  "teko-device-core",
  "teko-election",
@@ -4095,12 +4112,14 @@ dependencies = [
 name = "teko-device-core"
 version = "0.1.0"
 dependencies = [
+ "p256",
  "proptest",
  "prost",
  "rand",
  "rand_core",
  "subtle",
  "teko-attestation",
+ "teko-ballot-crypto",
  "teko-crypto",
  "teko-election",
  "teko-protocol",
@@ -4115,7 +4134,9 @@ dependencies = [
  "proptest",
  "prost",
  "rand",
+ "rand_core",
  "teko-attestation",
+ "teko-ballot-crypto",
  "teko-crypto",
  "thiserror 2.0.21",
 ]
@@ -4124,13 +4145,17 @@ dependencies = [
 name = "teko-node"
 version = "0.1.0"
 dependencies = [
+ "p256",
  "proptest",
  "prost",
  "rand",
  "teko-attestation",
+ "teko-ballot-crypto",
  "teko-bulletin",
  "teko-chain",
  "teko-crypto",
+ "teko-election",
+ "teko-registration",
  "thiserror 2.0.21",
 ]
 
@@ -4168,6 +4193,7 @@ dependencies = [
  "tauri",
  "tauri-build",
  "teko-attestation",
+ "teko-ballot-crypto",
  "teko-bulletin",
  "teko-client",
  "teko-crypto",

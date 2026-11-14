@@ -9,7 +9,7 @@ use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use prost::Message;
-use teko_bulletin::{BulletinBoard, Entry};
+use teko_bulletin::{BulletinBoard, Entry, EntryKind};
 use teko_chain::{Block, Chain, NetworkProfile, block_hash};
 use teko_crypto::{SigningKey, public_key_bytes};
 
@@ -33,9 +33,24 @@ pub struct NodeConfig {
     pub peers: Vec<SocketAddr>,
     /// Loopback only unless this is set (never on by default).
     pub allow_remote: bool,
+    /// Public trust anchors (`trust.txt`): governance keys and the network the
+    /// election is bound to. Without them the node still produces blocks but does NOT
+    /// decrypt results (it cannot tell which manifests are legitimate).
+    pub trust: Option<teko_attestation::TrustPolicy>,
+}
+
+/// The key ceremony in progress at this node (secret polynomial).
+pub(crate) struct DkgState {
+    pub participant: teko_ballot_crypto::dkg::Participant,
+    pub session: Vec<u8>,
+    pub n: u32,
+    pub threshold: usize,
 }
 
 struct State {
+    /// This validator's share of the election key (after the ceremony).
+    tally: Option<teko_ballot_crypto::dkg::KeyShare>,
+    dkg: Option<DkgState>,
     chain: Chain,
     mempool: Vec<Entry>,
     seen: HashSet<[u8; 32]>,
@@ -48,6 +63,11 @@ struct State {
     last_commit: Instant,
     last_proposal: Option<(u64, u32, Instant)>,
     peers_online: u32,
+    /// This node's view of the election, rebuilt from its verified chain (feeds the result service).
+    tallier: Option<teko_election::Tallier>,
+    fed: u64,
+    /// contest id -> when this node published its decryption shares.
+    results_sent: HashMap<String, Instant>,
 }
 
 struct Shared {
@@ -133,6 +153,8 @@ impl Node {
         let addr = listener.local_addr()?;
         let shared = Arc::new(Shared {
             state: Mutex::new(State {
+                tally: crate::dkg::load_share(&cfg.dir),
+                dkg: None,
                 chain,
                 mempool: Vec::new(),
                 seen,
@@ -143,6 +165,9 @@ impl Node {
                 last_commit: Instant::now(),
                 last_proposal: None,
                 peers_online: 0,
+                tallier: None,
+                fed: 0,
+                results_sent: HashMap::new(),
             }),
             cfg,
             me,
@@ -227,7 +252,51 @@ fn handle(s: &Arc<Shared>, req: &Msg) -> Msg {
             Ok(b) => commit(s, &b),
             Err(_) => ack(false, "malformed", 0),
         },
+        wire::DKG_START => match wire::decode::<wire::DkgStart>(req) {
+            Ok(m) => {
+                let mut st = lock(s);
+                crate::dkg::dkg_msg(crate::dkg::start(&mut st.dkg, s.cfg.index, &m))
+            }
+            Err(_) => ack(false, "malformed", 0),
+        },
+        wire::DKG_SHARE => match wire::decode::<wire::DkgShareReq>(req) {
+            Ok(m) => crate::dkg::dkg_msg(crate::dkg::share_for(&lock(s).dkg, m.requester)),
+            Err(_) => ack(false, "malformed", 0),
+        },
+        wire::DKG_PACKAGES => match wire::decode::<wire::DkgPackages>(req) {
+            Ok(m) => dkg_finish(s, &m),
+            Err(_) => ack(false, "malformed", 0),
+        },
         _ => ack(false, "unknown message", 0),
+    }
+}
+
+/// Round 2. The state lock is NOT held while talking to the peers.
+fn dkg_finish(s: &Arc<Shared>, m: &wire::DkgPackages) -> Msg {
+    use crate::dkg::{dkg_msg, finish, reply, save_share};
+    // Take the ceremony state out, work without the lock, put it back.
+    let Some(st) = lock(s).dkg.take() else {
+        return dkg_msg(reply(false, "no ceremony"));
+    };
+    let result = finish(&st, s.cfg.index, &s.cfg.peers, m);
+    let mut guard = lock(s);
+    match result {
+        Ok(ks) => {
+            if save_share(&s.cfg.dir, &ks).is_err() {
+                guard.dkg = Some(st);
+                return dkg_msg(reply(false, "could not save the share"));
+            }
+            let mut out = reply(true, "done");
+            out.group_key = teko_ballot_crypto::point_to_bytes(&ks.group_public_key).to_vec();
+            guard.tally = Some(ks);
+            // keep serving shares to slower peers until they finish; the state stays
+            guard.dkg = Some(st);
+            dkg_msg(out)
+        }
+        Err(e) => {
+            guard.dkg = Some(st);
+            dkg_msg(reply(false, &e))
+        }
     }
 }
 
@@ -410,6 +479,106 @@ fn producer_loop(s: &Arc<Shared>) {
             sync_from_peers(s);
         }
         try_propose(s, interval);
+        decrypt_closed_contests(s, interval);
+    }
+}
+
+/// The RESULT service: when this node's own verified replica shows an encrypted contest
+/// CLOSED, publish this validator's decryption shares (with proofs) for the final sums.
+/// Before the close nothing is computed, so honest software never helps open a vote early.
+fn decrypt_closed_contests(s: &Arc<Shared>, interval: Duration) {
+    use teko_election::{GovernancePolicy, LogEntry, LogKind, Tallier, build_shares};
+    let Some(trust) = s.cfg.trust.as_ref() else {
+        return;
+    };
+    let pending = {
+        let mut st = lock(s);
+        let Some(ks) = st.tally.as_ref().map(|k| k.index) else {
+            return;
+        };
+        if st.tallier.is_none() {
+            let Ok(policy) = GovernancePolicy::new(trust.gov_signers.clone(), trust.gov_threshold)
+            else {
+                return;
+            };
+            let mut t =
+                Tallier::new(policy).with_verifier(Box::new(teko_registration::RsaRegistration));
+            if !trust.chain_id.is_empty() {
+                t = t.with_chain_id(trust.chain_id.clone());
+            }
+            st.tallier = Some(t);
+        }
+        // Feed what the chain gained since last time.
+        let State {
+            chain,
+            tallier,
+            fed,
+            ..
+        } = &mut *st;
+        let board = chain.board();
+        let Some(t) = tallier.as_mut() else {
+            return;
+        };
+        while *fed < board.len() {
+            if let Some(e) = board.entry(*fed) {
+                let kind = match e.kind {
+                    EntryKind::MANIFEST => Some(LogKind::Manifest),
+                    EntryKind::TRANSITION => Some(LogKind::Transition),
+                    EntryKind::REGISTRATION => Some(LogKind::Registration),
+                    EntryKind::BALLOT => Some(LogKind::Ballot),
+                    EntryKind::DKG => Some(LogKind::Dkg),
+                    EntryKind::RESULT => Some(LogKind::Result),
+                    _ => None,
+                };
+                match kind {
+                    Some(kind) => t.feed(LogEntry {
+                        kind,
+                        payload: &e.payload,
+                    }),
+                    None => t.skip(),
+                }
+            }
+            *fed += 1;
+        }
+        let list = t.pending_decryptions(ks);
+        let m = t.manifest().map(|m| m.election_id.clone());
+        let sent = &st.results_sent;
+        let retry = interval * 20;
+        list.into_iter()
+            .filter(|(c, _, _)| sent.get(c).is_none_or(|at| at.elapsed() > retry))
+            .map(|x| (m.clone(), x))
+            .collect::<Vec<_>>()
+    };
+    for (election_id, (contest_id, hash, sums)) in pending {
+        let Some(election_id) = election_id else {
+            continue;
+        };
+        // Heavy work (proofs) outside the lock.
+        let (index, secret) = {
+            let st = lock(s);
+            match st.tally.as_ref() {
+                Some(k) => (k.index, k.secret),
+                None => continue,
+            }
+        };
+        let mut rng = rand::rand_core::UnwrapErr(rand::rngs::SysRng);
+        let r = build_shares(
+            &election_id,
+            &contest_id,
+            &hash,
+            &sums,
+            index,
+            &secret,
+            &mut rng,
+        );
+        let body = SubmitEntries {
+            entries: vec![teko_chain::BlockEntry {
+                kind: u32::from(EntryKind::RESULT.0),
+                payload: prost::Message::encode_to_vec(&r),
+            }],
+        };
+        lock(s).results_sent.insert(contest_id, Instant::now());
+        let _ = submit(s, &body, true);
     }
 }
 

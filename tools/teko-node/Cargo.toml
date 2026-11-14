@@ -19,12 +19,16 @@ teko-chain.workspace = true
 teko-bulletin.workspace = true
 teko-crypto.workspace = true
 teko-attestation.workspace = true
+teko-ballot-crypto.workspace = true
+teko-election.workspace = true
+teko-registration.workspace = true
 prost = { workspace = true, features = ["std"] }
 rand.workspace = true
 thiserror = { workspace = true, features = ["std"] }
 
 [dev-dependencies]
 proptest.workspace = true
+p256.workspace = true
 
 [lints]
 workspace = true

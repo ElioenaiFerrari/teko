@@ -1,0 +1,21 @@
+[package]
+name = "teko-ballot-crypto"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+description = "Encrypted ballots: exponential ElGamal on P-256, 0/1 and sum proofs, threshold decryption with proofs, Feldman DKG"
+
+[dependencies]
+teko-crypto.workspace = true
+p256.workspace = true
+rand_core.workspace = true
+zeroize.workspace = true
+prost.workspace = true
+
+[dev-dependencies]
+rand.workspace = true
+proptest.workspace = true
+
+[lints]
+workspace = true

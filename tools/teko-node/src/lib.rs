@@ -10,12 +10,14 @@
 #![cfg_attr(test, allow(clippy::unwrap_used, clippy::expect_used, clippy::panic))]
 
 mod client;
+mod dkg;
 mod error;
 mod node;
 mod setup;
 pub mod wire;
 
 pub use client::{NodeClient, RemoteStatus};
+pub use dkg::{load_share as load_tally_share, run_ceremony};
 pub use error::NodeError;
 pub use node::{Node, NodeConfig, NodeHandle};
 pub use setup::{NetFiles, init_network, load_network, load_validator_key, node_dir};

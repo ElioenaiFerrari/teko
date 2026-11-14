@@ -21,6 +21,25 @@ pub struct BallotBody {
     pub contest_hash: Vec<u8>,
     #[prost(uint32, tag = "4")]
     pub option_index: u32,
+    /// Encrypted mode: hash of the encrypted ballot (`option_index` is then 0, the vote
+    /// lives only inside the ciphertexts). Empty in plaintext mode.
+    #[prost(bytes = "vec", tag = "5")]
+    pub ciphertext_hash: Vec<u8>,
+}
+
+/// Hash of an encrypted ballot, as signed in `BallotBody`.
+pub fn ciphertext_hash(encrypted: &[u8]) -> Vec<u8> {
+    teko_crypto::tagged_hash(tags::BALLOT_CT, &[encrypted]).to_vec()
+}
+
+/// What the ballot proofs bind to: this election, this contest and this voter key, so a
+/// ballot cannot be replayed elsewhere or copied by another voter.
+pub fn ballot_ctx(election_id: &str, contest_id: &str, voter_key: &[u8]) -> Vec<u8> {
+    teko_crypto::tagged_hash(
+        tags::BALLOT_CT,
+        &[election_id.as_bytes(), contest_id.as_bytes(), voter_key],
+    )
+    .to_vec()
 }
 
 pub fn sign_ballot(voter_key: &SigningKey, body: &BallotBody) -> Vec<u8> {
@@ -63,6 +82,7 @@ mod tests {
             contest_id: "presidente".into(),
             contest_hash: vec![7; 32],
             option_index: i,
+            ciphertext_hash: Vec::new(),
         }
     }
 

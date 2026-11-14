@@ -82,6 +82,7 @@
       if (!published) return { available: false, reason: 'O quadro de avisos ainda está vazio: publique a eleição.' };
       const cs = contests().map((c) => ({ contest_id: c.contest_id, title: c.title, office: 'governor', scope: c.scope, scope_code: c.scope_code, phase: c.phase, registration_opens: c.voting_opens - 2 * DAY, voting_opens: c.voting_opens, voting_closes: c.voting_closes, registration_required: true, options: c.option_names.map((n, i) => ({ number: String(10 + i), name: n })) }));
       return { available: true, reason: null, election_id: 'eleicoes-exemplo-2026', title: 'Eleições de exemplo (protótipo, dados fictícios)', revision: 1, head_size: 12, head_root: 'ab12cd34ef56' + '00'.repeat(26), contests: cs,
+        ceremony: { threshold: 2, validators: 3, election_key: '02' + 'ab'.repeat(32), matches_manifest: true },
         governance: [{ seq: 1, contest_id: 'presidente', from: 'draft', to: 'candidates_published', at: NOW - 6 * DAY, signatures: 2, board_index: 1 }, { seq: 2, contest_id: 'presidente', from: 'candidates_published', to: 'registration_open', at: NOW - 5 * DAY, signatures: 2, board_index: 2 }] };
     },
     verify_inclusion: async ({ index }) => ({ valid: true, kind: index === 0 ? 'manifesto' : 'decisão da governança', index, size: 12, root: 'ab12cd34ef56', proof_len: 4 }),
@@ -100,7 +101,7 @@
         const total = c.votes.reduce((a, b) => a + b, 0);
         const ranked = c.names.map((n, i) => ({ index: i, name: n, number: String(c.first + i), votes: c.votes[i] })).sort((a, b) => b.votes - a.votes || a.index - b.index);
         const top = ranked.slice(0, 10), rest = ranked.slice(10);
-        return { contest_id: c.id, title: c.title, office: c.office, scope: c.scope, scope_code: c.code, phase: c.phase, accepted: total, registered: total, registration_required: true, rejected: 0, distribution_visible: c.phase === 'voting_open', top: c.phase === 'voting_open' ? top : [], others_votes: rest.reduce((a, b) => a + b.votes, 0), others_count: rest.length };
+        return { contest_id: c.id, title: c.title, office: c.office, scope: c.scope, scope_code: c.code, phase: c.phase, accepted: total, registered: total, registration_required: true, encrypted: true, revealed: c.phase !== 'voting_open', rejected: 0, distribution_visible: c.phase !== 'voting_open', top: c.phase !== 'voting_open' ? top : [], others_votes: rest.reduce((a, b) => a + b.votes, 0), others_count: rest.length };
       });
       return { available: true, reason: null, election_id: 'eleicoes-exemplo-2026', title: 'Eleições de exemplo (protótipo, dados fictícios)', revision: 1, visibility: 'live', simulated: true, head_size: 12 + headExtra, head_root: 'ab12cd34ef56' + '00'.repeat(26), ignored_governance: 0, contests: cs };
     },

@@ -678,14 +678,40 @@ impl<T: Transport> DeviceClient<T> {
                 o => Err(o),
             },
         )?;
+        let encrypted_mode = !manifest.tally_key.is_empty();
+        if encrypted_mode != !b.encrypted.is_empty() {
+            return Err(ClientError::Verification(
+                "o dispositivo devolveu uma cédula em modo diferente do da eleição".into(),
+            ));
+        }
         let body = BallotBody {
             election_id: election_id.to_string(),
             contest_id: contest_id.to_string(),
             contest_hash: contest_hash(contest).to_vec(),
-            option_index,
+            option_index: if encrypted_mode { 0 } else { option_index },
+            ciphertext_hash: if encrypted_mode {
+                teko_election::ciphertext_hash(&b.encrypted)
+            } else {
+                Vec::new()
+            },
         };
         verify_ballot(&b.voter_key, &body, &b.signature)
             .map_err(|_| ClientError::Verification("a assinatura da cédula NÃO confere".into()))?;
+        if encrypted_mode {
+            // The proofs say "exactly one option, each entry 0 or 1, for THIS election,
+            // contest and voter key": checked here too, so a bad ballot is never published.
+            let pk = teko_ballot_crypto::point_from_bytes(&manifest.tally_key)
+                .ok_or_else(|| ClientError::Verification("chave da eleição inválida".into()))?;
+            let n = contest.options.len();
+            let ctx = teko_election::ballot_ctx(election_id, contest_id, &b.voter_key);
+            let ok = teko_ballot_crypto::EncryptedBallot::from_bytes(n, &b.encrypted)
+                .is_some_and(|eb| teko_ballot_crypto::verify_ballot(&pk, n, &ctx, &eb));
+            if !ok {
+                return Err(ClientError::Verification(
+                    "as provas da cédula cifrada NÃO conferem".into(),
+                ));
+            }
+        }
         Ok(SignedBallot {
             election_id: election_id.to_string(),
             contest_id: contest_id.to_string(),
@@ -695,6 +721,7 @@ impl<T: Transport> DeviceClient<T> {
             option_name,
             voter_key: hex::encode(&b.voter_key),
             signature: hex::encode(&b.signature),
+            encrypted: hex::encode(&b.encrypted),
         })
     }
 }
@@ -735,6 +762,8 @@ pub struct SignedBallot {
     pub option_name: String,
     pub voter_key: String,
     pub signature: String,
+    /// Encrypted ballot (hex), empty in plaintext mode.
+    pub encrypted: String,
 }
 
 fn phase_name(code: u32) -> &'static str {

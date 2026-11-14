@@ -410,7 +410,12 @@
       <p class="muted">Cada decisão exige a assinatura de instituições independentes (M de N) e fica no quadro, a prova de que ninguém abriu ou fechou um pleito sozinho.</p>
       <ol class="muted" style="margin:0;padding-left:1.2em">${x.governance.map((g) => `<li>nº ${g.seq} · <strong>${esc(g.contest_id)}</strong>: ${esc((PHASES[g.from] || [g.from])[0])} → ${esc((PHASES[g.to] || [g.to])[0])} · ${esc(fmtDate(g.at))} · ${g.signatures} assinaturas · posição #${g.board_index}</li>`).join('')}</ol>
     </article>` : '';
-    return `${head}${networkCard()}<div class="grid grid--3">${contests}</div>${gov}`;
+    const cer = x.ceremony ? `<article class="card">
+      <div class="card__head"><div class="card__ico card__ico--onca">${ico('shield')}</div><div><h3>Cerimônia da chave da eleição</h3>
+        <p class="muted">${x.ceremony.validators} validadores geraram a chave juntos: <strong>${x.ceremony.threshold} de ${x.ceremony.validators}</strong> precisam se juntar para decifrar os totais. Ninguém guarda a chave inteira. Verificado aqui (provas de posse e chave recalculadas).</p></div></div>
+      <p class="muted">Chave pública: <span class="mono">${esc(short(x.ceremony.election_key, 14, 10))}</span> ${x.ceremony.matches_manifest ? chip('igual à do manifesto assinado', 'ok', 'check') : chip('DIFERENTE da do manifesto', 'bad', 'alert')}</p>
+    </article>` : '';
+    return `${head}${networkCard()}${cer}<div class="grid grid--3">${contests}</div>${gov}`;
   }
 
   function networkCard() {
@@ -753,7 +758,7 @@
       ${canVote ? `<div class="row"><button class="btn btn--gold" data-act="vote" data-contest="${esc(c.contest_id)}">${ico('ballot')}Votar neste pleito</button></div>` : ''}
       ${ballot ? callout('info', 'shield', 'Cédula assinada pelo dispositivo (protótipo)', `<p>Voto em <strong>${esc(ballot.option_name)}</strong>. Assinatura <span class="mono">${esc(short(ballot.signature, 10, 8))}</span> conferida pela Suite.
         ${ballot.submitted ? `Enviada ao quadro local (posição #${ballot.board_index}): <a href="#" data-act="gotoresults">veja nos resultados ao vivo</a>.` : esc(ballot.note || 'Não foi enviada ao quadro.')}
-        ${c.registration_required ? 'Registro anônimo (assinatura cega) conferido; ainda sem prova ZK nem anulador: protótipo.' : 'Sem registro anônimo nem prova de elegibilidade: protótipo.'}</p>`) : ''}
+        ${ballot.encrypted ? 'O voto foi <strong>cifrado dentro do dispositivo</strong> e só os totais serão decifrados, depois do fechamento.' : 'Voto em claro (eleição sem cifra): protótipo.'} ${c.registration_required ? 'Registro anônimo conferido; ainda sem prova ZK nem anulador.' : ''}</p>`) : ''}
     </article>`;
   }
 
@@ -990,11 +995,14 @@
     const chips = `${chip(scope, 'info')}${chip(phaseLabel, phaseKind)}`;
     const chipsEl = $('[data-slot=chips]', art); if (chipsEl.dataset.v !== chips) { chipsEl.dataset.v = chips; chipsEl.innerHTML = chips; }
     const totalEl = $('[data-slot=total]', art);
-    const total = c.accepted === null ? 'Total oculto até o fechamento' : `${nf.format(c.accepted)} cédulas aceitas${c.registration_required ? ` · ${nf.format(c.registered)} registrados` : ''}${c.rejected ? ` · ${nf.format(c.rejected)} rejeitadas` : ''}`;
+    const total = c.accepted === null ? 'Total oculto até o fechamento' : `${nf.format(c.accepted)} cédulas ${c.encrypted ? 'cifradas ' : ''}aceitas${c.registration_required ? ` · ${nf.format(c.registered)} registrados` : ''}${c.rejected ? ` · ${nf.format(c.rejected)} rejeitadas` : ''}`;
     if (totalEl.textContent !== total) totalEl.textContent = total;
     const body = $('[data-slot=body]', art);
     if (!c.distribution_visible) {
-      const msg = c.accepted === null ? 'Oculto até o fechamento da votação (política do manifesto).'
+      const closedPhase = ['voting_closed', 'tallied', 'audited'].includes(c.phase);
+      const msg = c.encrypted && closedPhase ? 'Votação encerrada. Apurando: aguardando os validadores decifrarem os totais (basta a maioria).'
+        : c.encrypted && c.phase === 'voting_open' ? 'Votos CIFRADOS: o resultado só existe depois do fechamento e ninguém, nem os validadores sozinhos, consegue vê-lo antes.'
+        : c.accepted === null ? 'Oculto até o fechamento da votação (política do manifesto).'
         : c.phase === 'voting_open' ? 'Só o comparecimento aparece agora; a distribuição é divulgada depois do fechamento.'
         : 'Ainda sem votação neste pleito.';
       if (!body.querySelector('.hidden-dist') || body.dataset.m !== msg) { body.dataset.m = msg; body.innerHTML = `<div class="hidden-dist">${ico('lock')}<div>${esc(msg)}</div></div>`; }

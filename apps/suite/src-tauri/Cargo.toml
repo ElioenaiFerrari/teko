@@ -24,6 +24,7 @@ issuer-cli = { workspace = true, optional = true }
 election-admin.workspace = true
 teko-bulletin.workspace = true
 teko-election.workspace = true
+teko-ballot-crypto.workspace = true
 
 [features]
 default = ["custom-protocol", "dev-simulation"]

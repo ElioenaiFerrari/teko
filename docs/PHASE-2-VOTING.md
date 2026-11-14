@@ -249,7 +249,7 @@ Invariantes novas a testar: a cédula só é assinada se o candidato exibido vei
 | 11 | **Voto em branco e nulo**, e cargos **proporcionais/multi-vaga** (deputado, vereador: voto em candidato ou legenda) | Branco/nulo como opções explícitas; proporcional fica para depois do majoritário |
 | 12 | **Eleitor no exterior** (vota só para Presidente) e outras exceções de domicílio | Modelar como domicílio especial; fora do primeiro corte |
 | 13 | **Encerramento antecipado** de um pleito (hoje o sistema recusa fechar antes do horário) | Manter recusa; emergência vira cancelamento motivado |
-| 14 | **Política de resultados parciais** (ADR-0018): `live`, `turnout_only` ou `after_close` | `after_close` ou `turnout_only` numa eleição real; `live` só em demonstração. A distribuição ao vivo fica como opção do manifesto |
+| 14 | **Política de resultados parciais** (ADR-0018): `live`, `turnout_only` ou `after_close` | ✅ **Decidido:** nada de parciais, **criptograficamente** (ADR-0019: cédulas cifradas, só os totais são decifrados no fechamento por M-de-N validadores) |
 | 15 | **Resultado por UF/município de um pleito nacional**: exige a UF do eleitor na cédula (reduz o anonimato ao estado) | Não fazer no primeiro corte; Presidente só no total nacional |
 | 16 | **Quem é o operador do quadro** e como terceiros fixam e comparam *heads* (testemunhas) para detectar *split view* | Vários espelhos independentes; no estudo, um operador local |
 

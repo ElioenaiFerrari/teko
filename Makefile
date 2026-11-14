@@ -1,6 +1,6 @@
 # Teko — atalhos. Rode `make` (ou `make help`) para ver tudo.
 .DEFAULT_GOAL := help
-.PHONY: help setup emulator suite reset demo issuer-help preview fmt lint test check build clean-dev verify-fw release-check repro devnet devnet-stop devnet-status devnet-reset devnet-blocks testnet-help election publish simulate simulate-live tally reset-board
+.PHONY: help setup emulator suite reset demo issuer-help preview fmt lint test check build clean-dev verify-fw release-check repro devnet devnet-dkg devnet-stop devnet-status devnet-reset devnet-blocks testnet-help election publish simulate simulate-live tally reset-board
 
 CARGO ?= cargo
 PIN   ?= 482913
@@ -32,6 +32,9 @@ devnet: ## Sobe a blockchain de TESTE local: 3 validadores PoA (2 de 3 assinam),
 	for i in 0 1 2; do $(NODE) run --dir $(NET) --index $$i >$(NET)/node-$$i/node.log 2>&1 & done; \
 	sleep 1; $(NODE) status --dir $(NET)
 	@echo; echo "Próximo: make election (liga a eleição à rede) → reinicie o emulador → make publish → abra a Suite"
+
+devnet-dkg: ## Cerimônia de chave da eleição entre os 3 validadores (cédulas cifradas). Rode depois de make devnet
+	@$(NODE) dkg --dir $(NET)
 
 devnet-stop: ## Para os 3 validadores (os blocos ficam em dev/net/node-*/blocks.log)
 	@$(NODE) stop --dir $(NET)

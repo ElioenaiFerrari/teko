@@ -20,6 +20,8 @@ impl EntryKind {
     pub const REGISTRATION: EntryKind = EntryKind(3);
     pub const BALLOT: EntryKind = EntryKind(4);
     pub const RESULT: EntryKind = EntryKind(5);
+    /// Key ceremony record (public commitments of the election key).
+    pub const DKG: EntryKind = EntryKind(6);
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]

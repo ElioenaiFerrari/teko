@@ -28,6 +28,8 @@ teko-attestation.workspace = true
 teko-election.workspace = true
 teko-bulletin.workspace = true
 teko-registration.workspace = true
+teko-ballot-crypto.workspace = true
+rand.workspace = true
 teko-chain.workspace = true
 teko-node.workspace = true
 issuer-cli = { workspace = true, optional = true }

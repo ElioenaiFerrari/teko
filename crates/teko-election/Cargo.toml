@@ -8,7 +8,9 @@ publish.workspace = true
 [dependencies]
 teko-crypto.workspace = true
 teko-attestation.workspace = true
+teko-ballot-crypto.workspace = true
 prost.workspace = true
+rand_core.workspace = true
 thiserror.workspace = true
 
 [dev-dependencies]

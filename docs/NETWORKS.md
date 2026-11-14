@@ -26,6 +26,7 @@ Cada rede tem um `chain_id` (`teko-devnet-1`, `teko-testnet-1`). Ele entra no **
 
 ```
 make devnet            # sobe 3 validadores (cria dev/net na 1ª vez)
+make devnet-dkg       # (cédulas cifradas) cerimônia de chave entre os 3 validadores
 make election          # liga a eleição à rede (chain_id) e fixa o dispositivo nela
                        # → reinicie o emulador (ele lê o trust.txt na partida)
 make publish           # a eleição entra por blocos

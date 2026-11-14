@@ -337,6 +337,12 @@ impl Issuer {
             trust.chain_id = net_chain_id.clone();
             fs::write(self.dir.join("trust.txt"), trust.to_text())?;
         }
+        // Encrypted ballots: if the validators already ran the key ceremony
+        // (`dev/net/tally-key.pub`), the election carries its public key.
+        let tally_key = fs::read_to_string(self.dir.join("net").join("tally-key.pub"))
+            .ok()
+            .and_then(|t| hex::decode(t.trim()).ok())
+            .unwrap_or_default();
         let (y, m, d) = civil_from_days((now / 86_400) as i64);
         let contests: Vec<Contest> = vec![
             contest(
@@ -462,6 +468,7 @@ impl Issuer {
             signatures: Vec::new(),
             results_visibility: ResultsVisibility::AfterClose as i32,
             chain_id: net_chain_id.clone(),
+            tally_key,
         };
         manifest.signatures = [0usize, 1]
             .iter()

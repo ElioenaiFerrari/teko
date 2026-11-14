@@ -22,10 +22,13 @@ mod lifecycle;
 mod manifest;
 mod policy;
 mod registration;
+mod result;
 mod tally;
 mod text;
 
-pub use ballot::{BallotBody, ElectionBundle, sign_ballot, verify_ballot};
+pub use ballot::{
+    BallotBody, ElectionBundle, ballot_ctx, ciphertext_hash, sign_ballot, verify_ballot,
+};
 pub use eligibility::{Domicile, Scope, ScopeLevel, is_eligible};
 pub use error::ElectionError;
 pub use lifecycle::{
@@ -42,6 +45,7 @@ pub use registration::{
     RegistrationBlinder, RegistrationVerifier, SubmittedRegistration, registration_message,
     registration_request_message,
 };
+pub use result::{DecryptionShares, build_shares, decrypt_ctx};
 pub use tally::{
     ContestTally, ElectionTally, LogEntry, LogKind, OptionTally, PublicView, Ranking, RejectCounts,
     SubmittedBallot, Tallier, tally, tally_with,

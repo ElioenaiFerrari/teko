@@ -18,6 +18,10 @@ pub const STATUS: u32 = 3;
 pub const GET_BLOCKS: u32 = 4;
 pub const PROPOSAL: u32 = 5;
 pub const COMMIT: u32 = 6;
+pub const DKG_START: u32 = 7; // coordinator -> node: begin the key ceremony (round 1)
+pub const DKG_PACKAGES: u32 = 8; // coordinator -> node: everyone's round-1 packages; node finishes
+pub const DKG_SHARE: u32 = 9; // node -> node: the secret share for the requester (loopback only)
+pub const DKG_REPLY: u32 = 104;
 pub const ACK: u32 = 100;
 pub const STATUS_REPLY: u32 = 101;
 pub const BLOCKS_REPLY: u32 = 102;
@@ -135,4 +139,49 @@ pub fn read_msg(r: &mut impl Read) -> Result<Msg, NodeError> {
 
 pub fn decode<M: Message + Default>(m: &Msg) -> Result<M, NodeError> {
     M::decode(m.body.as_slice()).map_err(|_| NodeError::Protocol("malformed body".into()))
+}
+
+use teko_ballot_crypto::dkg_wire::Round1Msg;
+
+#[derive(Clone, PartialEq, Message)]
+pub struct DkgStart {
+    #[prost(bytes = "vec", tag = "1")]
+    pub session: Vec<u8>,
+    #[prost(uint32, tag = "2")]
+    pub n: u32,
+    #[prost(uint32, tag = "3")]
+    pub threshold: u32,
+}
+
+#[derive(Clone, PartialEq, Message)]
+pub struct DkgPackages {
+    #[prost(bytes = "vec", tag = "1")]
+    pub session: Vec<u8>,
+    #[prost(uint32, tag = "2")]
+    pub threshold: u32,
+    #[prost(message, repeated, tag = "3")]
+    pub packages: Vec<Round1Msg>,
+}
+
+#[derive(Clone, PartialEq, Message)]
+pub struct DkgShareReq {
+    /// 1-based index of the requesting validator.
+    #[prost(uint32, tag = "1")]
+    pub requester: u32,
+}
+
+#[derive(Clone, PartialEq, Message)]
+pub struct DkgReply {
+    #[prost(bool, tag = "1")]
+    pub ok: bool,
+    #[prost(string, tag = "2")]
+    pub info: String,
+    #[prost(message, optional, tag = "3")]
+    pub round1: Option<Round1Msg>,
+    /// SECRET share (only in a DKG_SHARE reply, node to node).
+    #[prost(bytes = "vec", tag = "4")]
+    pub share: Vec<u8>,
+    /// The election public key a node derived (DKG_PACKAGES reply).
+    #[prost(bytes = "vec", tag = "5")]
+    pub group_key: Vec<u8>,
 }

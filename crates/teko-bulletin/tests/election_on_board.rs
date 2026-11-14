@@ -77,6 +77,7 @@ fn world() -> World {
         registry_key: vec![],
         revision: 1,
         signatures: vec![],
+        tally_key: Vec::new(),
     };
     manifest.signatures = [0usize, 1]
         .iter()

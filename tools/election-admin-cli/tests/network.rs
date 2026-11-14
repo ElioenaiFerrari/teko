@@ -40,6 +40,7 @@ fn start(dir: &std::path::Path, i: usize) -> NodeHandle {
             index: i,
             peers: net.peers,
             allow_remote: false,
+            trust: None,
         },
         addr,
     )
@@ -128,6 +129,7 @@ fn an_election_runs_on_the_network_and_the_tally_is_rebuilt_from_verified_blocks
         contest_id: "presidente".into(),
         contest_hash: contest_hash(m.contest("presidente").unwrap()).to_vec(),
         option_index: 1,
+        ciphertext_hash: Vec::new(),
     };
     let r2 = admin
         .submit_ballot(&SubmittedBallot {
@@ -137,6 +139,7 @@ fn an_election_runs_on_the_network_and_the_tally_is_rebuilt_from_verified_blocks
             option_index: 1,
             voter_key,
             signature: sign_ballot(&key, &body),
+            encrypted: Vec::new(),
         })
         .unwrap();
     assert!(
@@ -162,5 +165,135 @@ fn an_election_runs_on_the_network_and_the_tally_is_rebuilt_from_verified_blocks
         n.stop();
     }
     assert!(Admin::open(&dir).unwrap().network().is_none());
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+fn start_with_trust(dir: &std::path::Path, i: usize) -> NodeHandle {
+    let net = load_network(&dir.join("net")).unwrap();
+    let addr = net.peers[i];
+    let trust = teko_attestation::TrustPolicy::parse(
+        &std::fs::read_to_string(dir.join("trust.txt")).unwrap(),
+    )
+    .unwrap();
+    Node::start(
+        NodeConfig {
+            dir: node_dir(&dir.join("net"), i),
+            profile: net.profile.with_block_interval_ms(150).unwrap(),
+            key: load_validator_key(&dir.join("net"), i).unwrap(),
+            index: i,
+            peers: net.peers,
+            allow_remote: false,
+            trust: Some(trust),
+        },
+        addr,
+    )
+    .unwrap()
+}
+
+#[test]
+fn encrypted_ballots_stay_hidden_until_the_close_then_two_of_three_validators_reveal_the_exact_totals()
+ {
+    let issuer = Issuer::open(scratch_dir("enc"));
+    issuer.dev_setup().unwrap();
+    let dir = issuer.dir().to_path_buf();
+    init_network(&dir.join("net"), NetworkKind::Devnet, 3, ports(), false).unwrap();
+
+    // 1) The validators make the election key together (nobody holds it whole).
+    let boot: Vec<_> = (0..3).map(|i| start(&dir, i)).collect();
+    let net = load_network(&dir.join("net")).unwrap();
+    let rec = teko_node::run_ceremony(
+        &teko_node::NodeClient::new(net.peers.clone()),
+        &dir.join("net"),
+        b"teko-devnet-1|tally-key",
+        2,
+    )
+    .unwrap();
+    for n in boot {
+        n.stop();
+    }
+
+    // 2) The election carries that key and is bound to the network. Nodes restart
+    //    (replaying their blocks and reloading their key shares) WITH the trust file.
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_secs();
+    issuer.dev_election(now).unwrap();
+    let mut nodes: Vec<Option<NodeHandle>> =
+        (0..3).map(|i| Some(start_with_trust(&dir, i))).collect();
+    let admin = Admin::open(&dir).unwrap();
+    assert!(admin.network().is_some());
+    let m = manifest(&admin);
+    assert_eq!(
+        m.tally_key, rec.group_key,
+        "the election carries the ceremony's key"
+    );
+    admin.publish().unwrap();
+    wait("election published", 30, || {
+        admin.tally().is_ok_and(|t| {
+            t.contest("presidente")
+                .is_some_and(|c| c.phase == Phase::VotingOpen)
+        })
+    });
+
+    // 3) Encrypted ballots from synthetic voters (real proofs, real registrations).
+    let report = admin.simulate_batch(25, 11).unwrap();
+    assert!(report.ballots >= 25);
+    let planted: std::collections::BTreeMap<String, Vec<u64>> =
+        report.planted.iter().cloned().collect();
+    let total_planted: u64 = planted.values().map(|v| v.iter().sum::<u64>()).sum();
+    assert_eq!(total_planted, report.ballots);
+    wait("ballots counted", 60, || {
+        admin
+            .tally()
+            .is_ok_and(|t| t.contests.iter().map(|c| c.accepted).sum::<u64>() == report.ballots)
+    });
+    // While voting is open: the ballot COUNT is known, the distribution does not exist.
+    let t = admin.tally().unwrap();
+    let pres = t.contest("presidente").unwrap();
+    assert!(pres.encrypted && !pres.revealed);
+    assert!(
+        pres.options.iter().all(|o| o.votes == 0),
+        "no per-option count while open"
+    );
+    assert!(
+        !pres
+            .public_view(teko_election::ResultsVisibility::Live)
+            .distribution
+    );
+    assert_eq!(t.bad_results, 0);
+
+    // 4) One validator goes down; the contests close; the other two decrypt.
+    nodes[2].take().unwrap().stop();
+    let closes = m
+        .contest("presidente")
+        .unwrap()
+        .schedule
+        .clone()
+        .unwrap()
+        .voting_closes;
+    assert_eq!(admin.close_due(closes + 1).unwrap(), 6);
+    wait("totals revealed by 2 of 3 validators", 90, || {
+        admin.tally().is_ok_and(|t| {
+            planted
+                .keys()
+                .all(|id| t.contest(id).is_some_and(|c| c.revealed))
+        })
+    });
+    let t = admin.tally().unwrap();
+    for (id, want) in &planted {
+        let c = t.contest(id).unwrap();
+        let got: Vec<u64> = c.options.iter().map(|o| o.votes).collect();
+        assert_eq!(&got, want, "{id}: decrypted totals equal what was planted");
+        assert!(
+            c.public_view(teko_election::ResultsVisibility::AfterClose)
+                .distribution
+        );
+    }
+    assert_eq!(t.bad_results, 0);
+    assert_eq!(t.ignored_governance, 0);
+    for n in nodes.into_iter().flatten() {
+        n.stop();
+    }
     let _ = std::fs::remove_dir_all(&dir);
 }

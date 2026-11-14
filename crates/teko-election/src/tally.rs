@@ -9,13 +9,19 @@
 //! key itself de-duplicates. The counts are NOT trustworthy against fraud.
 
 use alloc::boxed::Box;
-use alloc::collections::BTreeSet;
+use alloc::collections::{BTreeMap, BTreeSet};
 use alloc::string::String;
 use alloc::vec::Vec;
 
 use prost::Message;
 
-use crate::ballot::{BallotBody, verify_ballot};
+use teko_ballot_crypto::dkg_wire::{DkgRecord, VerifiedCeremony};
+use teko_ballot_crypto::{
+    Ciphertext, DecryptProof, EncryptedBallot, Point, combine_shares, point_from_bytes,
+    solve_small_dlog, verify_decryption,
+};
+
+use crate::ballot::{BallotBody, ballot_ctx, ciphertext_hash, verify_ballot};
 use crate::eligibility::Scope;
 use crate::lifecycle::{ElectionStatus, Phase, Transition, apply};
 use crate::manifest::{
@@ -23,6 +29,7 @@ use crate::manifest::{
 };
 use crate::policy::GovernancePolicy;
 use crate::registration::{RegistrationVerifier, SubmittedRegistration, registration_message};
+use crate::result::{DecryptionShares, decrypt_ctx};
 
 /// What a log entry carries. The bulletin board maps its own kind byte to this.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -32,6 +39,10 @@ pub enum LogKind {
     Ballot,
     /// Anonymous registration token (ADR-0008).
     Registration,
+    /// Key ceremony record (`DkgRecord`): the election key and the validators' verification keys.
+    Dkg,
+    /// A validator's decryption shares for a closed, encrypted contest.
+    Result,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -56,6 +67,10 @@ pub struct SubmittedBallot {
     pub voter_key: Vec<u8>,
     #[prost(bytes = "vec", tag = "6")]
     pub signature: Vec<u8>,
+    /// Encrypted mode: the `EncryptedBallot` bytes (one-hot ElGamal + proofs). Then
+    /// `option_index` is 0 and the signature covers `ciphertext_hash`.
+    #[prost(bytes = "vec", tag = "7")]
+    pub encrypted: Vec<u8>,
 }
 
 impl SubmittedBallot {
@@ -65,6 +80,11 @@ impl SubmittedBallot {
             contest_id: self.contest_id.clone(),
             contest_hash: self.contest_hash.clone(),
             option_index: self.option_index,
+            ciphertext_hash: if self.encrypted.is_empty() {
+                Vec::new()
+            } else {
+                ciphertext_hash(&self.encrypted)
+            },
         }
     }
 }
@@ -81,6 +101,8 @@ pub struct RejectCounts {
     pub duplicate: u64,
     /// Contest requires registration and this voter key has none.
     pub unregistered: u64,
+    /// Encrypted ballot whose proofs/encoding do not verify (or wrong mode).
+    pub bad_proof: u64,
 }
 
 impl RejectCounts {
@@ -93,6 +115,7 @@ impl RejectCounts {
             + self.bad_signature
             + self.duplicate
             + self.unregistered
+            + self.bad_proof
     }
 }
 
@@ -119,6 +142,10 @@ pub struct ContestTally {
     pub registrations_rejected: u64,
     /// Whether this contest requires registration to vote.
     pub registration_required: bool,
+    /// Ballots are ENCRYPTED: `options[].votes` stays 0 until `revealed`.
+    pub encrypted: bool,
+    /// The totals were decrypted by enough validators and VERIFIED.
+    pub revealed: bool,
     pub rejected: RejectCounts,
     /// In ballot order (NOT ranked); see `ranked`.
     pub options: Vec<OptionTally>,
@@ -139,6 +166,8 @@ pub struct ElectionTally {
     pub orphan_ballots: u64,
     /// Rejections with no contest to blame (malformed bytes, wrong election, unknown contest).
     pub unattributed: RejectCounts,
+    /// Result/ceremony entries refused (bad proof, wrong key, too early, duplicate...).
+    pub bad_results: u64,
     pub entries_seen: u64,
 }
 
@@ -182,7 +211,7 @@ impl ContestTally {
                 distribution: false,
             };
         }
-        match visibility {
+        let mut v = match visibility {
             ResultsVisibility::Live => PublicView {
                 accepted: Some(self.accepted),
                 distribution: true,
@@ -195,7 +224,13 @@ impl ContestTally {
                 accepted: closed.then_some(self.accepted),
                 distribution: closed,
             },
+        };
+        // Encrypted contest: nothing about the distribution exists until the validators
+        // have decrypted the totals and the proofs verified, whatever the policy says.
+        if self.encrypted && !self.revealed {
+            v.distribution = false;
         }
+        v
     }
 }
 
@@ -218,6 +253,14 @@ pub struct Tallier {
     verifier: Option<Box<dyn RegistrationVerifier>>,
     /// When set, manifests of any other network are ignored (and counted).
     chain_id: Option<String>,
+    /// Encrypted contests: per-option homomorphic sums of the VALID ballots (nothing else
+    /// about their content is ever kept).
+    sums: BTreeMap<String, Vec<Ciphertext>>,
+    /// Verified key ceremonies: `(election public key bytes, ceremony)`.
+    ceremonies: Vec<(Vec<u8>, VerifiedCeremony)>,
+    /// Decryption shares accepted so far: contest -> `(validator index, point per option)`.
+    shares: BTreeMap<String, Vec<(u32, Vec<Point>)>>,
+    bad_results: u64,
     ignored: u64,
     orphans: u64,
     count: u64,
@@ -235,6 +278,10 @@ impl Tallier {
             registered: BTreeSet::new(),
             verifier: None,
             chain_id: None,
+            sums: BTreeMap::new(),
+            ceremonies: Vec::new(),
+            shares: BTreeMap::new(),
+            bad_results: 0,
             ignored: 0,
             orphans: 0,
             count: 0,
@@ -258,6 +305,43 @@ impl Tallier {
     /// Advances the cursor over a log entry this tally does not interpret.
     pub fn skip(&mut self) {
         self.count += 1;
+    }
+
+    /// Closed, ENCRYPTED contests whose totals are not revealed yet and for which
+    /// validator `validator_index` has not published shares: `(contest id, contest
+    /// hash, final per-option sums)`. Empty until a verified ceremony exists for the
+    /// election key. A validator decrypts ONLY what this lists, so it never decrypts
+    /// before the close it has itself verified in the chain.
+    pub fn pending_decryptions(
+        &self,
+        validator_index: u32,
+    ) -> Vec<(String, [u8; 32], Vec<Ciphertext>)> {
+        let (Some(m), Some(status)) = (self.manifest.as_ref(), self.status.as_ref()) else {
+            return Vec::new();
+        };
+        if m.tally_key.is_empty() || !self.ceremonies.iter().any(|(k, _)| *k == m.tally_key) {
+            return Vec::new();
+        }
+        self.contests
+            .iter()
+            .filter(|c| {
+                c.encrypted
+                    && !c.revealed
+                    && matches!(
+                        status.phase_of(&c.contest_id),
+                        Some(Phase::VotingClosed | Phase::Tallied | Phase::Audited)
+                    )
+                    && !self
+                        .shares
+                        .get(&c.contest_id)
+                        .is_some_and(|v| v.iter().any(|(j, _)| *j == validator_index))
+            })
+            .filter_map(|c| {
+                let sums = self.sums.get(&c.contest_id)?.clone();
+                let hash = contest_hash(m.contest(&c.contest_id)?);
+                Some((c.contest_id.clone(), hash, sums))
+            })
+            .collect()
     }
 
     /// The manifest currently in force (latest valid revision), if any.
@@ -293,6 +377,8 @@ impl Tallier {
                     e.payload,
                 );
             }
+            LogKind::Dkg => self.feed_dkg(e.payload),
+            LogKind::Result => self.feed_result(e.payload),
             LogKind::Ballot => {
                 let (Some(m), Some(s)) = (self.manifest.as_ref(), self.status.as_ref()) else {
                     self.orphans += 1;
@@ -302,6 +388,7 @@ impl Tallier {
                     m,
                     s,
                     &mut self.contests,
+                    &mut self.sums,
                     &mut self.seen,
                     &self.registered,
                     &mut self.unattributed,
@@ -342,6 +429,8 @@ impl Tallier {
                     registered: 0,
                     registrations_rejected: 0,
                     registration_required: !c.registration_key.is_empty(),
+                    encrypted: !m.tally_key.is_empty(),
+                    revealed: false,
                     rejected: RejectCounts::default(),
                     options: c
                         .options
@@ -354,9 +443,146 @@ impl Tallier {
                         })
                         .collect(),
                 });
+                if !m.tally_key.is_empty() {
+                    self.sums.insert(
+                        c.contest_id.clone(),
+                        alloc::vec![Ciphertext::zero(); c.options.len()],
+                    );
+                }
             }
         }
         self.manifest = Some(m);
+    }
+
+    fn feed_dkg(&mut self, payload: &[u8]) {
+        // Every proof of possession is RE-CHECKED and the key recomputed: a forged
+        // ceremony record cannot make a wrong key look legitimate.
+        let verified = DkgRecord::decode(payload)
+            .ok()
+            .and_then(|r| r.verify().ok().map(|v| (r.group_key, v)));
+        match verified {
+            Some((key, v)) if !self.ceremonies.iter().any(|(k, _)| *k == key) => {
+                self.ceremonies.push((key, v));
+            }
+            Some(_) => {}
+            None => self.bad_results += 1,
+        }
+    }
+
+    /// A validator's decryption shares. Accepted only for a CLOSED, encrypted contest,
+    /// from a validator of THE ceremony that made this election's key, once, with every
+    /// proof valid against the final sums. `threshold` valid shares reveal the totals.
+    fn feed_result(&mut self, payload: &[u8]) {
+        let ok = self.try_result(payload).is_some();
+        if !ok {
+            self.bad_results += 1;
+        }
+    }
+
+    fn try_result(&mut self, payload: &[u8]) -> Option<()> {
+        let r = DecryptionShares::decode(payload).ok()?;
+        let m = self.manifest.as_ref()?;
+        let status = self.status.as_ref()?;
+        let contest = m
+            .contest(&r.contest_id)
+            .filter(|_| r.election_id == m.election_id)?;
+        if m.tally_key.is_empty() || r.contest_hash.as_slice() != contest_hash(contest).as_slice() {
+            return None;
+        }
+        if !matches!(
+            status.phase_of(&r.contest_id)?,
+            Phase::VotingClosed | Phase::Tallied | Phase::Audited
+        ) {
+            return None; // before the close nobody may publish shares
+        }
+        let (_, cer) = self.ceremonies.iter().find(|(k, _)| *k == m.tally_key)?;
+        let vk = cer
+            .verification_keys
+            .iter()
+            .find(|(j, _)| *j == r.validator_index)?
+            .1;
+        let threshold = cer.threshold;
+        let ct = self
+            .contests
+            .iter()
+            .find(|c| c.contest_id == r.contest_id)?;
+        if ct.revealed {
+            return None;
+        }
+        let sums = self.sums.get(&r.contest_id)?;
+        let n = sums.len();
+        if r.shares.len() != n || r.proofs.len() != n {
+            return None;
+        }
+        if self
+            .shares
+            .get(&r.contest_id)
+            .is_some_and(|v| v.iter().any(|(j, _)| *j == r.validator_index))
+        {
+            return None; // one set of shares per validator and contest
+        }
+        let mut points = Vec::with_capacity(n);
+        for (pos, ((raw, proof), sum)) in r.shares.iter().zip(&r.proofs).zip(sums).enumerate() {
+            let d = point_from_bytes(raw)?;
+            let p = DecryptProof::from_bytes(proof)?;
+            let ctx = decrypt_ctx(
+                &r.election_id,
+                &r.contest_id,
+                &r.contest_hash,
+                pos,
+                r.validator_index,
+            );
+            if !verify_decryption(&vk, sum, &d, &p, &ctx) {
+                return None;
+            }
+            points.push(d);
+        }
+        let list = self.shares.entry(r.contest_id.clone()).or_default();
+        list.push((r.validator_index, points));
+        if list.len() >= threshold {
+            self.try_reveal(&r.contest_id);
+        }
+        Some(())
+    }
+
+    /// Combines the first `threshold` accepted shares into the per-option totals and
+    /// only reveals them if they add up to exactly the number of accepted ballots.
+    fn try_reveal(&mut self, contest_id: &str) {
+        let Some(ct) = self
+            .contests
+            .iter_mut()
+            .find(|c| c.contest_id == contest_id)
+        else {
+            return;
+        };
+        let (Some(sums), Some(list)) = (self.sums.get(contest_id), self.shares.get(contest_id))
+        else {
+            return;
+        };
+        let mut totals = Vec::with_capacity(sums.len());
+        for (pos, sum) in sums.iter().enumerate() {
+            let parts: Vec<(u32, Point)> = list
+                .iter()
+                .filter_map(|(j, pts)| pts.get(pos).map(|p| (*j, *p)))
+                .collect();
+            let Some(m_point) = combine_shares(sum, &parts) else {
+                self.bad_results += 1;
+                return;
+            };
+            let Some(v) = solve_small_dlog(&m_point, ct.accepted) else {
+                self.bad_results += 1;
+                return;
+            };
+            totals.push(v);
+        }
+        if totals.iter().sum::<u64>() != ct.accepted {
+            self.bad_results += 1; // one-hot ballots: the totals MUST add up to the ballots
+            return;
+        }
+        for (o, v) in ct.options.iter_mut().zip(totals) {
+            o.votes = v;
+        }
+        ct.revealed = true;
     }
 
     fn feed_transition(&mut self, payload: &[u8]) {
@@ -409,6 +635,7 @@ impl Tallier {
             ignored_governance: self.ignored,
             orphan_ballots: self.orphans,
             unattributed: self.unattributed,
+            bad_results: self.bad_results,
             entries_seen: self.count,
         }
     }
@@ -484,10 +711,12 @@ fn count_registration(
     ct.registered += 1;
 }
 
+#[allow(clippy::too_many_arguments)]
 fn count_ballot(
     m: &ElectionManifest,
     s: &ElectionStatus,
     contests: &mut [ContestTally],
+    sums: &mut BTreeMap<String, Vec<Ciphertext>>,
     seen: &mut BTreeSet<(String, Vec<u8>)>,
     registered: &BTreeSet<(String, Vec<u8>)>,
     unattributed: &mut RejectCounts,
@@ -516,13 +745,42 @@ fn count_ballot(
         ct.rejected.not_open += 1;
         return;
     }
-    let Some(opt) = ct.options.iter().position(|o| o.index == b.option_index) else {
-        ct.rejected.unknown_option += 1;
-        return;
-    };
+    let encrypted_mode = !m.tally_key.is_empty();
+    // Plaintext mode keeps the option; encrypted mode has NO option to read: the vote
+    // is only inside the ciphertexts, and the signed body says option 0.
+    let mut opt = 0;
+    if !encrypted_mode {
+        if !b.encrypted.is_empty() {
+            ct.rejected.bad_proof += 1; // an encrypted ballot in a plaintext election
+            return;
+        }
+        let Some(pos) = ct.options.iter().position(|o| o.index == b.option_index) else {
+            ct.rejected.unknown_option += 1;
+            return;
+        };
+        opt = pos;
+    }
     if verify_ballot(&b.voter_key, &b.body(), &b.signature).is_err() {
         ct.rejected.bad_signature += 1;
         return;
+    }
+    let mut cts: Option<EncryptedBallot> = None;
+    if encrypted_mode {
+        let n = contest.options.len();
+        let pk = point_from_bytes(&m.tally_key);
+        let parsed = EncryptedBallot::from_bytes(n, &b.encrypted);
+        let ctx = ballot_ctx(&b.election_id, &b.contest_id, &b.voter_key);
+        match (pk, parsed) {
+            (Some(pk), Some(eb))
+                if b.option_index == 0 && teko_ballot_crypto::verify_ballot(&pk, n, &ctx, &eb) =>
+            {
+                cts = Some(eb);
+            }
+            _ => {
+                ct.rejected.bad_proof += 1;
+                return;
+            }
+        }
     }
     if !contest.registration_key.is_empty()
         && !registered.contains(&(b.contest_id.clone(), b.voter_key.clone()))
@@ -535,7 +793,21 @@ fn count_ballot(
         return;
     }
     ct.accepted += 1;
-    ct.options[opt].votes += 1;
+    match cts {
+        Some(eb) => {
+            // Homomorphic: add the ENCRYPTED one-hot vector to the running sums.
+            if let Some(acc) = sums.get_mut(&b.contest_id) {
+                for (a, c) in acc.iter_mut().zip(&eb.cts) {
+                    *a = *a + *c;
+                }
+            }
+        }
+        None => {
+            if let Some(o) = ct.options.get_mut(opt) {
+                o.votes += 1;
+            }
+        }
+    }
 }
 
 #[cfg(test)]
@@ -620,6 +892,7 @@ mod tests {
             contest_id: contest.into(),
             contest_hash: contest_hash(m.contest(contest).unwrap()).to_vec(),
             option_index: option,
+            ciphertext_hash: Vec::new(),
         };
         SubmittedBallot {
             election_id: body.election_id.clone(),
@@ -628,6 +901,7 @@ mod tests {
             option_index: option,
             voter_key: teko_crypto::public_key_bytes(&key),
             signature: sign_ballot(&key, &body),
+            encrypted: Vec::new(),
         }
     }
 
@@ -1006,6 +1280,8 @@ mod tests {
             registered: 0,
             registrations_rejected: 0,
             registration_required: false,
+            encrypted: false,
+            revealed: false,
             rejected: RejectCounts::default(),
             options: vec![],
         };
@@ -1097,6 +1373,347 @@ mod tests {
             for (i, o) in c.options.iter().enumerate() {
                 prop_assert_eq!(o.votes, first.values().filter(|x| **x as usize == i).count() as u64);
             }
+        }
+    }
+
+    // ───────────────────────── encrypted contests (ADR-0019) ─────────────────────────
+
+    mod encrypted {
+        use super::*;
+        use crate::ballot::{ballot_ctx, ciphertext_hash};
+        use crate::result::build_shares;
+        use rand::SeedableRng;
+        use rand::rngs::StdRng;
+        use teko_ballot_crypto::dkg::{KeyShare, Participant, Round1};
+        use teko_ballot_crypto::dkg_wire::{DkgRecord, Round1Msg};
+        use teko_ballot_crypto::{
+            EncryptedBallot, Scalar, encrypt_ballot, point_to_bytes, sum_ballots,
+        };
+
+        const SESSION: &[u8] = b"teko-devnet-1|tally-key";
+
+        fn ceremony(seed: u64) -> (Vec<KeyShare>, DkgRecord) {
+            let mut rng = StdRng::seed_from_u64(seed);
+            let (n, t) = (3u32, 2usize);
+            let parts: Vec<(Participant, Round1)> = (1..=n)
+                .map(|i| Participant::new(&mut rng, SESSION, i, n, t).unwrap())
+                .collect();
+            let packages: Vec<Round1> = parts.iter().map(|p| p.1.clone()).collect();
+            let shares: Vec<KeyShare> = parts
+                .iter()
+                .map(|(me, _)| {
+                    let rec: Vec<(u32, Scalar)> = parts
+                        .iter()
+                        .map(|(o, p)| (p.index, o.share_for(me.index()).unwrap()))
+                        .collect();
+                    me.finish(SESSION, t, &packages, &rec).unwrap()
+                })
+                .collect();
+            let record = DkgRecord {
+                session: SESSION.to_vec(),
+                threshold: t as u32,
+                n,
+                packages: packages.iter().map(Round1Msg::from).collect(),
+                group_key: point_to_bytes(&shares[0].group_public_key).to_vec(),
+            };
+            (shares, record)
+        }
+
+        struct Voted {
+            sub: SubmittedBallot,
+            eb: EncryptedBallot,
+        }
+
+        fn enc_ballot(
+            m: &ElectionManifest,
+            contest: &str,
+            voter: u8,
+            choice: usize,
+            rng: &mut StdRng,
+        ) -> Voted {
+            let pk = point_from_bytes(&m.tally_key).unwrap();
+            let key = derive_voter_key(&[voter; 32], &m.election_id, contest).unwrap();
+            let vk = teko_crypto::public_key_bytes(&key);
+            let c = m.contest(contest).unwrap();
+            let ctx = ballot_ctx(&m.election_id, contest, &vk);
+            let eb = encrypt_ballot(&pk, c.options.len(), choice, &ctx, rng).unwrap();
+            let bytes = eb.to_bytes();
+            let body = BallotBody {
+                election_id: m.election_id.clone(),
+                contest_id: contest.into(),
+                contest_hash: contest_hash(c).to_vec(),
+                option_index: 0,
+                ciphertext_hash: ciphertext_hash(&bytes),
+            };
+            let sub = SubmittedBallot {
+                election_id: body.election_id.clone(),
+                contest_id: body.contest_id.clone(),
+                contest_hash: body.contest_hash.clone(),
+                option_index: 0,
+                voter_key: vk,
+                signature: sign_ballot(&key, &body),
+                encrypted: bytes,
+            };
+            Voted { sub, eb }
+        }
+
+        fn shares_entry(
+            m: &ElectionManifest,
+            ks: &KeyShare,
+            sums: &[teko_ballot_crypto::Ciphertext],
+            rng: &mut StdRng,
+        ) -> (LogKind, Vec<u8>) {
+            let c = m.contest(PRESIDENT).unwrap();
+            let r = build_shares(
+                &m.election_id,
+                PRESIDENT,
+                &contest_hash(c),
+                sums,
+                ks.index,
+                &ks.secret,
+                rng,
+            );
+            (LogKind::Result, r.encode_to_vec())
+        }
+
+        #[test]
+        fn nothing_about_the_distribution_exists_until_enough_validators_decrypt_and_it_adds_up() {
+            let k = keys(3, 31);
+            let pol = policy(&k, 2);
+            let (kshares, record) = ceremony(5);
+            let mut m = manifest();
+            m.tally_key = record.group_key.clone();
+            m.signatures = [0usize, 1]
+                .iter()
+                .map(|i| sign_manifest(&k[*i], &m))
+                .collect();
+            let st = steps(&m, &k, PRESIDENT, 0);
+            let mut rng = StdRng::seed_from_u64(8);
+
+            // 12 voters; choices over 3 options.
+            let choices = [0usize, 2, 2, 1, 2, 0, 2, 1, 2, 2, 1, 2];
+            let voted: Vec<Voted> = choices
+                .iter()
+                .enumerate()
+                .map(|(i, c)| enc_ballot(&m, PRESIDENT, i as u8 + 1, *c, &mut rng))
+                .collect();
+            let mut want = [0u64; 3];
+            for c in choices {
+                want[c] += 1;
+            }
+            let sums = sum_ballots(3, &voted.iter().map(|v| &v.eb).collect::<Vec<_>>());
+
+            let mut log: Log = vec![
+                (LogKind::Manifest, m.encode_to_vec()),
+                (LogKind::Dkg, record.encode_to_vec()),
+            ];
+            log.extend(st[..3].iter().map(tr));
+            for v in &voted {
+                log.push((LogKind::Ballot, v.sub.encode_to_vec()));
+            }
+
+            // While voting: the count of ballots is known, the distribution is NOT (not even with Live).
+            let t = run(&pol, &log);
+            let c = t.contest(PRESIDENT).unwrap();
+            assert_eq!((c.accepted, c.encrypted, c.revealed), (12, true, false));
+            assert!(
+                c.options.iter().all(|o| o.votes == 0),
+                "no per-option count exists"
+            );
+            assert!(!c.public_view(ResultsVisibility::Live).distribution);
+            assert_eq!(c.rejected.total(), 0);
+
+            // Shares before the close are refused (and counted).
+            let early = shares_entry(&m, &kshares[0], &sums, &mut rng);
+            let mut l = log.clone();
+            l.push(early.clone());
+            let t = run(&pol, &l);
+            assert_eq!(
+                (t.bad_results, t.contest(PRESIDENT).unwrap().revealed),
+                (1, false)
+            );
+
+            // Close. One validator is not enough; two reveal the exact totals.
+            log.push(tr(&st[3]));
+            let after_close_ballot = enc_ballot(&m, PRESIDENT, 99, 0, &mut rng);
+            log.push((LogKind::Ballot, after_close_ballot.sub.encode_to_vec())); // too late: not counted
+            log.push(shares_entry(&m, &kshares[0], &sums, &mut rng));
+            let t1 = run(&pol, &log);
+            let c = t1.contest(PRESIDENT).unwrap();
+            assert_eq!(
+                (c.accepted, c.revealed, c.rejected.not_open),
+                (12, false, 1),
+                "1 of 3 shares: still hidden"
+            );
+            assert!(!c.public_view(ResultsVisibility::AfterClose).distribution);
+
+            // a duplicate from the same validator, a forged share and a share from an outsider are refused
+            let mut l = log.clone();
+            l.push(shares_entry(&m, &kshares[0], &sums, &mut rng));
+            let bad_secret = KeyShare {
+                index: 2,
+                secret: kshares[1].secret + Scalar::ONE,
+                group_public_key: kshares[1].group_public_key,
+                verification_keys: kshares[1].verification_keys.clone(),
+            };
+            l.push(shares_entry(&m, &bad_secret, &sums, &mut rng));
+            let mut out = shares_entry(&m, &kshares[1], &sums, &mut rng);
+            let mut r = DecryptionShares::decode(out.1.as_slice()).unwrap();
+            r.validator_index = 9;
+            out = (LogKind::Result, r.encode_to_vec());
+            l.push(out);
+            let t = run(&pol, &l);
+            assert_eq!(
+                (t.bad_results, t.contest(PRESIDENT).unwrap().revealed),
+                (3, false)
+            );
+
+            // validator 3 completes the quorum (validator 2 was never needed)
+            log.push(shares_entry(&m, &kshares[2], &sums, &mut rng));
+            let t = run(&pol, &log);
+            let c = t.contest(PRESIDENT).unwrap();
+            assert!(c.revealed && c.public_view(ResultsVisibility::AfterClose).distribution);
+            assert_eq!(c.options.iter().map(|o| o.votes).collect::<Vec<_>>(), want);
+            assert_eq!(c.accepted, want.iter().sum::<u64>());
+            assert_eq!(t.bad_results, 0);
+
+            // incremental == full replay, step by step
+            let mut inc = Tallier::new(pol.clone());
+            for (i, (kind, p)) in log.iter().enumerate() {
+                inc.feed(LogEntry {
+                    kind: *kind,
+                    payload: p,
+                });
+                assert_eq!(inc.snapshot(), run(&pol, &log[..=i].to_vec()), "step {i}");
+            }
+        }
+
+        #[test]
+        fn invalid_encrypted_ballots_are_rejected_and_never_touch_the_sums() {
+            let k = keys(3, 41);
+            let pol = policy(&k, 2);
+            let (kshares, record) = ceremony(6);
+            let mut m = manifest();
+            m.tally_key = record.group_key.clone();
+            m.signatures = [0usize, 1]
+                .iter()
+                .map(|i| sign_manifest(&k[*i], &m))
+                .collect();
+            let st = steps(&m, &k, PRESIDENT, 0);
+            let mut rng = StdRng::seed_from_u64(9);
+            let good = enc_ballot(&m, PRESIDENT, 1, 1, &mut rng);
+
+            let mut log: Log = vec![
+                (LogKind::Manifest, m.encode_to_vec()),
+                (LogKind::Dkg, record.encode_to_vec()),
+            ];
+            log.extend(st[..3].iter().map(tr));
+            log.push((LogKind::Ballot, good.sub.encode_to_vec()));
+            // another voter's valid ballot, but REPLAYED under a different voter key
+            let mut stolen = enc_ballot(&m, PRESIDENT, 2, 0, &mut rng).sub;
+            let other_key = derive_voter_key(&[3; 32], &m.election_id, PRESIDENT).unwrap();
+            stolen.voter_key = teko_crypto::public_key_bytes(&other_key);
+            log.push((LogKind::Ballot, stolen.encode_to_vec()));
+            // a tampered ciphertext: the voter's signature no longer covers it
+            let mut tampered = enc_ballot(&m, PRESIDENT, 4, 0, &mut rng).sub;
+            tampered.encrypted[40] ^= 1;
+            log.push((LogKind::Ballot, tampered.encode_to_vec()));
+            // a DISHONEST voter signs his own invalid ballot: signature fine, proofs not
+            let resign = |mut sub: SubmittedBallot, voter: u8| {
+                let key = derive_voter_key(&[voter; 32], &m.election_id, PRESIDENT).unwrap();
+                sub.signature = sign_ballot(&key, &sub.body());
+                sub
+            };
+            let mut bad_proof = enc_ballot(&m, PRESIDENT, 7, 0, &mut rng).sub;
+            bad_proof.encrypted[40] ^= 1;
+            log.push((LogKind::Ballot, resign(bad_proof, 7).encode_to_vec()));
+            // a PLAINTEXT ballot in an encrypted election (option named in the clear)
+            let mut plain = enc_ballot(&m, PRESIDENT, 5, 0, &mut rng).sub;
+            plain.encrypted.clear();
+            plain.option_index = 1;
+            log.push((LogKind::Ballot, resign(plain, 5).encode_to_vec()));
+            // a ballot that names an option next to the ciphertexts
+            let mut named = enc_ballot(&m, PRESIDENT, 6, 0, &mut rng).sub;
+            named.option_index = 1;
+            log.push((LogKind::Ballot, resign(named, 6).encode_to_vec()));
+            // the same voter twice
+            let again = enc_ballot(&m, PRESIDENT, 1, 2, &mut rng).sub;
+            log.push((LogKind::Ballot, again.encode_to_vec()));
+
+            let t = run(&pol, &log);
+            let c = t.contest(PRESIDENT).unwrap();
+            assert_eq!(c.accepted, 1);
+            assert_eq!(
+                (
+                    c.rejected.bad_proof,
+                    c.rejected.bad_signature,
+                    c.rejected.duplicate
+                ),
+                (3, 2, 1)
+            );
+
+            // After the close the quorum decrypts: the totals equal ONLY the one valid ballot.
+            log.push(tr(&st[3]));
+            let sums = sum_ballots(3, &[&good.eb]);
+            for ks in [&kshares[0], &kshares[1]] {
+                log.push(shares_entry(&m, ks, &sums, &mut rng));
+            }
+            let t = run(&pol, &log);
+            let c = t.contest(PRESIDENT).unwrap();
+            assert!(c.revealed);
+            assert_eq!(
+                c.options.iter().map(|o| o.votes).collect::<Vec<_>>(),
+                [0, 1, 0]
+            );
+        }
+
+        #[test]
+        fn a_forged_ceremony_or_a_key_that_is_not_the_elections_reveals_nothing() {
+            let k = keys(3, 51);
+            let pol = policy(&k, 2);
+            let (kshares, record) = ceremony(7);
+            let (_, other_record) = ceremony(8);
+            let mut m = manifest();
+            m.tally_key = record.group_key.clone();
+            m.signatures = [0usize, 1]
+                .iter()
+                .map(|i| sign_manifest(&k[*i], &m))
+                .collect();
+            let st = steps(&m, &k, PRESIDENT, 0);
+            let mut rng = StdRng::seed_from_u64(10);
+            let v = enc_ballot(&m, PRESIDENT, 1, 2, &mut rng);
+            let sums = sum_ballots(3, &[&v.eb]);
+
+            // the record on the chain is from ANOTHER ceremony (different election key)
+            let mut forged = other_record.clone();
+            forged.group_key = record.group_key.clone(); // claims our key, packages say otherwise
+            let mut log: Log = vec![
+                (LogKind::Manifest, m.encode_to_vec()),
+                (LogKind::Dkg, forged.encode_to_vec()),
+                (LogKind::Dkg, other_record.encode_to_vec()),
+            ];
+            log.extend(st[..3].iter().map(tr));
+            log.push((LogKind::Ballot, v.sub.encode_to_vec()));
+            log.push(tr(&st[3]));
+            for ks in [&kshares[0], &kshares[1]] {
+                log.push(shares_entry(&m, ks, &sums, &mut rng));
+            }
+            let t = run(&pol, &log);
+            let c = t.contest(PRESIDENT).unwrap();
+            assert!(!c.revealed, "no ceremony matches this election's key");
+            assert!(
+                t.bad_results >= 3,
+                "forged record + 2 unusable shares: {}",
+                t.bad_results
+            );
+
+            // with the honest record it works
+            let mut ok: Log = vec![
+                (LogKind::Manifest, m.encode_to_vec()),
+                (LogKind::Dkg, record.encode_to_vec()),
+            ];
+            ok.extend(log[3..].iter().cloned());
+            assert!(run(&pol, &ok).contest(PRESIDENT).unwrap().revealed);
         }
     }
 }

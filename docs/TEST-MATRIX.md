@@ -149,8 +149,29 @@ Legenda: **P** = `proptest` (muitos casos), **U** = unitário, **E** = ponta a p
 | **Ponta a ponta com dispositivo real:** registrar, perder, bloquear (prova do dispositivo perdido é recusada), reemitir, nova credencial verifica, lista falsa/atrasada recusada, **mesmo cidadão não registra de novo no mesmo pleito** mas registra em outro | e2e: `losing_the_device_means_reissue_the_old_credential_is_revoked_and_the_citizen_stays_one` |
 | A Suite de produção não contém a autoridade/operador de teste (com controle do detector) | `scripts/release-check.sh` (`cargo tree` sem/com `dev-simulation`) |
 
+## Fase 2, etapa 8: cédulas cifradas (ADR-0019)
+
+| Garantia | Teste |
+|---|---|
+| Cédula válida verifica, ida e volta de bytes, tamanho esperado; limites de opções | ballot-crypto: `a_valid_ballot_verifies_roundtrips_and_has_the_expected_size` |
+| Cédula inválida recusada: outro pleito/eleição/chave do eleitor, chave pública errada, nº de opções, prova trocada de lugar, cifrados reordenados, soma adulterada, **duas opções**, **nenhuma**, um "2" com prova 0/1, bytes malformados | ballot-crypto: `invalid_ballots_are_rejected`; `a_proof_is_bound_to_its_exact_ciphertext` |
+| Decifração de limiar da soma homomórfica = contagem em claro, com **quaisquer 2 de 3**; 1 parte não basta; índices duplicados/zero recusados | ballot-crypto: `threshold_decryption_of_the_homomorphic_sum_matches_the_plain_count` |
+| Cifra nova a cada vez (sem ligação entre cédulas do mesmo voto) | ballot-crypto: proptest `any_choice_verifies_and_changes_the_ciphertext_every_time` |
+| Só pontos e escalares canônicos decodificam (achou um decodificador leniente com tag SEC1 inválida) | ballot-crypto: `only_canonical_points_and_scalars_decode` |
+| DKG: todos concordam na chave; qualquer limiar reconstrói e decifra com provas; compromisso/parte/prova de posse adulterados, **chave maliciosa (rogue key)**, outra sessão, parâmetros: recusados e apontam o culpado | ballot-crypto: `dkg::tests::*` |
+| Cerimônia **distribuída entre processos de nós**: registro na cadeia reverificável, partes salvas, decifração com provas por 2 de 3 | node: `the_key_ceremony_runs_across_the_nodes_and_leaves_a_verifiable_record_on_the_chain` |
+| O dispositivo cifra e prova; o corpo assinado não nomeia a opção; provas valem só para esta eleição/pleito/chave; a decifração com a chave de teste mostra a escolha; a aleatoriedade não aparece em resposta; chave ruim/ >16 opções recusadas | device-core: `encrypted::*` |
+| Cliente verifica assinatura e provas; ponta a ponta com dispositivo real e apuração pública que **conta mas não vê** | e2e: `an_encrypted_election_the_device_encrypts_the_vote_and_the_public_tally_cannot_see_it` |
+| **Apuração:** nenhum voto por opção existe antes do resultado (nem com `live`); parte antes do fechamento recusada; 1 de 3 não revela; duplicada/forjada/de fora recusadas; 2 de 3 revelam totais **iguais** aos votos; incremental = replay | election: `nothing_about_the_distribution_exists_until...` |
+| Ballots inválidos (assinatura, prova, em claro numa eleição cifrada, opção nomeada) não tocam as somas; só o válido conta | election: `invalid_encrypted_ballots_are_rejected_and_never_touch_the_sums` |
+| Cerimônia forjada ou chave que não é a da eleição não revela nada | election: `a_forged_ceremony_or_a_key_that_is_not_the_elections_reveals_nothing` |
+| **Devnet ponta a ponta:** cerimônia, eleição com a chave, reinício dos nós, cédulas cifradas sintéticas com provas reais, parciais invisíveis, 1 validador cai, fechamento, 2 de 3 revelam, **totais == votos plantados pelo simulador** | admin: `encrypted_ballots_stay_hidden_until_the_close_then_two_of_three_validators_reveal_the_exact_totals` |
+
 ## O que **não** está coberto por teste automático (honestidade)
 
+- **Cifra/provas:** sem vetores de teste de terceiros nem auditoria (implementação própria). Sem teste de tempo constante; sem fuzzing dos decodificadores. Sem teste de carga com milhares de cédulas por bloco.
+- **Cerimônia real:** só 3 processos em loopback, sem canal autenticado/cifrado nem tratamento de reclamações; sem teste com validador malicioso na rede (só no nível da biblioteca).
+- **UI de resultados cifrados (JS):** só exercitada com o mock no navegador.
 - **Fluxo de reemissão na Suite (JS):** só exercitado com o mock no navegador. Sem teste de autoridade real, dupla autorização nem de lista de revogação publicada e distribuída (hoje é um arquivo em `dev/`).
 - **Rede em várias máquinas / testnet real, partições de rede e latência:** só loopback, 3 nós em threads. Sem teste de carga nem fuzzing do protocolo de rede.
 - **Painel de rede na Suite (JS):** só exercitado com o mock no navegador.

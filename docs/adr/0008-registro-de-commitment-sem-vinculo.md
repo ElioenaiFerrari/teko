@@ -2,6 +2,8 @@
 
 **Status:** Proposto · **PENDENTE** · **Nada implementado** além de `GetVoterCommitment` (stub SHA3, não Poseidon). Nenhum registro existe nesta fase. · **Criticidade: a mais alta da fase**
 
+> **Atualização (Fase 2, 2026-11-14):** o que se registra passa a ser `pk_v` (chave pública de eleitor **por eleição**), não `C = Poseidon(s)`. Recomendação atual: **assinatura cega RFC 9474 (opção A)** como linha de base, com **contagem pública de assinaturas emitidas vs. elegíveis** contra *stuffing*, e prova ZK de elegibilidade (opção C) como evolução. Mitigar correlação por tempo/rede com atraso aleatório e canais separados. Detalhes e tabela comparativa: `docs/PHASE-2-VOTING.md` §4.2.
+
 ## Contexto
 A autoridade precisa aceitar `C = Poseidon(s)` somente de cidadãos elegíveis, mas **sem saber qual `C` pertence a qual cidadão** (princípio 5). Um registro ingênuo — "o cidadão X, autenticado, envia C" — vincula identidade e voto por construção.
 

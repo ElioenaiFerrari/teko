@@ -123,6 +123,23 @@ Registradas após o passe de hardening de 2026-11-13. Nenhuma é aceitável em h
 | Suite = webview | Motor de navegador no processo | CSP `default-src 'none'`, sem recursos remotos, escape de todo dado do dispositivo, permissões Tauri só de eventos, limites de tamanho no IPC (32 MB) | — |
 | Credenciais SD-JWT-like sem unlinkability | Dois verificadores correlacionam apresentações da mesma credencial | ADR-0005 | BBS+ ou credenciais de uso único |
 
+## 5.2 Ameaças específicas da votação (Fase 2, propostas)
+
+Não implementadas; ver `PHASE-2-VOTING.md`. Cada linha vira teste quando houver código.
+
+| # | Ameaça | Mitigação proposta | Risco residual |
+|---|---|---|---|
+| V1 | Autoridade liga identidade ↔ `pk_v` | Registro anônimo (assinatura cega/token/ZK) | Correlação por tempo/rede (só operacional) |
+| V2 | *Stuffing*: autoridade emite mais credenciais que elegíveis | Contagem pública emitidas vs. elegíveis; auditoria | Autoridade ainda decide quem é elegível |
+| V3 | Voto duplo | Nullifier por eleição verificado no quadro | Falha do esquema de nullifier para P-256 (lacuna §4.3) |
+| V4 | Host troca o candidato | Cédula confirmada no dispositivo com nome **do manifesto M-de-N** | Usuário não confere a tela |
+| V5 | Manifesto falso | Dispositivo exige M-de-N válido e fase correta | Colusão de M instituições |
+| V6 | **Compra de voto / recibo** | **Não mitigada na 1ª versão** (ADR-0015) | **Total** até haver re-voto/receipt-freeness |
+| V7 | Coerção presencial | Fora de escopo | Total |
+| V8 | Censura/queda do quadro na janela de votação | Espelhos/witnesses; janela longa | Depende de quem opera |
+| V9 | Provador no host vê a chave de eleitor | Credencial = par de chaves; o provador só vê assinatura/nullifier | Bug no protocolo de prova |
+| V10 | Eleitor perdido/clonado | Sem seed; revogação sem ligar identidade (ADR-0003 × ADR-0008) | Problema aberto |
+
 ## 6. Perguntas em aberto
 
 1. **Valor de N (tentativas de PIN antes do wipe) e comprimento do PIN.** Alternativas: 8 tentativas / PIN 6 dígitos (similar a Trezor/Ledger); 5 / 8 dígitos. *Recomendação:* 8 tentativas, PIN de 6–9 dígitos, atraso exponencial a partir da 4ª. **PENDENTE (dono do produto)**.

@@ -19,3 +19,7 @@ Regra: decisões de produto/segurança só passam a `Aceito` pela aprovação do
 | [0010](0010-transporte-local.md) | Transporte local | Aceito (provisório) | Recomendação adotada |
 | [0011](0011-icp-brasil-fora-de-escopo.md) | ICP-Brasil fora de escopo | Proposto | Registro de escopo |
 | [0012](0012-hardware-alvo.md) | Hardware alvo | Proposto | Placeholder |
+| [0013](0013-pilha-zk-para-a-prova-de-voto.md) | Sistema de prova para o voto | Proposto | PENDENTE (Fase 2) |
+| [0014](0014-quadro-de-avisos-e-blockchain.md) | Quadro de avisos / blockchain | Proposto | PENDENTE (Fase 2) |
+| [0015](0015-sigilo-e-resistencia-a-coercao.md) | Sigilo e resistência à coerção | Proposto | PENDENTE (Fase 2, crítico) |
+| [0016](0016-manifesto-de-eleicao-e-governanca.md) | Manifesto de eleição e governança | Proposto | PENDENTE (Fase 2) |

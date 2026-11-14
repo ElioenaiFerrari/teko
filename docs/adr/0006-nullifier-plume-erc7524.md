@@ -2,6 +2,8 @@
 
 **Status:** Proposto · **Decisão: PENDENTE (dono do produto)**
 
+> **Atualização (Fase 2, 2026-11-14):** a divisão "dispositivo dá nullifier, host prova" só funciona se o segredo de eleitor for uma **chave de assinatura** (par `sk_v/pk_v`), não um escalar `s` com `C = Poseidon(s)` (que exige que o provador conheça `s`, como no Semaphore). Recomendação: **voter credential = par de chaves por eleição**; o stub atual (`GetVoterCommitment`) será descartado. Lacuna aberta: nullifier determinístico verificável para **P-256** (o PLUME é secp256k1). Ver `docs/PHASE-2-VOTING.md` §0 e §4.3.
+
 ## Contexto
 O voto usará uma prova ZK de pertinência ao conjunto de commitments e um nullifier por eleição para impedir voto duplo. O segredo `s` **nunca** deve sair do dispositivo, mas provas ZK completas (Groth16/PLONK) são pesadas para um MCU.
 

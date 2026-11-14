@@ -70,6 +70,10 @@ make                                   # lista todos os atalhos (check, repro, r
 - [TEST-MATRIX](docs/TEST-MATRIX.md) (invariante → teste) · [RELEASE](docs/RELEASE.md) (build reproduzível, verificação de firmware/release)
 - [ADRs](docs/adr/README.md)
 
+## Próxima fase
+
+**Fase 2 (votação e governança eleitoral): especificação em [docs/PHASE-2-VOTING.md](docs/PHASE-2-VOTING.md), aguardando revisão.** Nenhum código. Decisões pendentes listadas em §10 de lá. Achado importante: o stub `GetVoterCommitment` da Fase 1 será substituído por credencial de eleitor baseada em par de chaves.
+
 ## Fora de escopo nesta fase
 
 Hardware real, assinatura com validade jurídica (ICP-Brasil), prova ZK real, blockchain de votação, governança eleitoral, explorador público (só placeholder).

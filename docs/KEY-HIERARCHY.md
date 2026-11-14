@@ -65,6 +65,8 @@ pairwise_id = bech32m( hrp = "tekop", data = version ‖ pid[0..20] )
 - `service_id` canônico (ex.: origem normalizada) para impedir que variações do mesmo serviço gerem IDs diferentes — pergunta 3.
 - Limitação: se o serviço também recebe o ID Cívico ou atributos reveladores, pode correlacionar por outros meios.
 
+> **Proposta de alteração (Fase 2, não aplicada):** trocar `s`/`C = Poseidon(s)` por **par de chaves de eleitor por eleição**, derivado de uma raiz `K_v` com entropia separada: `(sk_v,E, pk_v,E) = KDF(K_v, "teko/v2/voter" ‖ election_id)`. Motivo: o provador no host não pode conhecer `s` (§0 de `PHASE-2-VOTING.md`). O texto abaixo descreve o desenho da Fase 1 (stub).
+
 ## 7. Segredo de eleitor
 
 - `s` (32 bytes, ou elemento do campo do Poseidon) — **isolado** das demais chaves.

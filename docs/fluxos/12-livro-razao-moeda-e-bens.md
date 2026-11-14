@@ -2,7 +2,7 @@
 
 ← [Índice da documentação](../README.md)
 
-> **Planejado.** Nada deste fluxo existe no código ainda, além do consenso BFT ([fluxo 11](11-consenso-bft.md)). Serve para fixar a direção; pode mudar.
+> **Parcialmente planejado.** Já existem o consenso BFT ([fluxo 11](11-consenso-bft.md)), o **núcleo do livro** (`teko-ledger`, M2) e a **moeda** (`teko-coin`, M3), descritos abaixo. Bens, a carteira na Suite e os votos sobre o BFT são só **planejados** e podem mudar.
 
 ## Resumo
 Dois livros separados, com os **mesmos validadores**: o de **votos** (implementado) e o de **economia** (moeda e bens). Separar evita que regras de dinheiro e de propriedade contaminem a privacidade do voto.
@@ -20,9 +20,23 @@ Validadores (stake + histórico), emissor (elegibilidade de eleitores), órgão 
 
 *Fontes: [SVG](../diagramas/venda-contra-pagamento.svg) · [HTML](../diagramas/venda-contra-pagamento.html)*
 
+## O núcleo do livro (implementado)
+- Uma transação (`Tx`) leva `chain_id`, `nonce`, módulo, `payload`, chave pública e assinatura. O endereço é o hash da chave.
+- O `nonce` impede repetição; o `chain_id` impede levar uma transação de uma rede para outra.
+- Cada módulo escreve só no seu espaço de nomes e pode ler os dos outros.
+- Um bloco é **atômico**: uma transação inválida recusa o bloco inteiro. O proponente usa `select_valid` para só incluir transações válidas.
+- O estado tem uma **raiz Merkle** (ordenada por chave) e provas de inclusão, que o BFT poderá assinar e clientes leves, conferir. Decisão: [ADR-0020](../adr/0020-livro-razao-generico-e-modulos.md).
+
+## A moeda (implementada)
+- **Teto fixo:** a moeda criada nunca passa do teto. Ela nasce só como **recompensa de bloco** (cai pela metade a cada intervalo), pela **faucet** e por alocações de gênese; as duas últimas só na devnet, rotuladas como moeda de teste. Sem pré-mineração fora da devnet.
+- **Taxa:** preço por byte da transação, assinada junto com ela e paga ao proponente do bloco.
+- **Stake:** quem trava moeda pode ser validador. Ao sair, o valor espera um prazo (desvinculação) e ainda pode ser penalizado nesse período.
+- **Penalidade:** a evidência de equivocação do BFT queima uma parte do stake, uma vez por ofensa.
+- **Conservação:** criado − queimado = saldos + stake + em desvinculação (`audit`), testado com proptest. Decisão e **ponto pendente** (quem valida no início da rede): [ADR-0021](../adr/0021-moeda-teto-fixo-stake-e-taxas.md).
+
 ## Passo a passo (previsto)
-1. **M2** `teko-ledger`: envelope de transação, máquina de estados, raiz de estado.
-2. **M3** `teko-coin`: teto fixo, recompensa que cai pela metade (*halving*), stake e penalidades, sem pré-mineração; *faucet* só na devnet, rotulada.
+1. **M2** `teko-ledger` (**feito**): envelope de transação, módulos, blocos atômicos e raiz de estado (veja "O núcleo do livro").
+2. **M3** `teko-coin` (**feito**): veja "A moeda".
 3. **M4** `teko-assets`: classes de bens com órgão M-de-N; transferência exige dono + comprador + órgão; gravames; troca atômica (*Swap*).
 4. **M5** dispositivo ganha `GetAddress` e `SignTransaction`; a Suite, telas de carteira e patrimônio.
 5. **M6** o livro de votos passa a rodar sobre o BFT.
@@ -34,10 +48,10 @@ Toda assinatura no dispositivo; regras de bens pelo órgão; validadores refazem
 Problema do oráculo (o registro digital não prova o mundo físico), concentração de stake, aposta de que a moeda tenha valor.
 
 ## Onde está no código
-Ainda não existe. O ponto de partida é `crates/teko-bft`.
+Núcleo: `crates/teko-ledger` (`tx.rs`, `state.rs`, `ledger.rs`). Moeda: `crates/teko-coin` (`module.rs`, `query.rs`). Consenso: `crates/teko-bft`. Bens ainda não existem.
 
 ## Testes que cobrem
-Nenhum ainda.
+Núcleo: `crates/teko-ledger/tests/ledger.rs`. Moeda: `crates/teko-coin/tests/coin.rs` (inclui proptest de conservação da oferta). Bens: nenhum ainda.
 
 ## Limites honestos
-Sem valor real, sem validade jurídica e sem integração com registros oficiais (por exemplo, cartórios).
+Sem valor real, sem validade jurídica e sem integração com registros oficiais (por exemplo, cartórios). Início da rede (quem valida no começo) está **pendente de decisão** (ADR-0021).

@@ -18,6 +18,8 @@ crates/teko-device-core/   3. máquina de estados, PIN, armazenamento (no_std-fr
 crates/teko-election/      (Fase 2) manifesto de eleição M-de-N + ciclo de vida (no_std)
 crates/teko-registration/  (Fase 2) assinatura cega RFC 9474 (registro anônimo de eleitor, ADR-0008)
 crates/teko-ballot-crypto/  (Fase 2) ElGamal exponencial de limiar P-256, provas 0/1 e soma, DKG Feldman (sem auditoria)
+crates/teko-ledger/        (Fase 2, M2) livro-razão genérico: Tx assinada, módulos, blocos atômicos, raiz de estado (ADR-0020)
+crates/teko-coin/          (Fase 2, M3) moeda de teto fixo: halving, taxa por byte, stake, slash, faucet devnet (ADR-0021)
 crates/teko-chain/         (Fase 2) rede federada PoA: perfis devnet/testnet (mainnet TRAVADA), blocos M-de-N, réplica verificada
 tools/teko-node/           (Fase 2) validador (gossip, rodízio, troca de turno) + cliente que não confia em nós
 crates/teko-bulletin/      (Fase 2) log Merkle append-only, provas, head assinado, leitor tolerante

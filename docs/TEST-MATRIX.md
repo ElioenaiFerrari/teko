@@ -167,6 +167,31 @@ Legenda: **P** = `proptest` (muitos casos), **U** = unitário, **E** = ponta a p
 | Cerimônia forjada ou chave que não é a da eleição não revela nada | election: `a_forged_ceremony_or_a_key_that_is_not_the_elections_reveals_nothing` |
 | **Devnet ponta a ponta:** cerimônia, eleição com a chave, reinício dos nós, cédulas cifradas sintéticas com provas reais, parciais invisíveis, 1 validador cai, fechamento, 2 de 3 revelam, **totais == votos plantados pelo simulador** | admin: `encrypted_ballots_stay_hidden_until_the_close_then_two_of_three_validators_reveal_the_exact_totals` |
 
+## Livro-razão genérico (`teko-ledger`, ADR-0020)
+
+| Invariante | Teste |
+|---|---|
+| Qualquer campo adulterado quebra a assinatura; cadeia errada, repetição e salto de nonce são recusados | ledger: `tampering_any_field_breaks_the_signature`, `rejects_wrong_chain_replay_and_nonce_gap` |
+| Bloco com uma transação inválida não muda nada (atômico) | ledger: `a_failing_transaction_rejects_the_whole_block_atomically` |
+| Módulos têm espaços de nomes separados; módulo 0 reservado e duplicado recusados | ledger: `modules_have_separate_namespaces`, `genesis_only_before_the_first_block_and_modules_are_validated` |
+| Réplicas que aplicam os mesmos blocos chegam à mesma raiz; a ordem das transações muda a raiz | ledger (proptest): `replicas_agree`, `order_of_transactions_matters_for_roots` |
+| Prova de inclusão do estado confere e recusa valor errado | ledger: `state_proofs_verify_and_reject_a_wrong_value` |
+| Codificação canônica; payload grande recusado; altura errada recusada | ledger: `canonical_bytes_roundtrip_and_reject_garbage`, `oversized_payload_is_rejected`, `wrong_height_is_rejected` |
+
+## Moeda (`teko-coin`, ADR-0021)
+
+| Invariante | Teste |
+|---|---|
+| Faucet e alocações só na devnet; gênese inválida recusada | coin: `genesis_rules` |
+| A recompensa cai pela metade e vai ao proponente; **o teto nunca é ultrapassado** | coin: `reward_halves_and_is_credited_to_the_proposer`, `the_cap_is_never_exceeded` |
+| Taxa por byte: abaixo do mínimo recusada; paga ao proponente; sem saldo recusada | coin: `fees_are_priced_per_byte_and_paid_to_the_proposer` |
+| Transferência não cria nem destrói moeda; saldo insuficiente e valor zero recusados | coin: `transfers_move_funds_and_refuse_overdraft_and_zero` |
+| Stake, desvinculação e resgate só após o prazo | coin: `stake_unbonding_and_claim` |
+| Equivocação (prova do BFT) queima parte do stake e da desvinculação, **uma vez**; prova inválida, de outra rede ou fora da janela é recusada | coin: `equivocation_burns_stake_and_unbonding_once`, `bad_or_stale_evidence_is_refused` |
+| Faucet limitada por intervalo e rotulada; desligada fora da devnet | coin: `faucet_is_rate_limited_labeled_and_devnet_only` |
+| **Conservação da oferta** com qualquer sequência de operações (criado − queimado = saldos + stake + desvinculação ≤ teto) | coin (proptest): `supply_is_conserved_and_capped` |
+| Réplicas com a moeda chegam à mesma raiz; payload malformado recusado | coin: `replicas_with_the_coin_agree_on_the_state_root`, `malformed_payloads_are_refused` |
+
 ## O que **não** está coberto por teste automático (honestidade)
 
 - **Cifra/provas:** sem vetores de teste de terceiros nem auditoria (implementação própria). Sem teste de tempo constante; sem fuzzing dos decodificadores. Sem teste de carga com milhares de cédulas por bloco.

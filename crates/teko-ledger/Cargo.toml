@@ -1,0 +1,19 @@
+[package]
+name = "teko-ledger"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+description = "Generic deterministic ledger: signed transactions, namespaced modules, atomic blocks and a Merkle state root"
+
+[dependencies]
+teko-crypto.workspace = true
+teko-bulletin.workspace = true
+prost.workspace = true
+
+[dev-dependencies]
+proptest.workspace = true
+rand.workspace = true
+
+[lints]
+workspace = true

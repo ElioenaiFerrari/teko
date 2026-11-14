@@ -1,9 +1,10 @@
 from lib import *
 
 def camadas_crates():
-    d = D("camadas-crates", 1100, 690, "Camadas dos crates", "Cada camada só depende das de baixo; detalhes no mapa de crates do README", "VISÃO GERAL")
+    d = D("camadas-crates", 1100, 790, "Camadas dos crates", "Cada camada só depende das de baixo; detalhes no mapa de crates do README", "VISÃO GERAL")
     camadas = [("Binários e apps", [("device-emulator", "onca"), ("issuer-cli", "plain"), ("election-admin-cli", "plain"), ("teko-node", "boto"), ("teko-suite", "link")]),
-               ("Rede e clientes", [("teko-chain", "boto"), ("teko-client", "link"), ("teko-transport", "plain"), ("teko-bft", "focal")]),
+               ("Rede e clientes", [("teko-chain", "boto"), ("teko-client", "link"), ("teko-transport", "plain")]),
+               ("Livro-razão e consenso", [("teko-bft", "focal"), ("teko-ledger", "focal"), ("teko-coin", "focal")]),
                ("Domínio", [("teko-election", "plain"), ("teko-device-core", "onca"), ("teko-registration", "plain"), ("teko-bulletin", "boto")]),
                ("Primitivas", [("teko-ballot-crypto", "plain"), ("teko-attestation", "plain")]),
                ("Fundação", [("teko-crypto", "focal"), ("teko-protocol", "plain")])]
@@ -91,7 +92,7 @@ def bft_certificado():
     return d
 
 def livro_dominios():
-    d = D("livro-dominios", 1100, 600, "Dois livros, os mesmos validadores", "Planejado: votos e economia separados, com a mesma rede de validadores", "PLANEJADO")
+    d = D("livro-dominios", 1100, 600, "Dois livros, os mesmos validadores", "Votos (pronto) e economia (moeda pronta; bens planejados), com os mesmos validadores", "LIVRO-RAZÃO")
     d.arrow([(500, 196), (500, 230), (410, 230), (410, 290)], "boto")
     d.arrow([(600, 196), (600, 230), (670, 230), (670, 290)], "default", dashed=True)
     d.arrow([(240, 328), (300, 328)], "link")
@@ -102,7 +103,7 @@ def livro_dominios():
     d.node(560, 290, 220, 76, "Livro de economia", "moeda + bens", "optional", "planejado")
     d.node(40, 290, 200, 76, "Emissor", "elegibilidade", "external")
     d.node(860, 290, 200, 76, "Órgão registrador", "M-de-N", "optional", "planejado")
-    d.node(560, 450, 220, 76, "Moeda", "teto fixo · halving", "optional", "planejado")
+    d.node(560, 450, 220, 76, "Moeda", "teko-coin · teto fixo", "ok", "implementado")
     d.legend([(BOTO, "implementado", False), (MUTED, "planejado", True), (LINK, "elegibilidade", False)])
     return d
 

@@ -1,0 +1,20 @@
+[package]
+name = "teko-coin"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+description = "Fixed-cap coin module for teko-ledger: halving block rewards, per-byte fees, stake with unbonding, equivocation slashing, labeled devnet faucet"
+
+[dependencies]
+teko-crypto.workspace = true
+teko-ledger.workspace = true
+teko-bft.workspace = true
+prost.workspace = true
+
+[dev-dependencies]
+proptest.workspace = true
+rand.workspace = true
+
+[lints]
+workspace = true

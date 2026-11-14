@@ -26,6 +26,8 @@ O computador (Suite) **nunca** vê chaves nem PIN. O dispositivo cifra e assina 
 | `teko-bulletin` | quadro de avisos: log Merkle append-only, provas e head assinado |
 | `teko-chain` | blocos M-de-N, perfis devnet/testnet (mainnet travada), réplica verificada |
 | `teko-bft` | consenso BFT estilo Tendermint ponderado por stake (ainda fora do nó) |
+| `teko-ledger` | livro-razão genérico: transações assinadas, módulos, blocos atômicos e raiz de estado (base da moeda e dos bens) |
+| `teko-coin` | moeda de teto fixo: recompensa com *halving*, taxa por byte, stake, penalidade por equivocação e faucet de teste (só devnet) |
 | `teko-transport` | trait de transporte e implementação local |
 | `teko-client` | cliente da Suite: onboarding, assinatura, eleição |
 | `device-emulator` | "tela e botões" do dispositivo, em processo separado |
@@ -60,7 +62,7 @@ Demo sem teclado (**nunca** em produção): `cargo run -p device-emulator --feat
 ## Estado atual
 - **Fase 1** (dispositivo, Suite, emissor): completa.
 - **Fase 2** (votação): eleição com vários pleitos e jurisdições, registro anônimo, **cédulas cifradas** até o fechamento, rede PoA federada, reemissão sem seed, resultados em gráficos.
-- **Em construção**: consenso BFT (`teko-bft`, núcleo pronto) e, depois, livro de economia (moeda e bens), ainda só **planejado**.
+- **Em construção** (programa do livro-razão): consenso BFT (`teko-bft`) e núcleo do livro (`teko-ledger`) e **moeda** (`teko-coin`) prontos; **bens**, carteira na Suite e votos sobre o BFT (M4 a M6) ainda só **planejados**.
 - **Fora de escopo**: hardware real, validade jurídica (ICP-Brasil), prova ZK de elegibilidade, explorador público (só placeholder).
 
 ## Documentação

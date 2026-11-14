@@ -18,11 +18,12 @@ teko-crypto.workspace = true
 teko-attestation.workspace = true
 teko-election.workspace = true
 teko-bulletin.workspace = true
+teko-registration.workspace = true
+issuer-cli.workspace = true
 prost.workspace = true
 thiserror = { workspace = true, features = ["std"] }
 
 [dev-dependencies]
-issuer-cli.workspace = true
 
 [lints]
 workspace = true

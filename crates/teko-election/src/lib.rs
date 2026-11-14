@@ -21,6 +21,7 @@ mod error;
 mod lifecycle;
 mod manifest;
 mod policy;
+mod registration;
 mod tally;
 mod text;
 
@@ -37,8 +38,12 @@ pub use manifest::{
     verify_manifest, verify_manifest_chain,
 };
 pub use policy::GovernancePolicy;
+pub use registration::{
+    RegistrationBlinder, RegistrationVerifier, SubmittedRegistration, registration_message,
+    registration_request_message,
+};
 pub use tally::{
     ContestTally, ElectionTally, LogEntry, LogKind, OptionTally, PublicView, Ranking, RejectCounts,
-    SubmittedBallot, Tallier, tally,
+    SubmittedBallot, Tallier, tally, tally_with,
 };
 pub use text::sanitize_text;

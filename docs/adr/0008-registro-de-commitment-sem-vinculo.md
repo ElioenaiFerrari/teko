@@ -1,6 +1,15 @@
 # ADR-0008 — Registro do commitment de eleitor sem vínculo com a identidade
 
-**Status:** Proposto · **PENDENTE** · **Nada implementado** além de `GetVoterCommitment` (stub SHA3, não Poseidon). Nenhum registro existe nesta fase. · **Criticidade: a mais alta da fase**
+**Status:** Aceito **provisoriamente** (2026-11-14): assinatura cega RFC 9474, uma chave RSA por pleito. **Implementado** (etapa 5). A decisão formal do dono do produto continua pendente (§10 #2 de `PHASE-2-VOTING.md`). · **Criticidade: a mais alta da fase**
+
+## Implementação (etapa 5)
+
+- **Esquema:** RSABSSA-SHA384-PSS-Randomized (RFC 9474), RSA-2048, **uma chave por pleito** (`Contest.registration_key`, SPKI no manifesto assinado M-de-N; vazio = pleito não exige registro). Um registro de um pleito não vale em outro.
+- **Implementação própria** em `crates/teko-registration`, sobre `rsa` 0.10.0, validada contra o **vetor oficial do Apêndice A.1 do RFC** (cada valor intermediário reproduzido). Motivo: `blind-rsa-signatures` 0.18 não compila com `rsa` 0.10.0 final, e a versão rc reabre o RUSTSEC-2023-0071. **Não foi auditada por terceiros.**
+- **O dispositivo calcula a mensagem cega** (`BeginRegistration`): um host malicioso não consegue registrar uma chave de sua escolha. O cegamento é **determinístico** a partir de um segredo do dispositivo (`tagged_hash(REGISTRATION_BLIND, voter_root, eleição, pleito)`), então não há estado pendente e uma resposta perdida se refaz com a mesma mensagem cega.
+- **Autoridade** (`issuer-cli`, `Issuer::sign_registration`) confere: credencial dela e não expirada; chave de identidade = a da credencial; prova de posse **deste pedido** (assina eleição, pleito e mensagem cega); domicílio cobre o pleito; fase `RegistrationOpen`/`VotingOpen`; **uma vez por (cidadão, pleito)** (repetir a MESMA mensagem cega é re-assinado). O livro da autoridade guarda `pleito, ID cívico, hash da mensagem cega`: nunca uma chave de eleitor.
+- **Registro público:** `(voter_key, token)` vai ao quadro (`EntryKind::REGISTRATION`) **sem nada do diálogo com a autoridade**. A apuração só conta a cédula cuja chave tem token válido **para aquele pleito**, registrado antes na ordem do log; sem verificador instalado, falha fechado.
+- **Ainda não coberto:** correlação por tempo/rede entre o pedido à autoridade e a publicação (o protótipo publica na hora, no mesmo processo); contagem pública de assinaturas emitidas vs. elegíveis (só existe o livro local); prova ZK de elegibilidade (opção C) e nullifier (ADR-0006/0013); revogação de `pk_v` em reemissão.
 
 > **Atualização (Fase 2, 2026-11-14):** o que se registra passa a ser `pk_v` (chave pública de eleitor **por eleição**), não `C = Poseidon(s)`. Recomendação atual: **assinatura cega RFC 9474 (opção A)** como linha de base, com **contagem pública de assinaturas emitidas vs. elegíveis** contra *stuffing*, e prova ZK de elegibilidade (opção C) como evolução. Mitigar correlação por tempo/rede com atraso aleatório e canais separados. Detalhes e tabela comparativa: `docs/PHASE-2-VOTING.md` §4.2.
 

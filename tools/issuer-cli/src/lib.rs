@@ -6,8 +6,10 @@
 //! - verifies a device's identity request (proof of possession + batch
 //!   attestation) and issues a citizen credential bound to its identity key.
 //!
-//! Voter commitments are NOT handled here: they travel through a separate
-//! channel with no link to the identity (ADR-0008, not implemented yet).
+//! - ANONYMOUS VOTER REGISTRATION (ADR-0008): per-contest RSA keys; blind-signs a
+//!   registration after checking identity, domicile, phase and once-per-citizen.
+//!   It sees WHO asks, never the voter key. The token it enables travels through
+//!   a separate channel (the board), never back through this exchange.
 
 use std::fs;
 use std::io::{self, Write};
@@ -29,10 +31,11 @@ use teko_crypto::{
 };
 use teko_election::{
     BALLOT_KIND_PUBLIC, Contest, Domicile, ElectionBundle, ElectionManifest, ElectionOption,
-    Office, Phase, ResultsVisibility, Schedule, Scope, Transition, contest_hash,
-    sign_manifest as sign_election_manifest, sign_transition,
+    Office, Phase, ResultsVisibility, Schedule, Scope, Transition, contest_hash, is_eligible,
+    registration_request_message, replay, sign_manifest as sign_election_manifest, sign_transition,
 };
-use teko_protocol::IdentityRequest;
+use teko_protocol::{IdentityRequest, RegistrationRequest};
+use teko_registration::IssuerKey;
 use thiserror::Error;
 
 pub const FW_SIGNERS: usize = 3;
@@ -55,6 +58,8 @@ pub enum IssuerError {
     InvalidSubject(String),
     #[error("pedido de emissão inválido: {0}")]
     InvalidRequest(String),
+    #[error("registro recusado: {0}")]
+    RegistrationRefused(String),
     #[error("arquivo corrompido: {0}")]
     Corrupt(String),
 }
@@ -263,25 +268,48 @@ impl Issuer {
         };
         let open = (now - 5 * DAY, now - DAY, now + 3 * DAY);
         let announced = (now + DAY, now + 3 * DAY, now + 4 * DAY);
+        // One RSA key PER CONTEST (reused if it exists), so a registration for one
+        // contest is worthless in any other.
+        let reg_key = |id: &str| -> Result<Vec<u8>, IssuerError> {
+            let key = match self.registration_key(id) {
+                Ok(k) => k,
+                Err(_) => {
+                    let k = IssuerKey::generate(2048)
+                        .map_err(|e| IssuerError::Corrupt(e.to_string()))?;
+                    let der = k
+                        .to_pkcs8_der()
+                        .map_err(|e| IssuerError::Corrupt(e.to_string()))?;
+                    fs::create_dir_all(self.dir.join("registration"))?;
+                    write_private(&self.reg_key_path(id), &hex::encode(&der))?;
+                    k
+                }
+            };
+            key.public_spki()
+                .map_err(|e| IssuerError::Corrupt(e.to_string()))
+        };
         let contest = |id: &str,
                        office: Office,
                        title: &str,
                        scope: Scope,
                        o: Vec<ElectionOption>,
-                       s: (u64, u64, u64)| Contest {
-            contest_id: id.to_string(),
-            office: office as i32,
-            title: title.to_string(),
-            scope: Some(scope),
-            options: o,
-            schedule: Some(Schedule {
-                registration_opens: s.0,
-                voting_opens: s.1,
-                voting_closes: s.2,
-            }),
+                       s: (u64, u64, u64)|
+         -> Result<Contest, IssuerError> {
+            Ok(Contest {
+                contest_id: id.to_string(),
+                office: office as i32,
+                title: title.to_string(),
+                scope: Some(scope),
+                options: o,
+                registration_key: reg_key(id)?,
+                schedule: Some(Schedule {
+                    registration_opens: s.0,
+                    voting_opens: s.1,
+                    voting_closes: s.2,
+                }),
+            })
         };
         let (y, m, d) = civil_from_days((now / 86_400) as i64);
-        let contests = vec![
+        let contests: Vec<Contest> = vec![
             contest(
                 "presidente",
                 Office::President,
@@ -391,7 +419,9 @@ impl Issuer {
                 opts(&["Candidata Jaguatirica", "Candidato Tucano"], 30),
                 announced,
             ),
-        ];
+        ]
+        .into_iter()
+        .collect::<Result<_, _>>()?;
         let mut manifest = ElectionManifest {
             format_version: 2,
             election_id: format!("eleicoes-exemplo-{y:04}{m:02}{d:02}"),
@@ -401,7 +431,7 @@ impl Issuer {
             registry_key: Vec::new(),
             revision: 1,
             signatures: Vec::new(),
-            results_visibility: ResultsVisibility::Live as i32,
+            results_visibility: ResultsVisibility::AfterClose as i32,
         };
         manifest.signatures = [0usize, 1]
             .iter()
@@ -462,6 +492,131 @@ impl Issuer {
             let _ = fs::remove_file(self.dir.join(stale));
         }
         Ok(())
+    }
+
+    fn reg_key_path(&self, contest_id: &str) -> PathBuf {
+        self.dir.join("registration").join(format!(
+            "{}.key",
+            contest_id.replace(|c: char| !c.is_ascii_alphanumeric() && c != '-', "_")
+        ))
+    }
+
+    /// SECRET key of one contest's registration authority.
+    pub fn registration_key(&self, contest_id: &str) -> Result<IssuerKey, IssuerError> {
+        let path = self.reg_key_path(contest_id);
+        let text = fs::read_to_string(&path).map_err(|_| IssuerError::NotInitialized)?;
+        let der = hex::decode(text.trim())
+            .map_err(|_| IssuerError::Corrupt(path.display().to_string()))?;
+        IssuerKey::from_pkcs8_der(&der)
+            .map_err(|_| IssuerError::Corrupt(path.display().to_string()))
+    }
+
+    /// Anonymous registration (ADR-0008). Checks, in order: the credential is ours
+    /// and unexpired, the identity key matches it and proves possession of THIS
+    /// request, the contest requires registration, the domicile covers it, the
+    /// contest is in `RegistrationOpen`/`VotingOpen`, and the citizen has not
+    /// registered here already (a RETRY of the same blinded message is re-signed).
+    /// Then blind-signs. Returns the blind signature.
+    pub fn sign_registration(
+        &self,
+        election_id: &str,
+        contest_id: &str,
+        request: &RegistrationRequest,
+        now: u64,
+    ) -> Result<Vec<u8>, IssuerError> {
+        let no = |m: &str| IssuerError::RegistrationRefused(m.to_string());
+        let trust = self.trust()?;
+        let issued = IssuedCredential::decode(request.credential.as_slice())
+            .map_err(|_| no("credencial malformada"))?;
+        credential::verify_issued(&trust.authority_root, &issued)
+            .map_err(|_| no("credencial não foi emitida por esta autoridade"))?;
+        let cred = issued
+            .credential
+            .as_ref()
+            .ok_or_else(|| no("credencial vazia"))?;
+        if cred.expires_at < now {
+            return Err(no("credencial expirada"));
+        }
+        if cred.subject_key != request.pk_identity {
+            return Err(no("chave de identidade não confere com a credencial"));
+        }
+        verify_tagged(
+            &request.pk_identity,
+            tags::REGISTRATION_REQUEST,
+            &registration_request_message(election_id, contest_id, &request.blind_message),
+            &request.pop_signature,
+        )
+        .map_err(|_| no("prova de posse inválida para este pedido"))?;
+
+        let bundle_bytes = fs::read(self.dir.join("election.bundle"))
+            .map_err(|_| no("nenhuma eleição configurada"))?;
+        let bundle = ElectionBundle::decode(bundle_bytes.as_slice())
+            .map_err(|_| IssuerError::Corrupt("election.bundle".into()))?;
+        let manifest = ElectionManifest::decode(bundle.manifest.as_slice())
+            .map_err(|_| IssuerError::Corrupt("election.bundle".into()))?;
+        let transitions = bundle
+            .transitions
+            .iter()
+            .map(|t| Transition::decode(t.as_slice()))
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|_| IssuerError::Corrupt("election.bundle".into()))?;
+        let policy =
+            teko_election::GovernancePolicy::new(trust.gov_signers.clone(), trust.gov_threshold)
+                .map_err(|_| IssuerError::Corrupt("trust.txt (governança)".into()))?;
+        let status = replay(&policy, &manifest, &transitions)
+            .map_err(|_| IssuerError::Corrupt("election.bundle (histórico)".into()))?;
+        if manifest.election_id != election_id {
+            return Err(no("outra eleição"));
+        }
+        let contest = manifest
+            .contest(contest_id)
+            .ok_or_else(|| no("pleito desconhecido"))?;
+        if contest.registration_key.is_empty() {
+            return Err(no("este pleito não exige registro"));
+        }
+        let domicile = Domicile::new(
+            &claim_value(&issued, "electoral_state")
+                .ok_or_else(|| no("sem domicílio eleitoral"))?,
+            &claim_value(&issued, "electoral_municipality")
+                .ok_or_else(|| no("sem domicílio eleitoral"))?,
+        )
+        .map_err(|_| no("domicílio eleitoral inválido"))?;
+        if !is_eligible(&domicile, &contest.scope.clone().unwrap_or_default()) {
+            return Err(no("fora do domicílio eleitoral deste pleito"));
+        }
+        if !matches!(
+            status.phase_of(contest_id),
+            Some(Phase::RegistrationOpen | Phase::VotingOpen)
+        ) {
+            return Err(no("registro não está aberto neste pleito"));
+        }
+
+        // Once per (citizen, contest). The ledger holds WHO registered, and a hash of
+        // the blinded message: nothing that could be matched to a voter key.
+        let who = civic_id(&request.pk_identity).unwrap_or_default();
+        let blinded = hex::encode(&tagged_hash(
+            "teko/v2/registration-ledger",
+            &[&request.blind_message],
+        ));
+        let ledger = self.dir.join("registrations.log");
+        let existing = fs::read_to_string(&ledger).unwrap_or_default();
+        let prefix = format!("{contest_id} {who} ");
+        if let Some(line) = existing.lines().find(|l| l.starts_with(&prefix)) {
+            if line[prefix.len()..].trim() != blinded {
+                return Err(no("este cidadão já se registrou neste pleito"));
+            }
+        } else {
+            let mut f = fs::OpenOptions::new()
+                .create(true)
+                .append(true)
+                .open(&ledger)?;
+            writeln!(f, "{prefix}{blinded}")?;
+        }
+        let sig = self
+            .registration_key(contest_id)?
+            .blind_sign(&request.blind_message)
+            .map_err(|_| no("mensagem cega inválida"))?;
+        Ok(sig.0)
     }
 
     /// Fresh random nonce the device must sign into its identity request.
@@ -536,6 +691,14 @@ impl Issuer {
         log.write_all(line.as_bytes())?;
         Ok(issued)
     }
+}
+
+fn claim_value(issued: &IssuedCredential, name: &str) -> Option<String> {
+    issued
+        .claims
+        .iter()
+        .find(|c| c.name == name)
+        .map(|c| c.value.clone())
 }
 
 /// Deterministic fake firmware image (simulation only).

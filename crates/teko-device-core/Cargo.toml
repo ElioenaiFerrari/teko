@@ -20,6 +20,7 @@ subtle.workspace = true
 rand_core.workspace = true
 
 [dev-dependencies]
+teko-registration.workspace = true
 proptest.workspace = true
 rand.workspace = true
 

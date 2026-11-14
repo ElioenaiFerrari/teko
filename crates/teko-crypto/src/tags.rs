@@ -26,3 +26,6 @@ pub const BULLETIN_HEAD: &str = "teko/v2/bulletin-head";
 pub const CONTEST: &str = "teko/v2/contest";
 pub const VOTER_KEY: &str = "teko/v2/voter-key";
 pub const BALLOT: &str = "teko/v2/ballot";
+pub const REGISTRATION: &str = "teko/v2/registration";
+pub const REGISTRATION_REQUEST: &str = "teko/v2/registration-request";
+pub const REGISTRATION_BLIND: &str = "teko/v2/registration-blind";

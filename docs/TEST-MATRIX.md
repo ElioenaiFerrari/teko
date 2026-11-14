@@ -103,7 +103,21 @@ Legenda: **P** = `proptest` (muitos casos), **U** = unitário, **E** = ponta a p
 | Publicar é idempotente; simulação gera eleitores novos a cada rodada e marca o quadro como simulado; streaming ao vivo | admin: `publish_is_idempotent_...`, `simulated_voters_are_counted_valid_ranked_and_labelled_as_simulated`, `live_simulation_streams_ballots_that_a_reader_can_follow` |
 | **Voto real do dispositivo (Presidente e Governador de SP, chaves distintas) entra no quadro e é contado uma vez** | e2e: `election_flow_president_for_all_governor_and_mayor_by_domicile` |
 
+## Fase 2, etapa 5: registro anônimo (ADR-0008)
+
+| Garantia | Teste |
+|---|---|
+| O RFC 9474 está certo: codificação PSS, mensagem cega, assinatura cega e token final reproduzem **byte a byte** o vetor A.1; adulterar qualquer parte é recusado | registration: `rfc9474.rs` (5 testes) |
+| Fluxo completo com RSA-2048 real; cegamento determinístico (retry seguro); token preso à mensagem, à chave e aos bytes; sementes diferentes dão valores cegos sem relação; resposta forjada nunca vira token | registration: `flow.rs` (3 testes) |
+| Pleito com chave de registro só conta chaves registradas; token de outro pleito/chave não vale; registro fora da fase ou repetido é recusado e contado; **sem verificador, falha fechado**; pleito sem chave não muda | election: `contests_requiring_registration_count_only_registered_keys`, `a_token_is_useless_for_another_key`, `without_a_verifier_registration_contests_fail_closed`, `contests_without_a_registration_key_are_unchanged` |
+| O dispositivo confirma na própria tela, recusa fora do domicílio/fase/sem chave de registro, não adivinha sem a matemática cega, e resposta inválida da autoridade nunca vira token | device-core: `registration::*` (5 testes) |
+| Quadro: só chaves registradas contam; token de um pleito não vale no outro; simulador registra de verdade (fluxo cego completo) | admin: `only_registered_keys_count_and_a_token_is_bound_to_its_contest`, `simulated_voters_...` |
+| **Ponta a ponta com dispositivo real:** a autoridade vê o cidadão e um valor cego (nunca a chave de eleitor; o livro dela não a contém), recusa pedido adulterado e pedido ligado a outro pleito, e o voto registrado é contado | e2e: `election_flow_president_for_all_governor_and_mayor_by_domicile` |
+
 ## O que **não** está coberto por teste automático (honestidade)
+
+- **Anonimato real do registro:** a propriedade de cegamento vem da matemática do RFC (vetor oficial) e o teste confere que o livro e o pedido não contêm a chave; **não há teste estatístico nem de canal/tempo**. No protótipo, autoridade e quadro rodam no mesmo processo.
+- **Implementação RFC 9474 própria sem auditoria independente.**
 
 - **Tempo constante da comparação do PIN:** o código usa `subtle::ConstantTimeEq`, mas não há teste de temporização.
 - **`--listen` só em loopback:** verificado manualmente (recusa `0.0.0.0`); falta teste automatizado.

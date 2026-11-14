@@ -16,8 +16,10 @@ use teko_bulletin::{BoardError, BulletinBoard, Entry, EntryKind, FileBoard, Rece
 use teko_crypto::{public_key_bytes, tagged_hash, voter::derive_voter_key};
 use teko_election::{
     BallotBody, ElectionBundle, ElectionTally, GovernancePolicy, LogEntry, LogKind, Phase,
-    SubmittedBallot, Tallier, contest_hash, sign_ballot, tally,
+    SubmittedBallot, SubmittedRegistration, Tallier, contest_hash, registration_message,
+    sign_ballot, tally_with,
 };
+use teko_registration::{BlindSignature, IssuerKey, RsaRegistration, blind, finalize};
 use thiserror::Error;
 
 pub const BOARD_FILE: &str = "board.log";
@@ -36,6 +38,8 @@ pub enum AdminError {
     Trust(String),
     #[error("não encontrei election.bundle (rode `make setup`)")]
     NoBundle,
+    #[error("simulação: {0}")]
+    Simulation(String),
     #[error("pacote de eleição malformado")]
     BadBundle,
     #[error("o quadro ainda não tem uma eleição publicada (rode `publish`)")]
@@ -47,6 +51,7 @@ pub fn log_kind(k: EntryKind) -> Option<LogKind> {
     match k {
         EntryKind::MANIFEST => Some(LogKind::Manifest),
         EntryKind::TRANSITION => Some(LogKind::Transition),
+        EntryKind::REGISTRATION => Some(LogKind::Registration),
         EntryKind::BALLOT => Some(LogKind::Ballot),
         _ => None,
     }
@@ -72,13 +77,21 @@ pub fn feed_new(tallier: &mut Tallier, board: &impl BulletinBoard) -> u64 {
     tallier.consumed()
 }
 
+/// A tallier that can check registration tokens (RFC 9474 blind RSA). Use this,
+/// never a bare `Tallier::new`: without a verifier every contest that requires
+/// registration rejects all ballots.
+pub fn new_tallier(policy: &GovernancePolicy) -> Tallier {
+    Tallier::new(policy.clone()).with_verifier(Box::new(RsaRegistration))
+}
+
 /// Full replay of a board.
 pub fn tally_board(policy: &GovernancePolicy, board: &impl BulletinBoard) -> ElectionTally {
     let entries: Vec<Entry> = (0..board.len())
         .filter_map(|i| board.entry(i).cloned())
         .collect();
-    tally(
+    tally_with(
         policy,
+        Box::new(RsaRegistration),
         entries.iter().filter_map(|e| {
             log_kind(e.kind).map(|kind| LogEntry {
                 kind,
@@ -143,6 +156,9 @@ struct SimContest {
     /// Cumulative popularity per option (skewed, shuffled per contest).
     cdf: Vec<f64>,
     weight: f64,
+    /// Authority key of this contest, when it requires registration. SIMULATION:
+    /// the simulator plays the authority for its synthetic voters.
+    registration: Option<(IssuerKey, Vec<u8>)>,
 }
 
 impl Admin {
@@ -233,6 +249,13 @@ impl Admin {
         Ok(board.append(Entry::new(EntryKind::BALLOT, ballot.encode_to_vec()))?)
     }
 
+    /// Appends one registration: `(voter_key, token)` and NOTHING from the
+    /// authority exchange (ADR-0008: separate channel, no link to the identity).
+    pub fn submit_registration(&self, r: &SubmittedRegistration) -> Result<Receipt, AdminError> {
+        let mut board = self.open_for_write()?;
+        Ok(board.append(Entry::new(EntryKind::REGISTRATION, r.encode_to_vec()))?)
+    }
+
     /// Full tally of the current board (tolerates a writer mid-append).
     pub fn tally(&self) -> Result<ElectionTally, AdminError> {
         let (board, _) = FileBoard::open_tolerant(self.board_path())?;
@@ -244,7 +267,7 @@ impl Admin {
 
     fn sim_contests(&self, seed: u64) -> Result<(String, Vec<SimContest>), AdminError> {
         let (board, _) = FileBoard::open_tolerant(self.board_path())?;
-        let mut t = Tallier::new(self.policy.clone());
+        let mut t = new_tallier(&self.policy);
         feed_new(&mut t, &board);
         let manifest = t.manifest().cloned().ok_or(AdminError::NotPublished)?;
         let snap = t.snapshot();
@@ -277,11 +300,20 @@ impl Admin {
                     acc
                 })
                 .collect();
+            let registration = if c.registration_key.is_empty() {
+                None
+            } else {
+                let key = issuer_cli::Issuer::open(&self.dir)
+                    .registration_key(&c.contest_id)
+                    .map_err(|e| AdminError::Simulation(e.to_string()))?;
+                Some((key, c.registration_key.clone()))
+            };
             out.push(SimContest {
                 id: c.contest_id.clone(),
                 hash: contest_hash(c).to_vec(),
                 cdf,
                 weight: synthetic_weight(&c.contest_id),
+                registration,
             });
         }
         Ok((manifest.election_id, out))
@@ -292,6 +324,47 @@ impl Admin {
             .ok()
             .and_then(|s| s.trim().parse().ok())
             .unwrap_or(0)
+    }
+
+    /// The board entries ONE synthetic voter produces: a registration (when the
+    /// contest requires it) and then the ballot. SIMULATION: the full blind-RSA
+    /// flow runs for real, with the simulator playing the authority.
+    fn voter_entries(
+        election: &str,
+        c: &SimContest,
+        voter: u64,
+        seed: u64,
+        rng: &mut Prng,
+    ) -> Vec<Entry> {
+        let Some(ballot) = Self::make_ballot(election, c, voter, seed, rng) else {
+            return Vec::new();
+        };
+        let mut out = Vec::with_capacity(2);
+        if let Some((authority, spki)) = &c.registration {
+            let msg = registration_message(election, &c.id, &ballot.voter_key);
+            let token = blind(spki, &msg)
+                .ok()
+                .and_then(|b| {
+                    let sig = authority.blind_sign(&b.blind_message).ok()?;
+                    finalize(spki, &b.state, &BlindSignature(sig.0), &msg).ok()
+                })
+                .map(|t| t.to_bytes());
+            let Some(token) = token else {
+                return Vec::new();
+            };
+            out.push(Entry::new(
+                EntryKind::REGISTRATION,
+                SubmittedRegistration {
+                    election_id: election.to_string(),
+                    contest_id: c.id.clone(),
+                    voter_key: ballot.voter_key.clone(),
+                    token,
+                }
+                .encode_to_vec(),
+            ));
+        }
+        out.push(Entry::new(EntryKind::BALLOT, ballot.encode_to_vec()));
+        out
     }
 
     fn make_ballot(
@@ -339,12 +412,13 @@ impl Admin {
             let n = (voters as f64 * c.weight).round() as u64;
             for i in 0..n {
                 let voter = start + (ci as u64) * 1_000_000_000 + i;
-                if let Some(b) = Self::make_ballot(&election, c, voter, seed, &mut rng) {
-                    entries.push(Entry::new(EntryKind::BALLOT, b.encode_to_vec()));
-                }
+                entries.extend(Self::voter_entries(&election, c, voter, seed, &mut rng));
             }
         }
-        let ballots = entries.len() as u64;
+        let ballots = entries
+            .iter()
+            .filter(|e| e.kind == EntryKind::BALLOT)
+            .count() as u64;
         if !entries.is_empty() {
             self.open_for_write()?.append_many(entries)?;
         }
@@ -392,11 +466,12 @@ impl Admin {
                 let Some(c) = c else { break };
                 counter += 1;
                 let voter = counter + 7_000_000_000;
-                if let Some(b) = Self::make_ballot(&election, c, voter, seed, &mut rng) {
-                    entries.push(Entry::new(EntryKind::BALLOT, b.encode_to_vec()));
-                }
+                entries.extend(Self::voter_entries(&election, c, voter, seed, &mut rng));
             }
-            sent += entries.len() as u64;
+            sent += entries
+                .iter()
+                .filter(|e| e.kind == EntryKind::BALLOT)
+                .count() as u64;
             if !entries.is_empty() {
                 self.open_for_write()?.append_many(entries)?;
             }

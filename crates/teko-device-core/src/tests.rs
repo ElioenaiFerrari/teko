@@ -862,6 +862,7 @@ fn contest(
         title: title.into(),
         scope: Some(scope),
         options: options(opts, first),
+        registration_key: Vec::new(),
         schedule: Some(Schedule {
             registration_opens: sched.0,
             voting_opens: sched.1,
@@ -1454,5 +1455,246 @@ fn wipe_needs_confirmation_and_destroys_everything() {
             nonce: vec![1; 32]
         })),
         Response::AttestationResponse(_)
+    ));
+}
+
+// ───────────────────────── anonymous registration (ADR-0008) ─────────────────────────
+
+mod registration {
+    use super::*;
+    use teko_election::{RegistrationVerifier, registration_message, registration_request_message};
+    use teko_registration::{IssuerKey, RsaRegistration};
+
+    struct Reg {
+        w: World,
+        hal: ScriptedHal,
+        dev: Dev,
+        authority: IssuerKey,
+        spki: Vec<u8>,
+    }
+
+    /// Governor SP (voter's state, registration open), Governor RJ (other state)
+    /// and Mayor (still only announced) all REQUIRE registration; President does not.
+    fn setup() -> Reg {
+        let (w, hal, dev, _) = ready();
+        let mut dev = dev.with_registration_blinder(Box::new(RsaRegistration));
+        let authority = IssuerKey::generate(2048).unwrap();
+        let spki = authority.public_spki().unwrap();
+        let mut m = election_manifest(&w);
+        for c in &mut m.contests {
+            if c.contest_id != "presidente" {
+                c.registration_key = spki.clone();
+            }
+        }
+        m.signatures = [0usize, 1]
+            .iter()
+            .map(|i| sign_election(&w.gov[*i], &m))
+            .collect();
+        let ts = history(&m, &w);
+        assert!(matches!(
+            dev.handle(load_req(&m, &ts)),
+            Response::ElectionLoaded(_)
+        ));
+        Reg {
+            w,
+            hal,
+            dev,
+            authority,
+            spki,
+        }
+    }
+
+    fn begin(dev: &mut Dev, contest: &str) -> Response {
+        dev.handle(Request::BeginRegistration(BeginRegistration {
+            election_id: "eleicoes-2026".into(),
+            contest_id: contest.into(),
+        }))
+    }
+
+    fn finish(dev: &mut Dev, contest: &str, sig: Vec<u8>) -> Response {
+        dev.handle(Request::FinishRegistration(FinishRegistration {
+            election_id: "eleicoes-2026".into(),
+            contest_id: contest.into(),
+            blind_signature: sig,
+        }))
+    }
+
+    #[test]
+    fn the_whole_flow_yields_a_token_for_the_devices_own_voter_key() {
+        let mut r = setup();
+        let Response::RegistrationRequest(req) = begin(&mut r.dev, "governador-sp") else {
+            panic!("no request")
+        };
+        // The authority learns WHO (identity key proves possession + domicile claims)...
+        let msg =
+            registration_request_message("eleicoes-2026", "governador-sp", &req.blind_message);
+        assert!(
+            verify_tagged(
+                &req.pk_identity,
+                tags::REGISTRATION_REQUEST,
+                &msg,
+                &req.pop_signature
+            )
+            .is_ok()
+        );
+        assert!(!req.credential.is_empty());
+        // ...and blind-signs without ever seeing the voter key.
+        let Response::VoterKey(vk) = voter_key(&mut r.dev, "governador-sp") else {
+            panic!()
+        };
+        assert!(
+            !req.blind_message
+                .windows(vk.voter_key.len())
+                .any(|w| w == vk.voter_key.as_slice())
+        );
+        let sig = r.authority.blind_sign(&req.blind_message).unwrap();
+        let Response::RegistrationToken(t) = finish(&mut r.dev, "governador-sp", sig.0) else {
+            panic!("no token")
+        };
+        assert_eq!(t.voter_key, vk.voter_key);
+        let m = registration_message("eleicoes-2026", "governador-sp", &t.voter_key);
+        assert!(RsaRegistration.verify(&r.spki, &m, &t.token));
+        // The token is useless in another contest.
+        let other = registration_message("eleicoes-2026", "governador-rj", &t.voter_key);
+        assert!(!RsaRegistration.verify(&r.spki, &other, &t.token));
+        // Retrying is harmless: same blinded message, same token (lost-reply safe).
+        let Response::RegistrationRequest(again) = begin(&mut r.dev, "governador-sp") else {
+            panic!()
+        };
+        assert_eq!(again.blind_message, req.blind_message);
+    }
+
+    #[test]
+    fn registration_is_confirmed_on_the_device_and_shows_the_contest() {
+        let mut r = setup();
+        r.hal.set_default_decision(Decision::Reject);
+        assert_eq!(
+            failure_code(&begin(&mut r.dev, "governador-sp")),
+            Some(ErrorCode::UserRejected)
+        );
+        r.hal.set_default_decision(Decision::Confirm);
+        r.hal.clear_screens();
+        assert!(matches!(
+            begin(&mut r.dev, "governador-sp"),
+            Response::RegistrationRequest(_)
+        ));
+        let shown = r
+            .hal
+            .screens()
+            .into_iter()
+            .find(|s| s.title.contains("REGISTRAR"))
+            .expect("confirmation screen was shown");
+        assert!(shown.lines.join(" ").contains("Governador de São Paulo"));
+    }
+
+    #[test]
+    fn it_is_refused_outside_domicile_phase_or_when_not_required() {
+        let mut r = setup();
+        assert_eq!(
+            failure_code(&begin(&mut r.dev, "governador-rj")),
+            Some(ErrorCode::NotEligible)
+        );
+        assert_eq!(
+            failure_code(&begin(&mut r.dev, "prefeito-3550308")),
+            Some(ErrorCode::WrongPhase),
+            "mayor only announced"
+        );
+        assert_eq!(
+            failure_code(&begin(&mut r.dev, "presidente")),
+            Some(ErrorCode::InvalidArgument),
+            "no registration key"
+        );
+        assert_eq!(
+            failure_code(&begin(&mut r.dev, "nao-existe")),
+            Some(ErrorCode::InvalidArgument)
+        );
+        let _ = &r.w;
+    }
+
+    #[test]
+    fn a_bad_authority_reply_never_becomes_a_token() {
+        let mut r = setup();
+        let Response::RegistrationRequest(req) = begin(&mut r.dev, "governador-sp") else {
+            panic!()
+        };
+        let other = IssuerKey::generate(2048).unwrap();
+        // (a different modulus may refuse a larger input outright: use junk then)
+        let forged = other
+            .blind_sign(&req.blind_message)
+            .map_or_else(|_| vec![0x55u8; 256], |s| s.0);
+        assert_eq!(
+            failure_code(&finish(&mut r.dev, "governador-sp", forged)),
+            Some(ErrorCode::BadSignature)
+        );
+        assert_eq!(
+            failure_code(&finish(&mut r.dev, "governador-sp", vec![1, 2, 3])),
+            Some(ErrorCode::BadSignature)
+        );
+    }
+
+    #[test]
+    fn without_the_blind_math_the_device_refuses_instead_of_guessing() {
+        let (w, hal, mut dev, _) = ready();
+        let _ = (&w, &hal);
+        let spki = IssuerKey::generate(2048).unwrap().public_spki().unwrap();
+        let mut m = election_manifest(&w);
+        for c in &mut m.contests {
+            c.registration_key = spki.clone();
+        }
+        m.signatures = [0usize, 1]
+            .iter()
+            .map(|i| sign_election(&w.gov[*i], &m))
+            .collect();
+        let ts = history(&m, &w);
+        assert!(matches!(
+            dev.handle(load_req(&m, &ts)),
+            Response::ElectionLoaded(_)
+        ));
+        assert_eq!(
+            failure_code(&begin(&mut dev, "governador-sp")),
+            Some(ErrorCode::NotImplemented)
+        );
+    }
+}
+
+#[test]
+fn the_device_itself_refuses_to_vote_after_the_last_allowed_moment() {
+    let (w, hal, mut dev, _) = ready();
+    loaded(&w, &mut dev);
+    // President closes at t=3000 s; no closing transition was published, yet:
+    hal.advance_ms(3_001_000);
+    // (the idle timeout locked the device meanwhile: unlock it again)
+    assert!(matches!(
+        dev.handle(Request::Unlock(Unlock {})),
+        Response::Unlocked(_)
+    ));
+    let before = hal.confirms_requested();
+    assert_eq!(
+        failure_code(&vote(&mut dev, "presidente", 0)),
+        Some(ErrorCode::WrongPhase)
+    );
+    assert_eq!(hal.confirms_requested(), before, "no prompt, no signature");
+}
+
+#[test]
+fn an_unreadable_stored_election_never_blocks_loading_a_good_one() {
+    use crate::hal::SecureStorage;
+    use prost::Message as _;
+    let (w, hal, dev, _) = ready();
+    drop(dev);
+    // Simulate an election stored by an older format that no longer verifies.
+    let mut p = crate::state::Persisted::decode(hal.raw_storage().unwrap().as_slice()).unwrap();
+    p.election = vec![1, 2, 3, 4];
+    assert!(hal.clone().store(&p.encode_to_vec()));
+    let mut dev = boot(&w, &hal, 8);
+    assert!(matches!(
+        dev.handle(Request::Unlock(Unlock {})),
+        Response::Unlocked(_)
+    ));
+    let m = election_manifest(&w);
+    let ts = history(&m, &w);
+    assert!(matches!(
+        dev.handle(load_req(&m, &ts)),
+        Response::ElectionLoaded(_)
     ));
 }

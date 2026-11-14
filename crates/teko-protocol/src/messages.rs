@@ -37,6 +37,7 @@ pub enum ButtonKind {
     LoadCredential = 11,
     LoadElection = 12,
     VoterKey = 13,
+    Register = 14,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, prost::Enumeration)]
@@ -164,6 +165,25 @@ pub struct GetVoterKey {
     pub election_id: String,
     #[prost(string, tag = "2")]
     pub contest_id: String,
+}
+/// Start an ANONYMOUS registration for one contest (ADR-0008). The device builds
+/// the blinded message itself, so the host cannot register a key of its choosing.
+#[derive(Clone, PartialEq, prost::Message)]
+pub struct BeginRegistration {
+    #[prost(string, tag = "1")]
+    pub election_id: String,
+    #[prost(string, tag = "2")]
+    pub contest_id: String,
+}
+/// Finish it: the authority's blind signature in, the unlinkable token out.
+#[derive(Clone, PartialEq, prost::Message)]
+pub struct FinishRegistration {
+    #[prost(string, tag = "1")]
+    pub election_id: String,
+    #[prost(string, tag = "2")]
+    pub contest_id: String,
+    #[prost(bytes = "vec", tag = "3")]
+    pub blind_signature: Vec<u8>,
 }
 /// Sign a ballot. The host names the option by INDEX only: the text shown on the
 /// device (candidate name, office, jurisdiction) comes from the verified manifest.
@@ -303,6 +323,9 @@ pub struct ContestInfo {
     pub voting_opens: u64,
     #[prost(uint64, tag = "10")]
     pub voting_closes: u64,
+    /// The contest requires an anonymous registration before voting (ADR-0008).
+    #[prost(bool, tag = "11")]
+    pub registration_required: bool,
 }
 #[derive(Clone, PartialEq, prost::Message)]
 pub struct ElectionLoaded {
@@ -316,6 +339,33 @@ pub struct ElectionLoaded {
     pub seq: u64,
     #[prost(message, repeated, tag = "5")]
     pub contests: Vec<ContestInfo>,
+}
+/// Sent to the registration authority. It identifies the CITIZEN (identity key,
+/// credential, proof of possession) but carries only a BLINDED message: the
+/// voter key is hidden from the authority. Nothing here is secret.
+#[derive(Clone, PartialEq, prost::Message)]
+pub struct RegistrationRequest {
+    #[prost(bytes = "vec", tag = "1")]
+    pub blind_message: Vec<u8>,
+    #[prost(bytes = "vec", tag = "2")]
+    pub pk_identity: Vec<u8>,
+    /// Identity-key signature over (election, contest, blind_message). The ids are
+    /// NOT repeated here: the authority verifies the signature against the ids it
+    /// is given, so a host that swaps them just breaks the signature.
+    #[prost(bytes = "vec", tag = "3")]
+    pub pop_signature: Vec<u8>,
+    /// Encoded `IssuedCredential` (carries the domicile claims).
+    #[prost(bytes = "vec", tag = "4")]
+    pub credential: Vec<u8>,
+}
+/// Public: publish `(voter_key, token)` on the registry/board, NEVER together
+/// with anything from the issuance exchange.
+#[derive(Clone, PartialEq, prost::Message)]
+pub struct RegistrationToken {
+    #[prost(bytes = "vec", tag = "1")]
+    pub voter_key: Vec<u8>,
+    #[prost(bytes = "vec", tag = "2")]
+    pub token: Vec<u8>,
 }
 /// PUBLIC key only.
 #[derive(Clone, PartialEq, prost::Message)]
@@ -426,6 +476,8 @@ define_messages! {
         FirmwareFinish(FirmwareFinish) = 0x0014,
         LoadElection(LoadElection) = 0x0015,
         GetElection(GetElection) = 0x0016,
+        BeginRegistration(BeginRegistration) = 0x0017,
+        FinishRegistration(FinishRegistration) = 0x0018,
     }
 }
 
@@ -451,6 +503,8 @@ define_messages! {
         Success(Success) = 0x0111,
         Failure(Failure) = 0x0112,
         ElectionLoaded(ElectionLoaded) = 0x0113,
+        RegistrationRequest(RegistrationRequest) = 0x0114,
+        RegistrationToken(RegistrationToken) = 0x0115,
     }
 }
 

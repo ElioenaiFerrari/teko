@@ -107,6 +107,11 @@ pub struct Contest {
     pub options: Vec<ElectionOption>,
     #[prost(message, optional, tag = "6")]
     pub schedule: Option<Schedule>,
+    /// RSA public key (SPKI DER) of the registration authority FOR THIS CONTEST
+    /// (ADR-0008). Empty = registration NOT required (prototype/open): any key
+    /// may vote. One key per contest, so a registration is never valid elsewhere.
+    #[prost(bytes = "vec", tag = "7")]
+    pub registration_key: Vec<u8>,
 }
 
 impl Contest {
@@ -200,6 +205,11 @@ fn validate_contest(c: &Contest) -> Result<(), ElectionError> {
         if dup {
             return Err(bad("duplicate option name or number"));
         }
+    }
+    if !c.registration_key.is_empty() && !(150..=1200).contains(&c.registration_key.len()) {
+        return Err(bad(
+            "registration_key must be an RSA SPKI (150..=1200 bytes)",
+        ));
     }
     let s = c.schedule.as_ref().ok_or(bad("contest schedule missing"))?;
     if !(s.registration_opens < s.voting_opens && s.voting_opens < s.voting_closes) {
@@ -395,6 +405,7 @@ pub(crate) mod fixtures {
                     title: "Presidente da República".into(),
                     scope: Some(Scope::national()),
                     options: options(&["Candidata Onça", "Candidato Boto", "Candidata Arara"], 10),
+                    registration_key: Vec::new(),
                     schedule: Some(Schedule {
                         registration_opens: 1_000,
                         voting_opens: 2_000,
@@ -407,6 +418,7 @@ pub(crate) mod fixtures {
                     title: "Governador do estado de São Paulo".into(),
                     scope: Some(Scope::state("SP")),
                     options: options(&["Candidato Guará", "Candidata Vitória-Régia"], 20),
+                    registration_key: Vec::new(),
                     schedule: Some(Schedule {
                         registration_opens: 1_500,
                         voting_opens: 2_500,
@@ -419,6 +431,7 @@ pub(crate) mod fixtures {
                     title: "Prefeito de São Paulo".into(),
                     scope: Some(Scope::municipality("3550308")),
                     options: options(&["Candidata Jaguatirica", "Candidato Tucano"], 30),
+                    registration_key: Vec::new(),
                     schedule: Some(Schedule {
                         registration_opens: 2_000,
                         voting_opens: 4_000,
@@ -546,6 +559,7 @@ mod tests {
             title: "Prefeito de São Paulo (2º turno)".into(),
             scope: Some(Scope::municipality("3550308")),
             options: prev.contests[2].options.clone(),
+            registration_key: Vec::new(),
             schedule: Some(Schedule {
                 registration_opens: 6_000,
                 voting_opens: 7_000,

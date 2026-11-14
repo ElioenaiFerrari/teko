@@ -4,13 +4,15 @@
 use std::fs;
 use std::time::Duration;
 
-use election_admin::{Admin, SIM_MARKER, feed_new, tally_board};
+use election_admin::{Admin, SIM_MARKER, feed_new, new_tallier, tally_board};
 use issuer_cli::{Issuer, scratch_dir};
 use teko_bulletin::{BulletinBoard, FileBoard};
 use teko_crypto::{public_key_bytes, voter::derive_voter_key};
 use teko_election::{
-    BallotBody, ElectionManifest, Phase, SubmittedBallot, Tallier, contest_hash, sign_ballot,
+    BallotBody, ElectionManifest, Phase, SubmittedBallot, SubmittedRegistration, contest_hash,
+    registration_message, sign_ballot,
 };
+use teko_registration::{BlindSignature, blind, finalize};
 
 fn setup(tag: &str) -> Admin {
     let issuer = Issuer::open(scratch_dir(tag));
@@ -43,6 +45,26 @@ fn real_ballot(m: &ElectionManifest, contest: &str, root: u8, option: u32) -> Su
         voter_key: public_key_bytes(&key),
         signature: sign_ballot(&key, &body),
     }
+}
+
+/// What the Suite does for a real voter: blind, authority signs, unblind, publish.
+fn register(admin: &Admin, m: &ElectionManifest, contest: &str, root: u8) {
+    let key = derive_voter_key(&[root; 32], &m.election_id, contest).unwrap();
+    let voter_key = public_key_bytes(&key);
+    let spki = m.contest(contest).unwrap().registration_key.clone();
+    let msg = registration_message(&m.election_id, contest, &voter_key);
+    let b = blind(&spki, &msg).unwrap();
+    let authority = Issuer::open(admin.dir()).registration_key(contest).unwrap();
+    let sig = authority.blind_sign(&b.blind_message).unwrap();
+    let token = finalize(&spki, &b.state, &BlindSignature(sig.0), &msg).unwrap();
+    admin
+        .submit_registration(&SubmittedRegistration {
+            election_id: m.election_id.clone(),
+            contest_id: contest.into(),
+            voter_key,
+            token: token.to_bytes(),
+        })
+        .unwrap();
 }
 
 #[test]
@@ -114,6 +136,7 @@ fn simulated_voters_are_counted_valid_ranked_and_labelled_as_simulated() {
 fn a_real_ballot_is_counted_once_and_rejected_outside_the_voting_phase() {
     let admin = setup("real");
     let m = manifest(&admin);
+    register(&admin, &m, "presidente", 1);
     admin
         .submit_ballot(&real_ballot(&m, "presidente", 1, 1))
         .unwrap();
@@ -133,14 +156,49 @@ fn a_real_ballot_is_counted_once_and_rejected_outside_the_voting_phase() {
 }
 
 #[test]
+fn only_registered_keys_count_and_a_token_is_bound_to_its_contest() {
+    let admin = setup("reg");
+    let m = manifest(&admin);
+    register(&admin, &m, "presidente", 1);
+    // voter 2 never registered:
+    admin
+        .submit_ballot(&real_ballot(&m, "presidente", 1, 0))
+        .unwrap();
+    admin
+        .submit_ballot(&real_ballot(&m, "presidente", 2, 0))
+        .unwrap();
+    // voter 3 registered for the GOVERNOR only; the token must not work for President
+    register(&admin, &m, "governador-sp", 3);
+    admin
+        .submit_ballot(&real_ballot(&m, "presidente", 3, 0))
+        .unwrap();
+    admin
+        .submit_ballot(&real_ballot(&m, "governador-sp", 3, 1))
+        .unwrap();
+    let t = admin.tally().unwrap();
+    let p = t.contest("presidente").unwrap();
+    assert_eq!(
+        (p.accepted, p.rejected.unregistered, p.registered),
+        (1, 2, 1)
+    );
+    let g = t.contest("governador-sp").unwrap();
+    assert_eq!(
+        (g.accepted, g.registered, g.registration_required),
+        (1, 1, true)
+    );
+    let _ = fs::remove_dir_all(admin.dir());
+}
+
+#[test]
 fn incremental_feeding_follows_the_board_and_equals_a_full_replay() {
     let admin = setup("inc");
     let m = manifest(&admin);
-    let mut t = Tallier::new(admin.policy().clone());
+    let mut t = new_tallier(admin.policy());
     let (board, _) = FileBoard::open_tolerant(admin.board_path()).unwrap();
     let consumed = feed_new(&mut t, &board);
     assert_eq!(consumed, board.len());
     for root in 1..=5u8 {
+        register(&admin, &m, "governador-sp", root);
         admin
             .submit_ballot(&real_ballot(&m, "governador-sp", root, u32::from(root) % 3))
             .unwrap();

@@ -53,7 +53,8 @@ fn start() -> Rig {
             trust2,
             Some(factory),
         )
-        .unwrap();
+        .unwrap()
+        .with_registration_blinder(Box::new(teko_registration::RsaRegistration));
         let _ = serve(&listener, &mut dev, &slot, |_| {});
     });
     Rig {
@@ -490,6 +491,69 @@ fn election_flow_president_for_all_governor_and_mayor_by_domicile() {
     // What the device signed is counted by the PUBLIC tally, once, from the board alone.
     let admin = election_admin::Admin::open(rig.issuer.dir()).unwrap();
     admin.publish().unwrap();
+
+    // ANONYMOUS REGISTRATION (ADR-0008): the device blinds its own voter key, the
+    // authority checks WHO (identity + domicile + phase) and blind-signs, the device
+    // unblinds, and `(voter_key, token)` goes to the board on its own channel.
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_secs();
+    for contest in ["presidente", "governador-sp"] {
+        let req = c.begin_registration(&eid, contest).unwrap();
+        let sig = rig
+            .issuer
+            .sign_registration(&eid, contest, &req, now)
+            .unwrap();
+        let token = c.finish_registration(&eid, contest, &sig).unwrap();
+        // The authority saw the citizen and a blinded value: never the voter key.
+        let key = teko_crypto::hex::decode(&c.voter_key(&eid, contest).unwrap()).unwrap();
+        assert_eq!(token.voter_key, key);
+        assert!(!req.blind_message.windows(key.len()).any(|w| w == &key[..]));
+        let ledger = fs::read_to_string(rig.issuer.dir().join("registrations.log")).unwrap();
+        assert!(ledger.contains(contest));
+        assert!(
+            !ledger.contains(&teko_crypto::hex::encode(&key)),
+            "the authority's ledger never holds a voter key"
+        );
+        // Asking again (lost reply) is answered; the SAME blinded message is re-signed.
+        let again = c.begin_registration(&eid, contest).unwrap();
+        assert_eq!(again.blind_message, req.blind_message);
+        assert!(
+            rig.issuer
+                .sign_registration(&eid, contest, &again, now)
+                .is_ok()
+        );
+        admin
+            .submit_registration(&teko_election::SubmittedRegistration {
+                election_id: eid.clone(),
+                contest_id: contest.to_string(),
+                voter_key: token.voter_key,
+                token: token.token,
+            })
+            .unwrap();
+    }
+    // The authority refuses what the device would also refuse, and tampered requests.
+    let mut forged = c.begin_registration(&eid, "presidente").unwrap();
+    forged.blind_message[3] ^= 1; // the host swaps the blinded message
+    assert!(
+        rig.issuer
+            .sign_registration(&eid, "presidente", &forged, now)
+            .is_err()
+    );
+    let req = c.begin_registration(&eid, "presidente").unwrap();
+    assert!(
+        rig.issuer
+            .sign_registration(&eid, "governador-rj", &req, now)
+            .is_err(),
+        "request is bound to its contest (and RJ is not my state)"
+    );
+    assert!(
+        rig.issuer
+            .sign_registration(&eid, "prefeito-3550308", &req, now)
+            .is_err(),
+        "bound to its contest; the mayor's registration is not open yet"
+    );
     for b in [&ballot, &gov] {
         admin
             .submit_ballot(&teko_election::SubmittedBallot {

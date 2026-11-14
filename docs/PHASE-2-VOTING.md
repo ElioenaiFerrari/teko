@@ -224,7 +224,7 @@ Invariantes novas a testar: a cédula só é assinada se o candidato exibido vei
 2. `teko-bulletin`: trait `BulletinBoard` + implementação em arquivo/memória (log Merkle, prova de inclusão).
 3. Dispositivo: `LoadElection`, `SignBallot` real (exibe nome do manifesto), chaves de eleitor por eleição. Emulador + testes de propriedade.
 4. `tools/election-admin-cli`: cria/assina manifestos e avança fases.
-5. Registro anônimo (opção escolhida em ADR-0008) + `issuer-cli` emitindo elegibilidade.
+5. ✅ Registro anônimo (ADR-0008: RFC 9474, chave RSA por pleito) + `issuer-cli` como autoridade de registro. Implementado; falta ZK/nullifier (etapa 6).
 6. Prova de voto: primeiro uma **prova simulada** com a mesma interface (para fechar o fluxo e a UI), depois o provador real (ADR-0013).
 7. Apuração aberta + verificação independente (`election-admin-cli verify`).
 8. Suite: explorador público com dados reais do quadro, fluxo de voto e conferência do recibo de inclusão.

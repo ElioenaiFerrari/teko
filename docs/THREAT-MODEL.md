@@ -146,6 +146,9 @@ Não implementadas; ver `PHASE-2-VOTING.md`. Cada linha vira teste quando houver
 | V16 | **Resultado parcial ao vivo** influencia eleitores e ajuda a monitorar/comprar voto | Política de visibilidade no manifesto (`turnout_only`/`after_close`); **só impõe com cédula cifrada** (ADR-0015/0018) | Com cédula pública, o log em claro é contável por qualquer um |
 | V17 | **Dados simulados** confundidos com resultado real | Marcador "DADOS SIMULADOS" inconfundível; simulador só no `election-admin-cli` | Usuário ignora o aviso |
 | V18 | **Quebra por UF de pleito nacional** reduz o anonimato ao estado | Não fazer no primeiro corte (decisão #15) | Eleitorado pequeno |
+| V20 | Host malicioso tenta registrar uma chave de eleitor escolhida por ele (ou trocar o pedido à autoridade) | O **dispositivo** calcula a mensagem cega e assina o pedido com a chave de identidade (eleição, pleito, valor cego); trocar qualquer coisa quebra a assinatura | Nenhum com dispositivo honesto | e2e (pedido adulterado recusado) |
+| V21 | Autoridade liga identidade a voto | Assinatura cega: ela só vê um valor cego; o token que publica o eleitor não aparece no diálogo; livro guarda hash do valor cego | Correlação por **tempo/rede** entre pedido e publicação (o protótipo publica na hora) | registration `flow.rs`; e2e |
+| V22 | Autoridade emite registros para não-eleitores (*stuffing*) | A apuração conta registrados por pleito; o livro local mostra emitidos por cidadão | Sem contagem pública emitidos vs. elegíveis | parcial |
 | V19 | Operador do quadro mostra logs diferentes a pessoas diferentes (*split view*) ou atrasa/omite cédulas | *Heads* assinados fixados e comparados por testemunhas; apuração refeita por terceiros | Sem testemunhas independentes hoje |
 | V15 | Mudança de domicílio perto da eleição (voto duplo em dois lugares ou perda do direito) | Data de corte e fotografia da lista (decisão #10) | Casos de borda |
 

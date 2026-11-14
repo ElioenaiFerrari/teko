@@ -177,6 +177,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d2f6c7dbe95a6ed67ad9f18e57daf93a2f034c524b99fd2b76d18fdfeb6660aa"
 dependencies = [
  "hybrid-array",
+ "zeroize",
 ]
 
 [[package]]
@@ -547,6 +548,7 @@ dependencies = [
  "hybrid-array",
  "num-traits",
  "rand_core",
+ "serdect",
  "subtle",
  "zeroize",
 ]
@@ -569,6 +571,17 @@ checksum = "ce6e4c961d6cd6c9a86db418387425e8bdeaf05b3c8bc1411e6dca4c252f1453"
 dependencies = [
  "getrandom 0.4.3",
  "hybrid-array",
+ "rand_core",
+]
+
+[[package]]
+name = "crypto-primes"
+version = "0.7.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "21f41f23de7d24cdbda7f0c4d9c0351f99a4ceb258ef30e5c1927af8987ffe5a"
+dependencies = [
+ "crypto-bigint",
+ "libm",
  "rand_core",
 ]
 
@@ -679,6 +692,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "6a996a108feb8b427a6e12fcf6af4aa83409b79d72c15337d7741368131ee004"
 dependencies = [
  "const-oid",
+ "pem-rfc7468",
  "zeroize",
 ]
 
@@ -724,6 +738,7 @@ dependencies = [
  "teko-crypto",
  "teko-device-core",
  "teko-protocol",
+ "teko-registration",
  "teko-transport",
  "zeroize",
 ]
@@ -748,6 +763,7 @@ dependencies = [
  "const-oid",
  "crypto-common 0.2.2",
  "ctutils",
+ "zeroize",
 ]
 
 [[package]]
@@ -914,6 +930,7 @@ dependencies = [
  "teko-bulletin",
  "teko-crypto",
  "teko-election",
+ "teko-registration",
  "thiserror 2.0.21",
 ]
 
@@ -1795,6 +1812,7 @@ dependencies = [
  "teko-crypto",
  "teko-election",
  "teko-protocol",
+ "teko-registration",
  "thiserror 2.0.21",
 ]
 
@@ -2032,6 +2050,12 @@ dependencies = [
  "cfg-if",
  "winapi",
 ]
+
+[[package]]
+name = "libm"
+version = "0.2.16"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b6d2cec3eae94f9f509c767b45932f1ada8350c4bdb85af2fcab4a3c14807981"
 
 [[package]]
 name = "libredox"
@@ -2513,6 +2537,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "pem-rfc7468"
+version = "1.0.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a6305423e0e7738146434843d1694d621cce767262b2a86910beab705e4493d9"
+dependencies = [
+ "base64ct",
+]
+
+[[package]]
 name = "percent-encoding"
 version = "2.3.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2629,6 +2662,16 @@ name = "pin-project-lite"
 version = "0.2.17"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "a89322df9ebe1c1578d689c92318e070967d1042b512afbe49518723f4e6d5cd"
+
+[[package]]
+name = "pkcs1"
+version = "0.8.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "6250dd7321adbe93d12b750aee0ced159fd13e77f625edcdf1cb6f83cd99f650"
+dependencies = [
+ "der",
+ "spki",
+]
 
 [[package]]
 name = "pkcs8"
@@ -3029,6 +3072,27 @@ dependencies = [
  "libc",
  "rtoolbox",
  "windows-sys 0.61.2",
+]
+
+[[package]]
+name = "rsa"
+version = "0.10.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "23e77fd77e0dea28b3011fd62d15445b7de7959333b0276d930e03be0f755699"
+dependencies = [
+ "const-oid",
+ "crypto-bigint",
+ "crypto-common 0.2.2",
+ "crypto-primes",
+ "digest 0.11.3",
+ "hmac",
+ "pkcs1",
+ "pkcs8",
+ "rand_core",
+ "sha2 0.11.1",
+ "signature",
+ "spki",
+ "zeroize",
 ]
 
 [[package]]
@@ -3990,6 +4054,7 @@ dependencies = [
  "teko-device-core",
  "teko-election",
  "teko-protocol",
+ "teko-registration",
  "teko-transport",
  "thiserror 2.0.21",
 ]
@@ -4023,6 +4088,7 @@ dependencies = [
  "teko-crypto",
  "teko-election",
  "teko-protocol",
+ "teko-registration",
  "zeroize",
 ]
 
@@ -4044,6 +4110,19 @@ version = "0.1.0"
 dependencies = [
  "proptest",
  "prost",
+ "thiserror 2.0.21",
+]
+
+[[package]]
+name = "teko-registration"
+version = "0.1.0"
+dependencies = [
+ "crypto-bigint",
+ "proptest",
+ "rand",
+ "rsa",
+ "sha2 0.11.1",
+ "teko-election",
  "thiserror 2.0.21",
 ]
 

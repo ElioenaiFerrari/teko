@@ -8,6 +8,7 @@
 //! well-formed key is accepted, and no ZK proof/nullifier (ADR-0013): the voter
 //! key itself de-duplicates. The counts are NOT trustworthy against fraud.
 
+use alloc::boxed::Box;
 use alloc::collections::BTreeSet;
 use alloc::string::String;
 use alloc::vec::Vec;
@@ -21,6 +22,7 @@ use crate::manifest::{
     ElectionManifest, Office, ResultsVisibility, contest_hash, validate_revision, verify_manifest,
 };
 use crate::policy::GovernancePolicy;
+use crate::registration::{RegistrationVerifier, SubmittedRegistration, registration_message};
 
 /// What a log entry carries. The bulletin board maps its own kind byte to this.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -28,6 +30,8 @@ pub enum LogKind {
     Manifest,
     Transition,
     Ballot,
+    /// Anonymous registration token (ADR-0008).
+    Registration,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -75,6 +79,8 @@ pub struct RejectCounts {
     pub unknown_option: u64,
     pub bad_signature: u64,
     pub duplicate: u64,
+    /// Contest requires registration and this voter key has none.
+    pub unregistered: u64,
 }
 
 impl RejectCounts {
@@ -86,6 +92,7 @@ impl RejectCounts {
             + self.unknown_option
             + self.bad_signature
             + self.duplicate
+            + self.unregistered
     }
 }
 
@@ -106,6 +113,12 @@ pub struct ContestTally {
     pub phase: Phase,
     /// Counted ballots.
     pub accepted: u64,
+    /// Valid registrations seen (0 when the contest does not require it).
+    pub registered: u64,
+    /// Registrations refused (bad token, wrong phase, repeated key...).
+    pub registrations_rejected: u64,
+    /// Whether this contest requires registration to vote.
+    pub registration_required: bool,
     pub rejected: RejectCounts,
     /// In ballot order (NOT ranked); see `ranked`.
     pub options: Vec<OptionTally>,
@@ -201,6 +214,8 @@ pub struct Tallier {
     status: Option<ElectionStatus>,
     contests: Vec<ContestTally>,
     seen: BTreeSet<(String, Vec<u8>)>,
+    registered: BTreeSet<(String, Vec<u8>)>,
+    verifier: Option<Box<dyn RegistrationVerifier>>,
     ignored: u64,
     orphans: u64,
     count: u64,
@@ -215,11 +230,20 @@ impl Tallier {
             status: None,
             contests: Vec::new(),
             seen: BTreeSet::new(),
+            registered: BTreeSet::new(),
+            verifier: None,
             ignored: 0,
             orphans: 0,
             count: 0,
             unattributed: RejectCounts::default(),
         }
+    }
+
+    /// Installs the registration-token checker. WITHOUT one, contests that
+    /// require registration reject every ballot (fail closed).
+    pub fn with_verifier(mut self, v: Box<dyn RegistrationVerifier>) -> Self {
+        self.verifier = Some(v);
+        self
     }
 
     /// Advances the cursor over a log entry this tally does not interpret.
@@ -245,6 +269,21 @@ impl Tallier {
         match e.kind {
             LogKind::Manifest => self.feed_manifest(e.payload),
             LogKind::Transition => self.feed_transition(e.payload),
+            LogKind::Registration => {
+                let (Some(m), Some(s)) = (self.manifest.as_ref(), self.status.as_ref()) else {
+                    self.orphans += 1;
+                    return;
+                };
+                count_registration(
+                    m,
+                    s,
+                    self.verifier.as_deref(),
+                    &mut self.contests,
+                    &mut self.registered,
+                    &mut self.unattributed,
+                    e.payload,
+                );
+            }
             LogKind::Ballot => {
                 let (Some(m), Some(s)) = (self.manifest.as_ref(), self.status.as_ref()) else {
                     self.orphans += 1;
@@ -255,6 +294,7 @@ impl Tallier {
                     s,
                     &mut self.contests,
                     &mut self.seen,
+                    &self.registered,
                     &mut self.unattributed,
                     e.payload,
                 );
@@ -289,6 +329,9 @@ impl Tallier {
                     scope: c.scope.clone().unwrap_or_default(),
                     phase: Phase::Draft,
                     accepted: 0,
+                    registered: 0,
+                    registrations_rejected: 0,
+                    registration_required: !c.registration_key.is_empty(),
                     rejected: RejectCounts::default(),
                     options: c
                         .options
@@ -366,11 +409,69 @@ pub fn tally<'a>(
     policy: &GovernancePolicy,
     entries: impl IntoIterator<Item = LogEntry<'a>>,
 ) -> ElectionTally {
-    let mut t = Tallier::new(policy.clone());
+    replay_all(Tallier::new(policy.clone()), entries)
+}
+
+/// Like `tally`, with a registration verifier (needed for contests that require one).
+pub fn tally_with<'a>(
+    policy: &GovernancePolicy,
+    verifier: Box<dyn RegistrationVerifier>,
+    entries: impl IntoIterator<Item = LogEntry<'a>>,
+) -> ElectionTally {
+    replay_all(
+        Tallier::new(policy.clone()).with_verifier(verifier),
+        entries,
+    )
+}
+
+fn replay_all<'a>(
+    mut t: Tallier,
+    entries: impl IntoIterator<Item = LogEntry<'a>>,
+) -> ElectionTally {
     for e in entries {
         t.feed(e);
     }
     t.snapshot()
+}
+
+fn count_registration(
+    m: &ElectionManifest,
+    s: &ElectionStatus,
+    verifier: Option<&dyn RegistrationVerifier>,
+    contests: &mut [ContestTally],
+    registered: &mut BTreeSet<(String, Vec<u8>)>,
+    unattributed: &mut RejectCounts,
+    payload: &[u8],
+) {
+    let Ok(r) = SubmittedRegistration::decode(payload) else {
+        unattributed.malformed += 1;
+        return;
+    };
+    let Some(contest) = m
+        .contest(&r.contest_id)
+        .filter(|_| r.election_id == m.election_id)
+    else {
+        unattributed.unknown_contest += 1;
+        return;
+    };
+    let Some(ct) = contests.iter_mut().find(|c| c.contest_id == r.contest_id) else {
+        unattributed.unknown_contest += 1;
+        return;
+    };
+    let open = matches!(
+        s.phase_of(&r.contest_id),
+        Some(Phase::RegistrationOpen | Phase::VotingOpen)
+    );
+    let msg = registration_message(&r.election_id, &r.contest_id, &r.voter_key);
+    let valid = open
+        && !contest.registration_key.is_empty()
+        && verifier.is_some_and(|v| v.verify(&contest.registration_key, &msg, &r.token));
+    // A key registers once: repeats are refused, not double-counted.
+    if !valid || !registered.insert((r.contest_id.clone(), r.voter_key.clone())) {
+        ct.registrations_rejected += 1;
+        return;
+    }
+    ct.registered += 1;
 }
 
 fn count_ballot(
@@ -378,6 +479,7 @@ fn count_ballot(
     s: &ElectionStatus,
     contests: &mut [ContestTally],
     seen: &mut BTreeSet<(String, Vec<u8>)>,
+    registered: &BTreeSet<(String, Vec<u8>)>,
     unattributed: &mut RejectCounts,
     payload: &[u8],
 ) {
@@ -410,6 +512,12 @@ fn count_ballot(
     };
     if verify_ballot(&b.voter_key, &b.body(), &b.signature).is_err() {
         ct.rejected.bad_signature += 1;
+        return;
+    }
+    if !contest.registration_key.is_empty()
+        && !registered.contains(&(b.contest_id.clone(), b.voter_key.clone()))
+    {
+        ct.rejected.unregistered += 1;
         return;
     }
     if !seen.insert((b.contest_id.clone(), b.voter_key.clone())) {
@@ -525,6 +633,120 @@ mod tests {
         let mut log: Log = vec![(LogKind::Manifest, m.encode_to_vec())];
         log.extend(steps(m, k, PRESIDENT, 0)[..3].iter().map(tr));
         log
+    }
+
+    /// Accepts token == message (stands in for the RSA check in unit tests).
+    struct Echo;
+    impl RegistrationVerifier for Echo {
+        fn verify(&self, _key: &[u8], message: &[u8], token: &[u8]) -> bool {
+            message == token
+        }
+    }
+
+    fn reg(m: &ElectionManifest, contest: &str, voter: u8) -> (LogKind, Vec<u8>) {
+        let key = derive_voter_key(&[voter; 32], &m.election_id, contest).unwrap();
+        let pk = teko_crypto::public_key_bytes(&key);
+        let r = SubmittedRegistration {
+            election_id: m.election_id.clone(),
+            contest_id: contest.into(),
+            token: registration_message(&m.election_id, contest, &pk),
+            voter_key: pk,
+        };
+        (LogKind::Registration, r.encode_to_vec())
+    }
+
+    fn registered_world(seed: u64) -> (Vec<SigningKey>, GovernancePolicy, ElectionManifest) {
+        let k = keys(3, seed);
+        let pol = policy(&k, 2);
+        let mut m = manifest();
+        for c in &mut m.contests {
+            if c.contest_id == PRESIDENT {
+                c.registration_key = vec![9; 300];
+            }
+        }
+        m.signatures = [0usize, 1]
+            .iter()
+            .map(|i| sign_manifest(&k[*i], &m))
+            .collect();
+        (k, pol, m)
+    }
+
+    fn run_reg(pol: &GovernancePolicy, log: &Log) -> ElectionTally {
+        tally_with(
+            pol,
+            Box::new(Echo),
+            log.iter().map(|(kind, p)| LogEntry {
+                kind: *kind,
+                payload: p.as_slice(),
+            }),
+        )
+    }
+
+    #[test]
+    fn contests_requiring_registration_count_only_registered_keys() {
+        let (k, pol, m) = registered_world(11);
+        let st = steps(&m, &k, PRESIDENT, 0);
+        let log: Log = vec![
+            (LogKind::Manifest, m.encode_to_vec()),
+            reg(&m, PRESIDENT, 1), // Draft: registration not open yet
+            tr(&st[0]),
+            tr(&st[1]),
+            reg(&m, PRESIDENT, 2), // RegistrationOpen: ok
+            reg(&m, PRESIDENT, 2), // same key again: refused
+            tr(&st[2]),
+            reg(&m, PRESIDENT, 3),  // still allowed while voting is open
+            b(&m, PRESIDENT, 1, 0), // never registered (its registration came too early)
+            b(&m, PRESIDENT, 2, 1),
+            b(&m, PRESIDENT, 3, 1),
+            b(&m, PRESIDENT, 4, 2), // never registered
+        ];
+        let c = run_reg(&pol, &log).contest(PRESIDENT).cloned().unwrap();
+        assert!(c.registration_required);
+        assert_eq!((c.registered, c.registrations_rejected), (2, 2));
+        assert_eq!((c.accepted, c.rejected.unregistered), (2, 2));
+        assert_eq!(c.options[1].votes, 2);
+    }
+
+    #[test]
+    fn a_token_is_useless_for_another_key() {
+        let (k, pol, m) = registered_world(12);
+        let st = steps(&m, &k, PRESIDENT, 0);
+        let (_, bytes) = reg(&m, PRESIDENT, 5);
+        let mut forged = SubmittedRegistration::decode(bytes.as_slice()).unwrap();
+        forged.voter_key[1] ^= 1; // token no longer matches this key
+        let log: Log = vec![
+            (LogKind::Manifest, m.encode_to_vec()),
+            tr(&st[0]),
+            tr(&st[1]),
+            (LogKind::Registration, forged.encode_to_vec()),
+        ];
+        let c = run_reg(&pol, &log).contest(PRESIDENT).cloned().unwrap();
+        assert_eq!((c.registered, c.registrations_rejected), (0, 1));
+    }
+
+    #[test]
+    fn without_a_verifier_registration_contests_fail_closed() {
+        let (k, pol, m) = registered_world(13);
+        let mut log = open_president(&m, &k);
+        log.push(reg(&m, PRESIDENT, 1));
+        log.push(b(&m, PRESIDENT, 1, 0));
+        let c = run(&pol, &log).contest(PRESIDENT).cloned().unwrap();
+        assert_eq!(
+            (c.registered, c.accepted, c.rejected.unregistered),
+            (0, 0, 1)
+        );
+    }
+
+    #[test]
+    fn contests_without_a_registration_key_are_unchanged() {
+        let (k, pol, m) = registered_world(14);
+        let st = steps(&m, &k, GOVERNOR_SP, 0);
+        let mut log: Log = vec![(LogKind::Manifest, m.encode_to_vec())];
+        log.extend(st[..3].iter().map(tr));
+        log.push(b(&m, GOVERNOR_SP, 1, 0));
+        let c = run(&pol, &log).contest(GOVERNOR_SP).cloned().unwrap();
+        assert!(!c.registration_required);
+        assert_eq!((c.accepted, c.rejected.unregistered), (1, 0));
     }
 
     #[test]
@@ -739,6 +961,9 @@ mod tests {
             scope: Scope::national(),
             phase: Phase::VotingOpen,
             accepted: 42,
+            registered: 0,
+            registrations_rejected: 0,
+            registration_required: false,
             rejected: RejectCounts::default(),
             options: vec![],
         };

@@ -156,7 +156,9 @@ Nota: após `CredenciaisEmitidas` o dispositivo entra em `Bloqueado` no próximo
 | Mensagem | Estados | Confirma? | Resposta / observação |
 |---|---|---|---|
 | `LoadElection{manifest, transitions[]}` | Desbloqueado + credencial | **Sim** | `ElectionLoaded{election_id, title, revision, seq, contests[]}`; verifica M-de-N e o histórico; recusa histórico mais antigo |
-| `GetElection{}` | Desbloqueado + credencial | Não | Mesmo resumo, da eleição armazenada (re-verificada) |
+| `GetElection{}` | Desbloqueado + credencial | Não | Mesmo resumo, da eleição armazenada (re-verificada); cada pleito traz `registration_required` |
+| `BeginRegistration{election_id, contest_id}` | Pronto + credencial; pleito com `registration_key`, em `RegistrationOpen`/`VotingOpen`, no domicílio | **Sim** ("REGISTRAR PARA VOTAR?") | `RegistrationRequest{blind_message, pk_identity, pop_signature, credential}`: o **dispositivo** calcula o valor cego da própria chave de eleitor (determinístico); a chave de eleitor **não** vai na resposta. Entregue à autoridade |
+| `FinishRegistration{election_id, contest_id, blind_signature}` | Idem | Não | `RegistrationToken{voter_key, token}`; **recusa** (`BadSignature`) resposta que não vira assinatura válida. Publique `(voter_key, token)` no quadro, nunca junto do diálogo com a autoridade |
 | `GetVoterKey{election_id, contest_id}` | Idem; registro aberto; elegível | **Sim** | `VoterKey{voter_key}`: chave **pública** do pleito |
 | `SignBallot{election_id, contest_id, option_index}` | Idem; votação aberta; elegível; ainda não votou | **Sim** | `BallotSignature{signature, voter_key}`; a tela mostra o nome vindo do manifesto |
 

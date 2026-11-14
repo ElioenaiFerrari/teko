@@ -555,6 +555,65 @@ impl<T: Transport> DeviceClient<T> {
         )
     }
 
+    /// Step 1 of the anonymous registration: the DEVICE builds the blinded message
+    /// (confirming on its screen). Hand the result to the registration authority.
+    pub fn begin_registration(
+        &mut self,
+        election_id: &str,
+        contest_id: &str,
+    ) -> Result<teko_protocol::RegistrationRequest, ClientError> {
+        self.expect(
+            Request::BeginRegistration(BeginRegistration {
+                election_id: election_id.to_string(),
+                contest_id: contest_id.to_string(),
+            }),
+            |r| match r {
+                Response::RegistrationRequest(q) => Ok(q),
+                o => Err(o),
+            },
+        )
+    }
+
+    /// Step 2: the authority's blind signature in, the unlinkable token out. The
+    /// token is CHECKED here against the contest's registration key too, so a bad
+    /// token is never published (it would only be rejected by the tally).
+    pub fn finish_registration(
+        &mut self,
+        election_id: &str,
+        contest_id: &str,
+        blind_signature: &[u8],
+    ) -> Result<teko_protocol::RegistrationToken, ClientError> {
+        let key = self
+            .election
+            .as_ref()
+            .and_then(|m| m.contest(contest_id))
+            .map(|c| c.registration_key.clone())
+            .ok_or_else(|| ClientError::Unexpected("carregue a eleição primeiro".into()))?;
+        let t = self.expect(
+            Request::FinishRegistration(FinishRegistration {
+                election_id: election_id.to_string(),
+                contest_id: contest_id.to_string(),
+                blind_signature: blind_signature.to_vec(),
+            }),
+            |r| match r {
+                Response::RegistrationToken(t) => Ok(t),
+                o => Err(o),
+            },
+        )?;
+        let msg = teko_election::registration_message(election_id, contest_id, &t.voter_key);
+        if !teko_election::RegistrationVerifier::verify(
+            &teko_registration::RsaRegistration,
+            &key,
+            &msg,
+            &t.token,
+        ) {
+            return Err(ClientError::Verification(
+                "o token de registro NÃO confere".into(),
+            ));
+        }
+        Ok(t)
+    }
+
     /// Asks the device to sign a ballot. The device shows the candidate NAME
     /// from its own verified copy of the manifest; we only send the INDEX.
     /// The signature is verified here before being handed to the user.
@@ -622,6 +681,7 @@ pub struct ContestSummary {
     pub voted: bool,
     pub voting_opens: u64,
     pub voting_closes: u64,
+    pub registration_required: bool,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -687,6 +747,7 @@ fn summarize(l: &ElectionLoaded) -> ElectionSummary {
                 voted: c.voted,
                 voting_opens: c.voting_opens,
                 voting_closes: c.voting_closes,
+                registration_required: c.registration_required,
             })
             .collect(),
     }

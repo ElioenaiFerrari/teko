@@ -14,7 +14,7 @@ Regra: decisões de produto/segurança só passam a `Aceito` pela aprovação do
 | [0005](0005-credenciais-sd-jwt-vs-bbs.md) | Credenciais: SD-JWT vs BBS+ | Proposto | PENDENTE |
 | [0006](0006-nullifier-plume-erc7524.md) | Nullifier determinístico (PLUME/ERC-7524) | Proposto | PENDENTE |
 | [0007](0007-atestacao-em-lote.md) | Atestação em lote | Proposto | PENDENTE |
-| [0008](0008-registro-de-commitment-sem-vinculo.md) | Registro de commitment sem vínculo com identidade | Proposto | PENDENTE |
+| [0008](0008-registro-de-commitment-sem-vinculo.md) | Registro de commitment sem vínculo com identidade | Aceito provisoriamente (RFC 9474, chave por pleito) | confirmar |
 | [0009](0009-interface-do-emulador.md) | Interface do emulador | Aceito (provisório) | Recomendação adotada |
 | [0010](0010-transporte-local.md) | Transporte local | Aceito (provisório) | Recomendação adotada |
 | [0011](0011-icp-brasil-fora-de-escopo.md) | ICP-Brasil fora de escopo | Proposto | Registro de escopo |

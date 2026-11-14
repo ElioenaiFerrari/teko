@@ -16,6 +16,7 @@ crates/teko-protocol/      1. mensagens, framing, versionamento
 crates/teko-crypto/        2. derivação, tagged hashes, ID Cívico (bech32m), stubs Poseidon/ZK/credenciais
 crates/teko-device-core/   3. máquina de estados, PIN, armazenamento (no_std-friendly)
 crates/teko-election/      (Fase 2) manifesto de eleição M-de-N + ciclo de vida (no_std)
+crates/teko-registration/  (Fase 2) assinatura cega RFC 9474 (registro anônimo de eleitor, ADR-0008)
 crates/teko-bulletin/      (Fase 2) log Merkle append-only, provas, head assinado, leitor tolerante
 tools/election-admin-cli/  (Fase 2) publicar no quadro, simular votos (rotulados), apurar
 tools/device-emulator/     4. "tela" e "botões" simulados, processo separado
@@ -75,7 +76,7 @@ make                                   # lista todos os atalhos (check, repro, r
 
 ## Próxima fase
 
-**Fase 2 (votação e governança eleitoral): especificação em [docs/PHASE-2-VOTING.md](docs/PHASE-2-VOTING.md), aguardando revisão. Etapas 1-4 implementadas (`teko-election` com vários pleitos/jurisdições e apuração incremental, `teko-bulletin`, dispositivo + Suite votando por pleito, quadro local, resultados ao vivo por cargo/estado; a cédula entra no quadro **local** do protótipo, sem registro anônimo nem ZK); o resto depende das decisões do §10.** Decisões pendentes listadas em §10 de lá. Achado importante: o stub `GetVoterCommitment` da Fase 1 será substituído por credencial de eleitor baseada em par de chaves.
+**Fase 2 (votação e governança eleitoral): especificação em [docs/PHASE-2-VOTING.md](docs/PHASE-2-VOTING.md), aguardando revisão. Etapas 1-5 implementadas (`teko-election` com vários pleitos/jurisdições e apuração incremental, `teko-bulletin`, dispositivo + Suite votando por pleito, quadro local, resultados ao vivo por cargo/estado, **registro anônimo por assinatura cega RFC 9474** em `teko-registration` com chave RSA por pleito, ADR-0008 aceito provisoriamente; a cédula entra no quadro **local** do protótipo, ainda sem prova ZK nem nullifier); o resto depende das decisões do §10.** Decisões pendentes listadas em §10 de lá. Achado importante: o stub `GetVoterCommitment` da Fase 1 será substituído por credencial de eleitor baseada em par de chaves.
 
 ## Fora de escopo nesta fase
 

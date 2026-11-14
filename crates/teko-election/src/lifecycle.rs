@@ -706,6 +706,7 @@ mod tests {
             title: "Prefeito de São Paulo (2º turno)".into(),
             scope: Some(crate::eligibility::Scope::municipality("3550308")),
             options: rev1.contests[2].options.clone(),
+            registration_key: Vec::new(),
             schedule: Some(crate::manifest::Schedule {
                 registration_opens: 6_000,
                 voting_opens: 7_000,

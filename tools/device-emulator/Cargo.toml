@@ -23,6 +23,7 @@ teko-protocol.workspace = true
 teko-transport.workspace = true
 teko-attestation.workspace = true
 teko-crypto.workspace = true
+teko-registration.workspace = true
 prost.workspace = true
 rand.workspace = true
 rand_core.workspace = true

@@ -120,7 +120,8 @@ fn run() -> Result<(), String> {
         ($hal:expr) => {{
             let hal = Linked::new($hal, slot.clone());
             let mut dev = Device::new(hal, UnwrapErr(SysRng), cfg, trust, factory)
-                .map_err(|e| e.to_string())?;
+                .map_err(|e| e.to_string())?
+                .with_registration_blinder(Box::new(teko_registration::RsaRegistration));
             serve(&listener, &mut dev, &slot, |m| println!("[usb] {m}")).map_err(|e| e.to_string())
         }};
     }

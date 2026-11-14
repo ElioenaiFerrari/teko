@@ -50,6 +50,7 @@ fn world() -> World {
                 title: "Presidente da República".into(),
                 scope: Some(Scope::national()),
                 options: options(&["Candidata Onça", "Candidato Boto"]),
+                registration_key: Vec::new(),
                 schedule: Some(Schedule {
                     registration_opens: 100,
                     voting_opens: 200,
@@ -62,6 +63,7 @@ fn world() -> World {
                 title: "Governador de São Paulo".into(),
                 scope: Some(Scope::state("SP")),
                 options: options(&["Candidato Guará", "Candidata Vitória-Régia"]),
+                registration_key: Vec::new(),
                 schedule: Some(Schedule {
                     registration_opens: 150,
                     voting_opens: 250,

@@ -6,6 +6,7 @@ members = [
   "crates/teko-attestation",
   "crates/teko-election",
   "crates/teko-bulletin",
+  "crates/teko-registration",
   "crates/teko-device-core",
   "crates/teko-transport",
   "crates/teko-client",
@@ -39,6 +40,7 @@ teko-device-core = { path = "crates/teko-device-core" }
 teko-attestation = { path = "crates/teko-attestation" }
 teko-election = { path = "crates/teko-election" }
 teko-bulletin = { path = "crates/teko-bulletin" }
+teko-registration = { path = "crates/teko-registration" }
 teko-transport = { path = "crates/teko-transport" }
 teko-client = { path = "crates/teko-client" }
 device-emulator = { path = "tools/device-emulator" }
@@ -54,3 +56,8 @@ panic = "deny"
 codegen-units = 1
 debug = false
 strip = true
+
+# Heavy crypto (RSA keygen, P-256) is unusably slow at opt-level 0: optimise
+# DEPENDENCIES even in dev/test builds (our own crates stay debuggable).
+[profile.dev.package."*"]
+opt-level = 2

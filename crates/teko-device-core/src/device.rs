@@ -1,3 +1,4 @@
+use alloc::boxed::Box;
 use alloc::format;
 use alloc::string::{String, ToString};
 use alloc::vec::Vec;
@@ -16,14 +17,16 @@ use teko_crypto::{
 };
 use teko_election::{
     BallotBody, Domicile, ElectionBundle, ElectionError, ElectionManifest, ElectionStatus,
-    GovernancePolicy, Phase, ScopeLevel, Transition, contest_hash, is_eligible, manifest_hash,
-    replay, sign_ballot, validate_revision,
+    GovernancePolicy, Phase, RegistrationBlinder, ScopeLevel, Transition, contest_hash,
+    is_eligible, manifest_hash, registration_message, registration_request_message, replay,
+    sign_ballot, validate_revision,
 };
 use teko_protocol::{
     AttestationResponse, AttributeProof, BallotSignature, ButtonKind, ButtonRequest, CivicId,
     ContestInfo, CredentialLoaded, DeviceState, DocumentSignature, ElectionLoaded, ErrorCode,
     Failure, Features, FirmwareStatus, IdentityRequest, PROTO_VERSION, PairwiseId, PinSet,
-    PinWrong, Predicate, PredicateKind, Request, Response, Success, Unlocked, VoterKey, WipeDone,
+    PinWrong, Predicate, PredicateKind, RegistrationRequest, RegistrationToken, Request, Response,
+    Success, Unlocked, VoterKey, WipeDone,
 };
 use zeroize::{Zeroize, Zeroizing};
 
@@ -68,6 +71,8 @@ pub struct Device<H: Hal, R: Rng + CryptoRng> {
     /// What the home screen last showed (state, unlocked, firmware): avoids
     /// redrawing on every passive host poll.
     shown_home: (i32, bool, u32),
+    /// Voter-side blind-signature math (std crate behind a trait; ADR-0008).
+    blinder: Option<Box<dyn RegistrationBlinder>>,
 }
 
 impl<H: Hal, R: Rng + CryptoRng> Drop for Device<H, R> {
@@ -80,6 +85,12 @@ impl<H: Hal, R: Rng + CryptoRng> Drop for Device<H, R> {
 }
 
 impl<H: Hal, R: Rng + CryptoRng> Device<H, R> {
+    /// Installs the registration math. Without it the device refuses to register.
+    pub fn with_registration_blinder(mut self, b: Box<dyn RegistrationBlinder>) -> Self {
+        self.blinder = Some(b);
+        self
+    }
+
     /// Boots the device. Loads persisted state or starts `Virgin`
     /// (with the factory attestation material, if provided).
     pub fn new(
@@ -111,6 +122,7 @@ impl<H: Hal, R: Rng + CryptoRng> Device<H, R> {
             last_activity_ms: now,
             upload: None,
             shown_home: (-1, false, 0),
+            blinder: None,
         };
         let _ = dev.save();
         dev.show_home();
@@ -381,6 +393,10 @@ impl<H: Hal, R: Rng + CryptoRng> Device<H, R> {
             Request::LoadElection(m) => self.load_election(&m.manifest, &m.transitions),
             Request::GetElection(_) => self.get_election(),
             Request::GetVoterKey(m) => self.get_voter_key(&m.election_id, &m.contest_id),
+            Request::BeginRegistration(m) => self.begin_registration(&m.election_id, &m.contest_id),
+            Request::FinishRegistration(m) => {
+                self.finish_registration(&m.election_id, &m.contest_id, &m.blind_signature)
+            }
             Request::SignBallot(m) => {
                 self.sign_ballot(&m.election_id, &m.contest_id, m.option_index)
             }
@@ -843,6 +859,7 @@ impl<H: Hal, R: Rng + CryptoRng> Device<H, R> {
                         .any(|h| h.as_slice() == contest_hash(c).as_slice()),
                     voting_opens: sched.voting_opens,
                     voting_closes: sched.voting_closes,
+                    registration_required: !c.registration_key.is_empty(),
                 }
             })
             .collect()
@@ -864,9 +881,15 @@ impl<H: Hal, R: Rng + CryptoRng> Device<H, R> {
 
         // Anti-rollback: never accept an OLDER view of an election we already
         // know (e.g. a replayed history in which a closed contest is still open).
-        if !self.p.election.is_empty() {
-            let (old, old_status) = self.stored_election()?;
-            if old.election_id == manifest.election_id {
+        // A stored election that no longer verifies (e.g. written by an older
+        // format) cannot be compared against, and must never block loading a good one.
+        let known = (!self.p.election.is_empty())
+            .then(|| self.stored_election().ok())
+            .flatten();
+        if let Some((old, old_status)) = known
+            && old.election_id == manifest.election_id
+        {
+            {
                 if manifest.revision < old.revision || status.seq < old_status.seq {
                     return Err(fail(
                         ErrorCode::Downgrade,
@@ -980,6 +1003,144 @@ impl<H: Hal, R: Rng + CryptoRng> Device<H, R> {
         }))
     }
 
+    /// The deadline is enforced by the DEVICE too, not only by governance: after
+    /// `voting_closes` it neither registers nor signs, even if no closing
+    /// transition has been published yet.
+    fn past_deadline(&self, contest: &teko_election::Contest) -> bool {
+        let closes = contest
+            .schedule
+            .as_ref()
+            .map_or(u64::MAX, |s| s.voting_closes);
+        self.hal.now_ms() / 1000 > closes
+    }
+
+    /// Shared checks for both registration steps.
+    fn registration_context(
+        &self,
+        election_id: &str,
+        contest_id: &str,
+    ) -> Result<teko_election::Contest, Failure> {
+        self.require_ready()?;
+        let (manifest, status) = self.stored_election()?;
+        if manifest.election_id != election_id {
+            return Err(fail(ErrorCode::InvalidArgument, "outra eleição"));
+        }
+        let contest = manifest
+            .contest(contest_id)
+            .cloned()
+            .ok_or_else(|| fail(ErrorCode::InvalidArgument, "pleito desconhecido"))?;
+        let scope = contest.scope.clone().unwrap_or_default();
+        if !self.eligible_for(&scope) {
+            return Err(fail(
+                ErrorCode::NotEligible,
+                "fora do seu domicílio eleitoral",
+            ));
+        }
+        if contest.registration_key.is_empty() {
+            return Err(fail(
+                ErrorCode::InvalidArgument,
+                "este pleito não exige registro",
+            ));
+        }
+        if self.past_deadline(&contest) {
+            return Err(fail(ErrorCode::WrongPhase, "prazo encerrado neste pleito"));
+        }
+        let phase = status.phase_of(contest_id).unwrap_or(Phase::Draft);
+        if !phase.can_register() {
+            return Err(fail(
+                ErrorCode::WrongPhase,
+                "registro não está aberto neste pleito",
+            ));
+        }
+        Ok(contest)
+    }
+
+    /// The blinding seed: secret, per contest, unrelated to the identity key.
+    fn blind_seed(
+        &self,
+        election_id: &str,
+        contest_id: &str,
+    ) -> Result<Zeroizing<[u8; 32]>, Failure> {
+        let root = self.voter_root()?;
+        Ok(Zeroizing::new(teko_crypto::tagged_hash(
+            tags::REGISTRATION_BLIND,
+            &[
+                root.as_slice(),
+                election_id.as_bytes(),
+                contest_id.as_bytes(),
+            ],
+        )))
+    }
+
+    fn begin_registration(
+        &mut self,
+        election_id: &str,
+        contest_id: &str,
+    ) -> Result<Response, Failure> {
+        let contest = self.registration_context(election_id, contest_id)?;
+        let scope = contest.scope.clone().unwrap_or_default();
+        let mut lines = Vec::from([String::from("Pleito:")]);
+        lines.extend(wrap(&contest.title, 28));
+        lines.push(jurisdiction_label(&scope));
+        lines.push(String::from("A autoridade saberá QUEM você"));
+        lines.push(String::from("é, mas NÃO a sua chave de"));
+        lines.push(String::from("eleitor (assinatura cega)."));
+        self.confirm(
+            ButtonKind::Register,
+            Screen::new("REGISTRAR PARA VOTAR?", lines),
+        )?;
+
+        let root = self.voter_root()?;
+        let key = voter::derive_voter_key(&root, election_id, contest_id)
+            .map_err(|_| fail(ErrorCode::Internal, "chave de eleitor"))?;
+        let message = registration_message(election_id, contest_id, &public_key_bytes(&key));
+        let seed = self.blind_seed(election_id, contest_id)?;
+        let blind_message = self
+            .blinder
+            .as_ref()
+            .ok_or_else(|| fail(ErrorCode::NotImplemented, "registro anônimo não suportado"))?
+            .blind(&contest.registration_key, &message, &seed)
+            .ok_or_else(|| fail(ErrorCode::Internal, "cegamento falhou"))?;
+        let id = self.identity_key()?;
+        let pop_signature = sign_tagged(
+            &id,
+            tags::REGISTRATION_REQUEST,
+            &registration_request_message(election_id, contest_id, &blind_message),
+        );
+        Ok(Response::RegistrationRequest(RegistrationRequest {
+            blind_message,
+            pk_identity: public_key_bytes(&id),
+            pop_signature,
+            credential: self.p.credential.clone(),
+        }))
+    }
+
+    fn finish_registration(
+        &mut self,
+        election_id: &str,
+        contest_id: &str,
+        blind_signature: &[u8],
+    ) -> Result<Response, Failure> {
+        let contest = self.registration_context(election_id, contest_id)?;
+        let root = self.voter_root()?;
+        let key = voter::derive_voter_key(&root, election_id, contest_id)
+            .map_err(|_| fail(ErrorCode::Internal, "chave de eleitor"))?;
+        let voter_key = public_key_bytes(&key);
+        let message = registration_message(election_id, contest_id, &voter_key);
+        let seed = self.blind_seed(election_id, contest_id)?;
+        // `unblind` CHECKS the signature: a bad reply never becomes a token.
+        let token = self
+            .blinder
+            .as_ref()
+            .ok_or_else(|| fail(ErrorCode::NotImplemented, "registro anônimo não suportado"))?
+            .unblind(&contest.registration_key, &message, &seed, blind_signature)
+            .ok_or_else(|| fail(ErrorCode::BadSignature, "resposta da autoridade inválida"))?;
+        Ok(Response::RegistrationToken(RegistrationToken {
+            voter_key,
+            token,
+        }))
+    }
+
     fn sign_ballot(
         &mut self,
         election_id: &str,
@@ -1000,6 +1161,9 @@ impl<H: Hal, R: Rng + CryptoRng> Device<H, R> {
                 ErrorCode::NotEligible,
                 "fora do seu domicílio eleitoral",
             ));
+        }
+        if self.past_deadline(contest) {
+            return Err(fail(ErrorCode::WrongPhase, "prazo encerrado neste pleito"));
         }
         let phase = status.phase_of(contest_id).unwrap_or(Phase::Draft);
         if !phase.can_vote() {

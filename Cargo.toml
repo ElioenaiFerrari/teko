@@ -4,6 +4,8 @@ members = [
   "crates/teko-protocol",
   "crates/teko-crypto",
   "crates/teko-attestation",
+  "crates/teko-election",
+  "crates/teko-bulletin",
   "crates/teko-device-core",
   "crates/teko-transport",
   "crates/teko-client",
@@ -34,6 +36,8 @@ teko-protocol = { path = "crates/teko-protocol" }
 teko-crypto = { path = "crates/teko-crypto" }
 teko-device-core = { path = "crates/teko-device-core" }
 teko-attestation = { path = "crates/teko-attestation" }
+teko-election = { path = "crates/teko-election" }
+teko-bulletin = { path = "crates/teko-bulletin" }
 teko-transport = { path = "crates/teko-transport" }
 teko-client = { path = "crates/teko-client" }
 device-emulator = { path = "tools/device-emulator" }

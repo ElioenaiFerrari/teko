@@ -3,9 +3,7 @@ use alloc::vec::Vec;
 
 use prost::Message;
 use sha3::{Digest, Sha3_256};
-use teko_crypto::{
-    SigningKey, hex, public_key_bytes, sign_tagged, tagged_hash, tags, verify_tagged,
-};
+use teko_crypto::{SigningKey, hex, public_key_bytes, sign_tagged, tagged_hash, tags};
 use thiserror::Error;
 
 use crate::trust::TrustPolicy;
@@ -59,18 +57,12 @@ pub fn sign_manifest(key: &SigningKey, manifest: &FirmwareManifest) -> SignerSig
 
 /// Number of DISTINCT policy signers with a valid signature on `manifest`.
 pub fn count_valid_signers(policy: &TrustPolicy, manifest: &FirmwareManifest) -> usize {
-    let msg = signing_bytes(manifest);
-    let mut counted: Vec<&[u8]> = Vec::new();
-    for s in &manifest.signatures {
-        let known = policy.fw_signers.iter().any(|k| k == &s.signer);
-        if known
-            && !counted.contains(&s.signer.as_slice())
-            && verify_tagged(&s.signer, tags::FW_MANIFEST, &msg, &s.signature).is_ok()
-        {
-            counted.push(&s.signer);
-        }
-    }
-    counted.len()
+    crate::multisig::count_distinct_valid(
+        &policy.fw_signers,
+        tags::FW_MANIFEST,
+        &signing_bytes(manifest),
+        &manifest.signatures,
+    )
 }
 
 /// Bootloader check. M distinct, known signers must have valid signatures
@@ -83,21 +75,10 @@ pub fn verify_manifest(
     if manifest.hash.len() != 32 {
         return Err(FirmwareError::Malformed);
     }
-    let msg = signing_bytes(manifest);
-    let mut counted: Vec<&[u8]> = Vec::new();
-    for s in &manifest.signatures {
-        let known = policy.fw_signers.iter().any(|k| k == &s.signer);
-        let already = counted.contains(&s.signer.as_slice());
-        if known
-            && !already
-            && verify_tagged(&s.signer, tags::FW_MANIFEST, &msg, &s.signature).is_ok()
-        {
-            counted.push(&s.signer);
-        }
-    }
-    if counted.len() < policy.fw_threshold {
+    let valid = count_valid_signers(policy, manifest);
+    if valid < policy.fw_threshold {
         return Err(FirmwareError::InsufficientSignatures {
-            valid: counted.len(),
+            valid,
             required: policy.fw_threshold,
         });
     }

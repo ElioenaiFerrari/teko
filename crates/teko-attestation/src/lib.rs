@@ -8,6 +8,7 @@ extern crate alloc;
 
 mod attestation;
 mod firmware;
+pub mod multisig;
 mod trust;
 
 pub use attestation::{

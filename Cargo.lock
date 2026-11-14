@@ -3949,6 +3949,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "teko-bulletin"
+version = "0.1.0"
+dependencies = [
+ "proptest",
+ "prost",
+ "rand",
+ "teko-crypto",
+ "teko-election",
+ "thiserror 2.0.21",
+]
+
+[[package]]
 name = "teko-client"
 version = "0.1.0"
 dependencies = [
@@ -3995,6 +4007,18 @@ dependencies = [
  "teko-crypto",
  "teko-protocol",
  "zeroize",
+]
+
+[[package]]
+name = "teko-election"
+version = "0.1.0"
+dependencies = [
+ "proptest",
+ "prost",
+ "rand",
+ "teko-attestation",
+ "teko-crypto",
+ "thiserror 2.0.21",
 ]
 
 [[package]]

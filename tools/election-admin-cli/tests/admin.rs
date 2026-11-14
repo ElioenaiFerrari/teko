@@ -257,3 +257,41 @@ fn tallying_while_a_writer_is_mid_append_still_works() {
     );
     let _ = fs::remove_dir_all(admin.dir());
 }
+
+#[test]
+fn at_the_deadline_governance_closes_the_contest_and_the_log_locks_the_vote() {
+    let admin = setup("close");
+    let m = manifest(&admin);
+    register(&admin, &m, "presidente", 1);
+    register(&admin, &m, "presidente", 2);
+    admin
+        .submit_ballot(&real_ballot(&m, "presidente", 1, 1))
+        .unwrap();
+    let closes = m
+        .contest("presidente")
+        .unwrap()
+        .schedule
+        .clone()
+        .unwrap()
+        .voting_closes;
+
+    // Before the deadline nothing closes.
+    assert_eq!(admin.close_due(closes - 1).unwrap(), 0);
+    // After it, every open contest is closed (7 contests: 6 open + the mayor only announced).
+    assert_eq!(admin.close_due(closes + 1).unwrap(), 6);
+    assert_eq!(admin.close_due(closes + 2).unwrap(), 0, "idempotent");
+
+    // A ballot appended AFTER the closing is refused by the public tally.
+    admin
+        .submit_ballot(&real_ballot(&m, "presidente", 2, 0))
+        .unwrap();
+    let t = admin.tally().unwrap();
+    let p = t.contest("presidente").unwrap();
+    assert_eq!(p.phase, Phase::VotingClosed);
+    assert_eq!((p.accepted, p.rejected.not_open), (1, 1));
+    assert_eq!(
+        t.ignored_governance, 0,
+        "the closing is a valid signed step"
+    );
+    let _ = fs::remove_dir_all(admin.dir());
+}

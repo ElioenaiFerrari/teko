@@ -619,6 +619,66 @@ impl Issuer {
         Ok(sig.0)
     }
 
+    /// SIMULATED governance operators: for every contest still in `VotingOpen`
+    /// whose `voting_closes` has passed, signs (2 of 3) the `VotingClosed`
+    /// transition and appends it to `election.bundle`. Returns how many were added.
+    /// From that point on the PUBLIC tally refuses further ballots for the contest
+    /// (the log, not a clock, is what locks the vote).
+    pub fn close_due(&self, now: u64) -> Result<usize, IssuerError> {
+        let corrupt = || IssuerError::Corrupt("election.bundle".into());
+        let path = self.dir.join("election.bundle");
+        let mut bundle = ElectionBundle::decode(fs::read(&path).map_err(|_| corrupt())?.as_slice())
+            .map_err(|_| corrupt())?;
+        let manifest =
+            ElectionManifest::decode(bundle.manifest.as_slice()).map_err(|_| corrupt())?;
+        let mut transitions = bundle
+            .transitions
+            .iter()
+            .map(|t| Transition::decode(t.as_slice()))
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|_| corrupt())?;
+        let trust = self.trust()?;
+        let policy =
+            teko_election::GovernancePolicy::new(trust.gov_signers.clone(), trust.gov_threshold)
+                .map_err(|_| IssuerError::Corrupt("trust.txt (governança)".into()))?;
+        let mut status = replay(&policy, &manifest, &transitions).map_err(|_| corrupt())?;
+        let gov: Vec<SigningKey> = (0..GOV_SIGNERS)
+            .map(|i| load_key(&self.dir.join(format!("gov-{i}.key"))))
+            .collect::<Result<_, _>>()?;
+        let mut added = 0;
+        for c in &manifest.contests {
+            let closes = c.schedule.as_ref().map_or(u64::MAX, |s| s.voting_closes);
+            if now < closes || status.phase_of(&c.contest_id) != Some(Phase::VotingOpen) {
+                continue;
+            }
+            let mut t = Transition {
+                election_id: manifest.election_id.clone(),
+                contest_id: c.contest_id.clone(),
+                contest_hash: contest_hash(c).to_vec(),
+                from_phase: Phase::VotingOpen as i32,
+                to_phase: Phase::VotingClosed as i32,
+                seq: status.seq + 1,
+                at: closes,
+                reason: String::new(),
+                signatures: Vec::new(),
+            };
+            t.signatures = [1usize, 2]
+                .iter()
+                .map(|k| sign_transition(&gov[*k], &t))
+                .collect();
+            bundle.transitions.push(t.encode_to_vec());
+            transitions.push(t);
+            // The history must still replay (M-of-N, order, phases) with the new step.
+            status = replay(&policy, &manifest, &transitions)
+                .map_err(|_| IssuerError::Corrupt("fechamento recusado pela governança".into()))?;
+            added += 1;
+        }
+        if added > 0 {
+            fs::write(&path, bundle.encode_to_vec())?;
+        }
+        Ok(added)
+    }
+
     /// Fresh random nonce the device must sign into its identity request.
     pub fn new_nonce() -> Vec<u8> {
         let mut n = vec![0u8; 32];

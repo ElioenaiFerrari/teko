@@ -7,7 +7,7 @@ use election_admin::Admin;
 use teko_election::{Phase, ResultsVisibility};
 
 const HELP: &str = "\
-election-admin — administração de eleições (PROTÓTIPO: sem registro anônimo, contagem NÃO confiável)
+election-admin — administração de eleições (PROTÓTIPO: sem prova ZK nem nullifier)
 
 USO:
   election-admin publish [--dir dev]
@@ -18,6 +18,8 @@ USO:
       Anexa ~R cédulas/s durante S segundos: abra a tela de Resultados da Suite e veja os gráficos andarem.
   election-admin tally [--dir dev] [--top 10] [--contest ID]
       Apura o quadro e mostra o ranking de cada pleito.
+  election-admin close-due [--dir dev]
+      Governança SIMULADA: fecha (assinado 2 de 3) os pleitos cujo prazo venceu; depois disso o quadro não conta mais cédulas deles.
   election-admin reset-board [--dir dev]
       Apaga o quadro e o marcador de simulação.
 ";
@@ -78,6 +80,13 @@ fn run(args: Vec<String>) -> Result<(), String> {
                 "Quadro: {} entradas novas, {} já estavam lá.",
                 r.appended, r.already_there
             );
+        }
+        "close-due" => {
+            let now = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map_or(0, |d| d.as_secs());
+            let n = admin()?.close_due(now).map_err(e)?;
+            println!("{n} pleito(s) fechado(s) pela governança (prazo vencido).");
         }
         "reset-board" => {
             admin()?.reset_board();

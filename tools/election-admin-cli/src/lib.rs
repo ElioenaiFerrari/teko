@@ -243,6 +243,19 @@ impl Admin {
         })
     }
 
+    /// SIMULATED governance: closes every contest whose deadline has passed (signed
+    /// `VotingClosed`, appended to the bundle) and, if the board exists, publishes
+    /// it. From then on the tally refuses further ballots for those contests.
+    pub fn close_due(&self, now: u64) -> Result<usize, AdminError> {
+        let n = issuer_cli::Issuer::open(&self.dir)
+            .close_due(now)
+            .map_err(|e| AdminError::Simulation(e.to_string()))?;
+        if self.board_path().exists() {
+            self.publish()?;
+        }
+        Ok(n)
+    }
+
     /// Appends one ballot (what the Suite does after the device signs).
     pub fn submit_ballot(&self, ballot: &SubmittedBallot) -> Result<Receipt, AdminError> {
         let mut board = self.open_for_write()?;

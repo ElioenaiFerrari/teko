@@ -787,6 +787,18 @@ pub async fn results_snapshot(suite: State<'_, Suite>) -> Result<ResultsReply, U
             Ok(a) => a,
             Err(e) => return unavailable(&e.to_string()),
         };
+        // SIMULATED governance: contests past their deadline are closed in the log
+        // (at most every 5 s), so the public count locks without anyone clicking.
+        {
+            static LAST: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+            let now = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map_or(0, |d| d.as_secs());
+            if now.saturating_sub(LAST.load(std::sync::atomic::Ordering::Relaxed)) >= 5 {
+                LAST.store(now, std::sync::atomic::Ordering::Relaxed);
+                let _ = admin.close_due(now);
+            }
+        }
         let (board, _partial) = match FileBoard::open_tolerant(admin.board_path()) {
             Ok(b) => b,
             Err(e) => return unavailable(&format!("quadro ilegível: {e}")),

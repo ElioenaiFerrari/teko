@@ -168,7 +168,7 @@ svg.i { width: 20px; height: 20px; flex: none; fill: none; stroke: currentColor;
 .sidebar__addr { color: var(--side-muted); font: .75rem var(--mono); padding: 0 4px; }
 
 /* ───────── Main ───────── */
-.main { padding: 36px clamp(20px, 4vw, 56px) 64px; max-width: 1060px; width: 100%; outline: none; }
+.main { padding: 36px clamp(20px, 4vw, 56px) 64px; max-width: 1680px; width: 100%; outline: none; }
 .view { display: grid; gap: 24px; animation: rise .22s ease-out both; }
 @keyframes rise { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: none; } }
 .pagehead { display: grid; gap: 6px; }
@@ -413,7 +413,7 @@ input[type="checkbox"] { width: 20px; height: 20px; accent-color: var(--primary)
 .stack { display: flex; gap: 3px; height: 10px; margin: 6px 0 2px; }
 .stack__seg { border-radius: 999px; min-width: 8px; }
 .mapcard { display: grid; gap: 12px; }
-.tilemap { display: grid; grid-template-columns: repeat(8, minmax(0, 1fr)); grid-auto-rows: minmax(40px, 1fr); gap: 6px; max-width: 520px; margin-inline: auto; width: 100%; }
+.tilemap { display: grid; grid-template-columns: repeat(8, minmax(0, 1fr)); grid-auto-rows: minmax(40px, 1fr); gap: 6px; max-width: min(760px, 100%); margin-inline: auto; width: 100%; }
 .tile { border: 1px solid var(--border); border-radius: 10px; font: inherit; font-weight: 700; font-size: .8rem; color: var(--text); background: var(--surface-2); display: grid; place-items: center; min-height: 40px; padding: 0; }
 .tile:disabled { opacity: .45; cursor: default; }
 .tile--click { cursor: pointer; transition: transform .15s ease, box-shadow .15s ease; }

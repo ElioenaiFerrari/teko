@@ -56,6 +56,8 @@ Grafo acíclico: `protocol` e `crypto` são folhas; `device-core` e `attestation
 
 **Adições da Fase 1:** `teko-client` (lógica do lado do host: atestação, firmware, assinatura, provas; usada pela Suite e testada headless). `teko-device-core` depende também de `teko-attestation` (o bootloader verifica manifestos). `device-emulator` e `issuer-cli` são **lib + bin** (a lib permite o teste e2e). O emulador usa **terminal** como tela/botões (ADR-0009); a feature `test-buttons` (só testes/demos) liga os botões automáticos e **não** entra no build normal.
 
+**Fase 2 (parcial):** `teko-election` (`no_std`: manifesto assinado M-de-N e ciclo de vida) e `teko-bulletin` (`std`: log Merkle append-only atrás de `trait BulletinBoard`). `teko-attestation` ganhou `multisig` (M-de-N genérico, usado por firmware e eleição).
+
 ## 4. HAL do dispositivo
 
 Traits em `teko-device-core`, implementadas pelo emulador agora e pelo MCU depois:

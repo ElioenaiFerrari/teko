@@ -1,6 +1,14 @@
 # Fase 2 — Votação e governança eleitoral (especificação para revisão)
 
-Status: **rascunho para revisão. Nenhum código da Fase 2 foi escrito.** Mesmo método da Fase 1: spec → sua aprovação → testes → código. Toda decisão de produto/segurança abaixo está marcada **PENDENTE** com alternativas e recomendação; nada foi decidido por mim.
+Status: **spec em revisão; etapas 1 e 2 do plano já implementadas** (as que não dependem das decisões de criptografia): `teko-election` (§7) e `teko-bulletin` (§5). **Nada** de registro anônimo, prova ZK, apuração ou cédula foi escrito: depende das decisões do §10. Toda decisão de produto/segurança abaixo continua **PENDENTE** com alternativas e recomendação.
+
+| Etapa do §9 | Estado |
+|---|---|
+| 1. `teko-election` (manifesto, M-de-N, ciclo de vida) | **Feito** (16 testes) |
+| 2. `teko-bulletin` (log Merkle append-only, provas de inclusão/consistência, head assinado, arquivo) | **Feito** (13 testes + 3 de integração) |
+| 3–9 | Não iniciadas |
+
+**Regras de ciclo de vida que implementei como proposta (revise, ADR-0016):** só avança um passo por vez; `Cancelada` só até a apuração e exige motivo; cada transição exige M-de-N, número de sequência sem buracos, horário não-decrescente e vínculo ao hash do manifesto; **não se abre registro/votação antes do horário do manifesto e não se encerra a votação antes do horário previsto** (encerramento antecipado é decisão de governança: **PENDENTE**).
 
 Pré-requisito já entregue: dispositivo emulado, Suite, `issuer-cli`, atestação, credenciais de identidade (ver CLAUDE.md). O que **não** existe: registro de eleitor, prova de elegibilidade, urna, apuração, administração de eleições.
 

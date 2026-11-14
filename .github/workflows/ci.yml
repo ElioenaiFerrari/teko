@@ -26,7 +26,7 @@ jobs:
       - run: rustup target add thumbv7em-none-eabihf
       - run: >
           cargo build --locked --target thumbv7em-none-eabihf
-          -p teko-protocol -p teko-crypto -p teko-attestation -p teko-device-core
+          -p teko-protocol -p teko-crypto -p teko-attestation -p teko-election -p teko-device-core
 
   suite:
     runs-on: macos-latest

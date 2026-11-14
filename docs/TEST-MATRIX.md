@@ -49,10 +49,27 @@ Legenda: **P** = `proptest` (muitos casos), **U** = unitário, **E** = ponta a p
 | Build normal sem botões automáticos | `make release-check` (script) |
 | Build reproduzível | `make repro` (script) |
 
+## Fase 2 (parcial): manifesto, ciclo de vida e quadro de avisos
+
+| Garantia | Teste |
+|---|---|
+| Manifesto só vale com M-de-N assinaturas distintas; duplicadas e estranhos valem zero | election: `accepted_iff_m_distinct_valid_signers`, `duplicates_and_outsiders_count_zero` (P) |
+| Qualquer alteração do conteúdo invalida as assinaturas; o hash ignora assinaturas | election: `tampering_invalidates_signatures`, `hash_ignores_signatures_but_not_content` (P) |
+| Opções, calendário e textos inválidos/enganosos (bidi, quebra de linha, índices com buraco, duplicatas) são recusados | election: `structural_rules_are_enforced`, `text::rejects_spoofing_and_empty` |
+| Só arestas legais do ciclo de vida são aceitas (modelo completo 8×8) | election: `only_legal_edges_are_accepted` (P) |
+| Pular fase, voltar, repetir, buraco de sequência, outra eleição, outro manifesto, voltar no tempo, abrir cedo, fechar cedo | election: `skipping_going_back_and_repeating_are_refused`, `transitions_are_bound_to_one_election_and_one_manifest`, `schedule_gates_opening_and_closing` |
+| Cancelamento exige motivo e encerra; não se cancela após a apuração | election: `cancellation_needs_a_reason_and_ends_the_election` |
+| Provas de inclusão e de consistência válidas para **todo** tamanho/prefixo (RFC 6962/9162) e falham com folha, índice, caminho ou histórico adulterados | bulletin: `every_leaf_of_every_size_has_a_valid_inclusion_proof`, `every_prefix_has_a_valid_consistency_proof`, `proofs_fail_when_anything_is_wrong`, `growth_is_always_provable` (P) |
+| Head assinado amarra tamanho, raiz e operador | bulletin: `head_signature_binds_size_root_and_operator` |
+| Reescrever o histórico é detectado por um head fixado antes | bulletin: `old_heads_stay_provable_as_the_log_grows_and_rewrites_are_caught`, `rewriting_history_is_caught_by_a_previously_pinned_head` |
+| Arquivo truncado/corrompido é **recusado**, não reparado; adulteração muda a raiz | bulletin: `truncated_or_corrupt_log_files_are_refused_not_repaired`, `flipping_a_stored_byte_changes_the_root_...` |
+| Auditor independente refaz a eleição só com o quadro e a política; transição forjada não passa mesmo com operador cúmplice | bulletin (integração): `an_auditor_replays_the_whole_election_from_the_board`, `a_forged_transition_does_not_pass_the_audit_...` |
+
 ## O que **não** está coberto por teste automático (honestidade)
 
 - **Tempo constante da comparação do PIN:** o código usa `subtle::ConstantTimeEq`, mas não há teste de temporização.
 - **`--listen` só em loopback:** verificado manualmente (recusa `0.0.0.0`); falta teste automatizado.
 - **A janela da Suite (Tauri) e a UI JS:** não há teste automatizado de interface; a UI foi exercitada com o mock no navegador e o app real só foi aberto até conectar no emulador.
 - **`no_std` em alvo embarcado real:** o CI compila o núcleo para `thumbv7em-none-eabihf` (passou em 2026-11-14); não há teste de execução em hardware.
+- **Quadro de avisos de operador único:** sem testemunhas independentes, um operador pode mostrar logs diferentes a pessoas diferentes (*split view*). Só um head fixado e comparado por terceiros detecta isso; não há essa comparação implementada.
 - **Fuzzing contínuo do parser:** só `proptest`; sem `cargo-fuzz`.

@@ -7,7 +7,7 @@ Status: **spec em revisão; etapas 1 e 2 do plano já implementadas** (as que n�
 | 1. `teko-election` (eleição com vários pleitos, jurisdições, M-de-N, ciclo de vida por pleito) | **Feito** (21 testes) |
 | 2. `teko-bulletin` (log Merkle append-only, provas de inclusão/consistência, head assinado, arquivo) | **Feito** (13 testes + 3 de integração) |
 | 3. Dispositivo: `LoadElection`, `GetElection`, `GetVoterKey`, `SignBallot` real (jurisdição, fase, um voto por pleito, nome do candidato vindo do manifesto), chave de eleitor por pleito; `issuer-cli` com domicílio eleitoral, governança e eleição de exemplo; Suite com a tela de votação por pleito | **Feito** (protótipo: cédula assinada, **não enviada**) |
-| 4. `tools/election-admin-cli` | Não iniciada (hoje `issuer-cli dev-election` gera uma eleição de exemplo) |
+| 4. `tools/election-admin-cli` (publicar no quadro, simular votos, apurar) + apuração pura e incremental em `teko-election` + tela de **Resultados ao vivo** na Suite (top 10 por pleito, por cargo/estado) | **Feito** (ver §5.1). Dados de demonstração são **simulados** e rotulados |
 | 5–9 | Não iniciadas (registro anônimo, prova de voto, apuração, explorador com dados reais) |
 
 **Etapa 3 (o que o dispositivo faz hoje):**
@@ -162,6 +162,24 @@ O quadro guarda, em ordem e imutável: manifestos assinados, âncoras da árvore
 
 ---
 
+### 5.1 Resultados ao vivo (ADR-0018)
+
+Requisito do produto: **um gráfico por cargo e por estado, top 10 do mais ao menos votado, com nome e votos em tempo real** (como a visão ao vivo do Trezor Suite). Como funciona:
+
+- Cada **cédula** é uma entrada do quadro de avisos. A apuração é uma **função pura do log**: percorre as entradas em ordem, aplica a governança (manifesto e transições M-de-N) e conta. Qualquer pessoa refaz a contagem e confere a raiz do quadro: nada precisa ser confiado.
+- **Regras de aceitação** (todas verificáveis só pelo log): assinatura da cédula válida e amarrada ao **hash do pleito**; a opção existe; o pleito estava em **VotacaoAberta no ponto do log em que a cédula foi anexada** (o tempo é a ordem do log, não um relógio); **uma cédula por chave de eleitor por pleito** (a primeira vale). Rejeitadas são **contadas por motivo**, não somem.
+- **Tempo real** = a interface lê o quadro continuamente; o gráfico acompanha cada cédula aceita.
+
+**Por que isso é uma decisão de segurança, não só de interface:**
+1. Com **cédula pública** (ADR-0015, opção 1), *qualquer um* conta ao vivo; não dá para "esconder" a parcial de forma criptográfica. Só **cédula cifrada** (opção 2) permite esconder a distribuição até o fim.
+2. Resultado parcial divulgado durante a votação **influencia** quem ainda não votou e **ajuda quem monitora ou compra voto** (vê o efeito imediatamente). Muitas eleições reais só divulgam depois do fechamento.
+3. Por isso o manifesto declara uma **política de visibilidade** (`results_visibility`): `live` (distribuição ao vivo), `turnout_only` (só quantas cédulas, a distribuição depois do fechamento) ou `after_close` (nada até fechar). **Com cédula pública a política é só convenção de interface**; o log em claro continua contável por qualquer um. Enquanto a decisão #3 estiver em aberto, isso precisa ser dito na tela.
+4. **Resultado por estado de um pleito nacional** (ex.: Presidente por UF) exige que cada cédula **revele a UF do eleitor**, o que reduz o conjunto de anonimato ao estado (decisão #15). Por ora o Presidente aparece **só no total nacional**; Governador aparece **por estado** porque o pleito já é estadual.
+
+**Implementado:** `teko_election::tally`/`Tallier` (apuração pura e incremental), `election-admin publish|simulate|tally`, e a tela **Resultados ao vivo** da Suite (abas por cargo; um gráfico de barras horizontais por pleito, top 10 + "Outros"; atualização a cada ~1,5 s; barras animadas; aviso "DADOS SIMULADOS"; política de visibilidade aplicada na tela). O voto feito com o dispositivo real **entra no quadro e aparece no gráfico**.
+
+**Dados de demonstração:** um único dispositivo não gera distribuição. O `election-admin-cli simulate` anexa cédulas sintéticas (chaves aleatórias) para o gráfico andar. A tela mostra **"DADOS SIMULADOS"** de forma inconfundível. No protótipo **não há registro anônimo**, então qualquer chave é aceita: a contagem **não é confiável** contra fraude (decisão #2).
+
 ## 6. Sigilo, cédula aberta ou cifrada e coerção (ADR-0015) — a decisão mais difícil
 
 | Opção | Sigilo | Coerção / compra de voto | Complexidade |
@@ -231,6 +249,9 @@ Invariantes novas a testar: a cédula só é assinada se o candidato exibido vei
 | 11 | **Voto em branco e nulo**, e cargos **proporcionais/multi-vaga** (deputado, vereador: voto em candidato ou legenda) | Branco/nulo como opções explícitas; proporcional fica para depois do majoritário |
 | 12 | **Eleitor no exterior** (vota só para Presidente) e outras exceções de domicílio | Modelar como domicílio especial; fora do primeiro corte |
 | 13 | **Encerramento antecipado** de um pleito (hoje o sistema recusa fechar antes do horário) | Manter recusa; emergência vira cancelamento motivado |
+| 14 | **Política de resultados parciais** (ADR-0018): `live`, `turnout_only` ou `after_close` | `after_close` ou `turnout_only` numa eleição real; `live` só em demonstração. A distribuição ao vivo fica como opção do manifesto |
+| 15 | **Resultado por UF/município de um pleito nacional**: exige a UF do eleitor na cédula (reduz o anonimato ao estado) | Não fazer no primeiro corte; Presidente só no total nacional |
+| 16 | **Quem é o operador do quadro** e como terceiros fixam e comparam *heads* (testemunhas) para detectar *split view* | Vários espelhos independentes; no estudo, um operador local |
 
 ## 11. Riscos e perguntas em aberto
 

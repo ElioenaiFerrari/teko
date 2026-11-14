@@ -19,6 +19,21 @@ const FORMAT_VERSION: u32 = 2;
 const MAX_OPTIONS: usize = 64;
 const MAX_CONTESTS: usize = 32;
 
+/// Who may see partial results while voting is open (ADR-0018). With PUBLIC
+/// ballots this is an interface CONVENTION only: the log is in clear and anyone
+/// can count it. Enforcing it needs encrypted ballots (ADR-0015 option 2).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, prost::Enumeration)]
+#[repr(i32)]
+pub enum ResultsVisibility {
+    Unspecified = 0,
+    /// Distribution visible live.
+    Live = 1,
+    /// Only how many ballots; distribution after the voting closes.
+    TurnoutOnly = 2,
+    /// Nothing until the voting closes.
+    AfterClose = 3,
+}
+
 /// What is being decided. Named offices must match their jurisdiction level
 /// (a "Governor" contest with national scope is a misconfiguration, rejected).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, prost::Enumeration)]
@@ -126,6 +141,8 @@ pub struct ElectionManifest {
     pub revision: u32,
     #[prost(message, repeated, tag = "8")]
     pub signatures: Vec<SignerSignature>,
+    #[prost(enumeration = "ResultsVisibility", tag = "9")]
+    pub results_visibility: i32,
 }
 
 impl ElectionManifest {
@@ -213,6 +230,9 @@ pub fn validate_manifest(m: &ElectionManifest) -> Result<(), ElectionError> {
     if m.revision == 0 {
         return Err(bad("revision starts at 1"));
     }
+    if m.results_visibility() == ResultsVisibility::Unspecified {
+        return Err(bad("results_visibility must be declared"));
+    }
     if m.contests.is_empty() || m.contests.len() > MAX_CONTESTS {
         return Err(bad("need 1..=32 contests"));
     }
@@ -290,6 +310,9 @@ pub fn validate_revision(
     }
     if prev.ballot_kind != next.ballot_kind {
         return Err(bad("ballot_kind cannot change"));
+    }
+    if prev.results_visibility != next.results_visibility {
+        return Err(bad("results_visibility cannot change"));
     }
     if !prev.registry_key.is_empty() && prev.registry_key != next.registry_key {
         return Err(bad("registry key cannot change once set"));
@@ -407,6 +430,7 @@ pub(crate) mod fixtures {
             registry_key: Vec::new(),
             revision: 1,
             signatures: Vec::new(),
+            results_visibility: ResultsVisibility::Live as i32,
         }
     }
 
@@ -447,7 +471,7 @@ mod tests {
     #[test]
     fn structural_rules_are_enforced() {
         type Edit = fn(&mut ElectionManifest);
-        let cases: [(&str, Edit); 16] = [
+        let cases: [(&str, Edit); 17] = [
             ("id with uppercase/space", |m| {
                 m.election_id = "Eleicoes 2026".into()
             }),
@@ -490,6 +514,9 @@ mod tests {
                 m.ballot_kind = "encrypted".into()
             }),
             ("revision zero", |m| m.revision = 0),
+            ("results visibility undeclared", |m| {
+                m.results_visibility = 0
+            }),
         ];
         for (name, edit) in cases {
             let mut m = manifest();

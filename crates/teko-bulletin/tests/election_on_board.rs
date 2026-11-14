@@ -12,8 +12,8 @@ use teko_bulletin::{
 use teko_crypto::{SigningKey, generate_signing_key, public_key_bytes};
 use teko_election::{
     BALLOT_KIND_PUBLIC, Contest, ElectionError, ElectionManifest, ElectionOption, ElectionStatus,
-    GovernancePolicy, Office, Phase, Schedule, Scope, Transition, contest_hash, replay,
-    sign_manifest, sign_transition,
+    GovernancePolicy, Office, Phase, ResultsVisibility, Schedule, Scope, Transition, contest_hash,
+    replay, sign_manifest, sign_transition,
 };
 
 struct World {
@@ -70,6 +70,7 @@ fn world() -> World {
             },
         ],
         ballot_kind: BALLOT_KIND_PUBLIC.into(),
+        results_visibility: ResultsVisibility::Live as i32,
         registry_key: vec![],
         revision: 1,
         signatures: vec![],

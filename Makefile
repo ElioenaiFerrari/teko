@@ -1,9 +1,12 @@
 # Teko — atalhos. Rode `make` (ou `make help`) para ver tudo.
 .DEFAULT_GOAL := help
-.PHONY: help setup emulator suite reset demo issuer-help preview fmt lint test check build clean-dev verify-fw release-check repro
+.PHONY: help setup emulator suite reset demo issuer-help preview fmt lint test check build clean-dev verify-fw release-check repro election publish simulate simulate-live tally reset-board
 
 CARGO ?= cargo
 PIN   ?= 482913
+N     ?= 5000
+RATE  ?= 15
+SECS  ?= 120
 
 help: ## Mostra esta ajuda
 	@echo "Teko — comandos:"; echo
@@ -18,6 +21,24 @@ emulator: ## Liga o dispositivo emulado (PIN e confirmações são digitados NES
 
 suite: ## Abre a Teko Suite (janela desktop)
 	$(CARGO) run -q -p teko-suite
+
+election: ## Recria a eleição de exemplo (7 pleitos, datas novas). Apaga o quadro e o marcador de simulação
+	$(CARGO) run -q -p issuer-cli -- dev-election
+
+publish: ## Publica a eleição de exemplo no quadro de avisos (dev/board.log). Idempotente
+	$(CARGO) run -q -p election-admin-cli -- publish
+
+simulate: ## Anexa N eleitores SINTÉTICOS ao quadro de uma vez (DADOS SIMULADOS). N=5000
+	$(CARGO) run -q --release -p election-admin-cli -- simulate --voters $(N)
+
+simulate-live: ## Anexa ~RATE cédulas/s por SECS s: abra Resultados ao vivo na Suite e veja andar. RATE=15 SECS=120
+	$(CARGO) run -q --release -p election-admin-cli -- simulate --rate $(RATE) --duration $(SECS)
+
+tally: ## Apura o quadro e mostra o top 10 de cada pleito no terminal
+	$(CARGO) run -q -p election-admin-cli -- tally
+
+reset-board: ## Apaga o quadro (cédulas) e o marcador de simulação
+	$(CARGO) run -q -p election-admin-cli -- reset-board
 
 reset: ## Volta o dispositivo a "virgem" (apaga o estado do emulador)
 	$(CARGO) run -q -p device-emulator -- --reset

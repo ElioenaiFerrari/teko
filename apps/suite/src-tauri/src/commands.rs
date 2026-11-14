@@ -2,17 +2,20 @@ use std::fs;
 use std::sync::{Arc, Mutex, MutexGuard, TryLockError};
 use std::time::Duration;
 
+use election_admin::{Admin, feed_new};
 use issuer_cli::{ISSUER_NAME, Issuer, Subject};
 use prost::Message;
 use serde::Serialize;
 use tauri::{AppHandle, Emitter, Manager, State};
 use teko_attestation::TrustPolicy;
+use teko_bulletin::{BulletinBoard, FileBoard};
 use teko_client::{
     AttributeResult, AuthenticityReport, CivicIdInfo, ClientError, DeviceClient, DeviceStatus,
     ElectionSummary, FirmwareInfo, SignedBallot, SignedDocument, UnlockOutcome, VerifiedDocument,
     inspect_firmware, resolve_dev_dir, verify_signed_document,
 };
 use teko_crypto::hex;
+use teko_election::{Phase, ResultsVisibility, SubmittedBallot, Tallier};
 use teko_protocol::{ButtonKind, Predicate, PredicateKind};
 use teko_transport::{TcpTransport, TransportError, connect_tcp};
 
@@ -21,6 +24,8 @@ type Client = DeviceClient<TcpTransport>;
 pub struct SuiteInner {
     pub client: Mutex<Option<Client>>,
     pub addr: String,
+    /// Incremental tally for the live results view.
+    pub results: Mutex<Option<Tallier>>,
 }
 
 pub type Suite = Arc<SuiteInner>;
@@ -567,8 +572,18 @@ pub async fn election_get(
     .await
 }
 
+#[derive(Serialize)]
+pub struct VoteReceipt {
+    ballot: SignedBallot,
+    /// PROTOTYPE: the Suite plays the board operator and appends the ballot.
+    submitted: bool,
+    board_index: Option<u64>,
+    note: Option<String>,
+}
+
 /// PROTOTYPE: the device signs the ballot after the user confirms on ITS screen
-/// (candidate name from the verified manifest). Nothing is submitted anywhere.
+/// (candidate name from the verified manifest); the Suite then appends it to the
+/// local bulletin board so it shows up in the live results.
 #[tauri::command]
 pub async fn election_vote(
     app: AppHandle,
@@ -576,16 +591,230 @@ pub async fn election_vote(
     election_id: String,
     contest_id: String,
     option_index: u32,
-) -> Result<SignedBallot, UiError> {
+) -> Result<VoteReceipt, UiError> {
     let trust = load_trust()?;
     let bytes = read_bundle()?;
-    with_device(app, suite.inner().clone(), move |c| {
+    let ballot = with_device(app, suite.inner().clone(), move |c| {
         if !c.has_election() {
             c.use_election_bundle(&trust, &bytes)?;
         }
         c.sign_ballot(&election_id, &contest_id, option_index)
     })
+    .await?;
+    let submitted = submit_to_board(&ballot);
+    Ok(VoteReceipt {
+        ballot,
+        submitted: submitted.is_ok(),
+        board_index: submitted.as_ref().ok().copied(),
+        note: submitted.err(),
+    })
+}
+
+fn submit_to_board(b: &SignedBallot) -> Result<u64, String> {
+    let admin = Admin::open(resolve_dev_dir()).map_err(|e| e.to_string())?;
+    if !admin.board_path().exists() {
+        return Err(
+            "O quadro ainda não foi publicado: a cédula não entrou na contagem ao vivo.".into(),
+        );
+    }
+    let h = |s: &str| hex::decode(s).map_err(|e| e.to_string());
+    let ballot = SubmittedBallot {
+        election_id: b.election_id.clone(),
+        contest_id: b.contest_id.clone(),
+        contest_hash: h(&b.contest_hash)?,
+        option_index: b.option_index,
+        voter_key: h(&b.voter_key)?,
+        signature: h(&b.signature)?,
+    };
+    admin
+        .submit_ballot(&ballot)
+        .map(|r| r.index)
+        .map_err(|e| e.to_string())
+}
+
+// ───────────────────────── live results (public; no device needed) ─────────────────────────
+
+#[derive(Serialize)]
+pub struct OptionView {
+    index: u32,
+    name: String,
+    number: String,
+    votes: u64,
+}
+
+#[derive(Serialize)]
+pub struct ContestView {
+    contest_id: String,
+    title: String,
+    office: &'static str,
+    scope: &'static str,
+    scope_code: String,
+    phase: &'static str,
+    /// `None` = hidden by the results policy.
+    accepted: Option<u64>,
+    rejected: u64,
+    distribution_visible: bool,
+    top: Vec<OptionView>,
+    others_votes: u64,
+    others_count: usize,
+}
+
+#[derive(Serialize)]
+pub struct ResultsReply {
+    available: bool,
+    reason: Option<String>,
+    election_id: String,
+    title: String,
+    revision: u32,
+    visibility: &'static str,
+    simulated: bool,
+    head_size: u64,
+    head_root: String,
+    ignored_governance: u64,
+    contests: Vec<ContestView>,
+}
+
+fn unavailable(reason: &str) -> ResultsReply {
+    ResultsReply {
+        available: false,
+        reason: Some(reason.to_string()),
+        election_id: String::new(),
+        title: String::new(),
+        revision: 0,
+        visibility: "unspecified",
+        simulated: false,
+        head_size: 0,
+        head_root: String::new(),
+        ignored_governance: 0,
+        contests: Vec::new(),
+    }
+}
+
+fn office_name(o: teko_election::Office) -> &'static str {
+    use teko_election::Office::*;
+    match o {
+        President => "president",
+        Governor => "governor",
+        Senator => "senator",
+        FederalDeputy => "federal_deputy",
+        StateDeputy => "state_deputy",
+        Mayor => "mayor",
+        CityCouncillor => "city_councillor",
+        Other => "other",
+        Unspecified => "unspecified",
+    }
+}
+
+fn phase_name(p: Phase) -> &'static str {
+    match p {
+        Phase::Draft => "draft",
+        Phase::CandidatesPublished => "candidates_published",
+        Phase::RegistrationOpen => "registration_open",
+        Phase::VotingOpen => "voting_open",
+        Phase::VotingClosed => "voting_closed",
+        Phase::Tallied => "tallied",
+        Phase::Audited => "audited",
+        Phase::Cancelled => "cancelled",
+    }
+}
+
+/// Reads the bulletin board and returns the CURRENT tally (incremental: only new
+/// entries are verified). Public information: needs no device.
+#[tauri::command]
+pub async fn results_snapshot(suite: State<'_, Suite>) -> Result<ResultsReply, UiError> {
+    let suite = suite.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let admin = match Admin::open(resolve_dev_dir()) {
+            Ok(a) => a,
+            Err(e) => return unavailable(&e.to_string()),
+        };
+        let (board, _partial) = match FileBoard::open_tolerant(admin.board_path()) {
+            Ok(b) => b,
+            Err(e) => return unavailable(&format!("quadro ilegível: {e}")),
+        };
+        if board.is_empty() {
+            return unavailable("O quadro de avisos ainda está vazio: publique a eleição.");
+        }
+        let mut guard = suite.results.lock().unwrap_or_else(|e| e.into_inner());
+        // A shrunk board (reset/new election) invalidates the incremental state.
+        if guard.as_ref().is_some_and(|t| t.consumed() > board.len()) {
+            *guard = None;
+        }
+        let tallier = guard.get_or_insert_with(|| Tallier::new(admin.policy().clone()));
+        feed_new(tallier, &board);
+        let t = tallier.snapshot();
+        let contests = t
+            .contests
+            .iter()
+            .map(|c| {
+                let view = c.public_view(t.visibility);
+                let ranked = c.ranked(10);
+                let show = view.distribution;
+                ContestView {
+                    contest_id: c.contest_id.clone(),
+                    title: c.title.clone(),
+                    office: office_name(c.office),
+                    scope: match c.scope.level() {
+                        teko_election::ScopeLevel::National => "national",
+                        teko_election::ScopeLevel::State => "state",
+                        teko_election::ScopeLevel::Municipality => "municipality",
+                        teko_election::ScopeLevel::Unspecified => "unknown",
+                    },
+                    scope_code: c.scope.code.clone(),
+                    phase: phase_name(c.phase),
+                    accepted: view.accepted,
+                    rejected: c.rejected.total(),
+                    distribution_visible: show,
+                    top: if show {
+                        ranked
+                            .top
+                            .iter()
+                            .map(|o| OptionView {
+                                index: o.index,
+                                name: o.name.clone(),
+                                number: o.number.clone(),
+                                votes: o.votes,
+                            })
+                            .collect()
+                    } else {
+                        Vec::new()
+                    },
+                    others_votes: if show { ranked.others_votes } else { 0 },
+                    others_count: if show { ranked.others_count } else { 0 },
+                }
+            })
+            .collect();
+        ResultsReply {
+            available: true,
+            reason: None,
+            election_id: t.election_id.clone(),
+            title: t.title.clone(),
+            revision: t.revision,
+            visibility: match t.visibility {
+                ResultsVisibility::Live => "live",
+                ResultsVisibility::TurnoutOnly => "turnout_only",
+                ResultsVisibility::AfterClose => "after_close",
+                ResultsVisibility::Unspecified => "unspecified",
+            },
+            simulated: admin.is_simulated(),
+            head_size: board.len(),
+            head_root: hex::encode(&board.root()),
+            ignored_governance: t.ignored_governance,
+            contests,
+        }
+    })
     .await
+    .map_err(|e| ui_err("Internal", e))
+}
+
+/// Publishes the demo election on the local board (idempotent).
+#[tauri::command]
+pub fn board_publish() -> Result<u64, UiError> {
+    let admin = Admin::open(resolve_dev_dir()).map_err(|e| ui_err("NoElection", e))?;
+    admin
+        .publish()
+        .map(|r| r.appended)
+        .map_err(|e| ui_err("NoElection", e))
 }
 
 #[tauri::command]

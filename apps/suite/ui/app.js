@@ -75,6 +75,11 @@
     prove: { choice: 'age18', verifier: 'Loja Exemplo', result: null, error: null },
     election: null,      // resumo vindo do dispositivo
     elecLoading: false,
+    results: null,        // última resposta de results_snapshot
+    resultsAt: 0,
+    resultsOffice: null,  // aba de cargo selecionada
+    resultsErr: null,
+    resultsShape: null,
     elecChecked: false,
     idTried: false,       // evitam laços de re-tentativa em loadId/loadFirmware
     fwTried: false,
@@ -121,7 +126,7 @@
 
   function routeAllowed(r) {
     const p = phase();
-    if (r === 'explorer') return true;
+    if (r === 'explorer' || r === 'results') return true;
     if (r === 'unlock') return p === 'locked';
     if (r === 'onboarding') return p === 'onboarding';
     return p === 'ready';
@@ -284,7 +289,7 @@
       return navBtn(n.id, n.label, n.icon, ok);
     }).join('');
     const extra = p === 'locked' ? navBtn('unlock', 'Desbloquear', 'lock', true) : '';
-    $('#nav').innerHTML = `${extra}${items}<div class="nav__label">Público</div>${navBtn('explorer', 'Explorador público', 'globe', true)}`;
+    $('#nav').innerHTML = `${extra}${items}<div class="nav__label">Público</div>${navBtn('results', 'Resultados ao vivo', 'chart', true)}${navBtn('explorer', 'Explorador público', 'globe', true)}`;
     $('#addr').textContent = d.addr ? `emulador ${d.addr}` : '';
     document.querySelectorAll('[data-theme-set]').forEach((b) => {
       const v = b.dataset.themeSet;
@@ -300,7 +305,7 @@
 
   function renderMain() {
     const m = $('#main');
-    const views = { explorer: vExplorer, onboarding: vOnboarding, unlock: vUnlock, identity: vIdentity, sign: vSign, prove: vProve, vote: vVote };
+    const views = { results: vResults, explorer: vExplorer, onboarding: vOnboarding, unlock: vUnlock, identity: vIdentity, sign: vSign, prove: vProve, vote: vVote };
     m.innerHTML = `<div class="view">${(views[S.route] || vExplorer)()}</div>`;
     afterRender();
   }
@@ -331,7 +336,9 @@
           <article class="card">
             <div class="card__head"><div class="card__ico ${c ? `card__ico--${c}` : ''}">${ico(i)}</div><h3>${t}</h3></div>
             <p class="muted">${d}</p>
-            <div class="empty">${ico('link')}<div><strong>Em breve</strong><br>Será alimentado pela blockchain de votação.</div></div>
+            ${t === 'Resultados apurados'
+              ? `<div class="row"><button class="btn" data-act="gotoresults">${ico('chart')}Ver resultados ao vivo</button></div>`
+              : `<div class="empty">${ico('link')}<div><strong>Em breve</strong><br>Será alimentado pela blockchain de votação.</div></div>`}
           </article>`).join('')}
       </div>
 
@@ -623,7 +630,9 @@
       <div class="options" role="radiogroup" aria-label="Candidatos: ${esc(c.title)}">${opts}</div>
       ${why ? `<p class="muted">${esc(why)}</p>` : ''}
       ${canVote ? `<div class="row"><button class="btn btn--gold" data-act="vote" data-contest="${esc(c.contest_id)}">${ico('ballot')}Votar neste pleito</button></div>` : ''}
-      ${ballot ? callout('info', 'shield', 'Cédula assinada pelo dispositivo (protótipo)', `<p>Voto em <strong>${esc(ballot.option_name)}</strong>. Assinatura <span class="mono">${esc(short(ballot.signature, 10, 8))}</span> conferida pela Suite. <strong>Não foi enviada a nenhum quadro</strong> e ainda não há prova de elegibilidade.</p>`) : ''}
+      ${ballot ? callout('info', 'shield', 'Cédula assinada pelo dispositivo (protótipo)', `<p>Voto em <strong>${esc(ballot.option_name)}</strong>. Assinatura <span class="mono">${esc(short(ballot.signature, 10, 8))}</span> conferida pela Suite.
+        ${ballot.submitted ? `Enviada ao quadro local (posição #${ballot.board_index}): <a href="#" data-act="gotoresults">veja nos resultados ao vivo</a>.` : esc(ballot.note || 'Não foi enviada ao quadro.')}
+        Sem registro anônimo nem prova de elegibilidade: protótipo.</p>`) : ''}
     </article>`;
   }
 
@@ -643,6 +652,167 @@
       ${e.contests.map(contestCard).join('')}`}`;
   }
 
+  // ───────────────────────── resultados ao vivo (público) ─────────────────────────
+  const OFFICES = { president: 'Presidente', governor: 'Governador', senator: 'Senador', federal_deputy: 'Dep. federal', state_deputy: 'Dep. estadual', mayor: 'Prefeito', city_councillor: 'Vereador', other: 'Outras consultas' };
+  const OFFICE_ORDER = ['president', 'governor', 'senator', 'federal_deputy', 'state_deputy', 'mayor', 'city_councillor', 'other'];
+  const VIS = { live: ['Parciais ao vivo', 'info'], turnout_only: ['Só comparecimento até o fechamento', 'warn'], after_close: ['Nada até o fechamento', 'warn'] };
+  const nf = new Intl.NumberFormat('pt-BR');
+
+  function officesOf(r) {
+    const by = {};
+    for (const c of r.contests) (by[c.office] = by[c.office] || []).push(c);
+    return OFFICE_ORDER.filter((o) => by[o]).map((o) => [o, by[o]]);
+  }
+
+  function vResults() {
+    const r = S.results;
+    const sim = r && r.available && r.simulated;
+    return `${head('Resultados · tempo real', 'Quem está na frente, pleito a pleito', 'Cada gráfico é a apuração pública de um pleito: o top 10 do mais votado ao menos votado, atualizado a cada cédula que entra no quadro de avisos.')}
+      <div id="res-status"></div>
+      ${!r ? `<article class="card"><div class="row">${ico('spin', 'spin')}<span>Lendo o quadro de avisos…</span></div></article>`
+        : !r.available ? resUnavailable(r)
+        : `${sim ? `<div class="simbanner" role="alert">${ico('alert')}<div><strong>Dados simulados</strong><div class="muted">As cédulas abaixo foram geradas por um simulador. Isto <strong>não</strong> é resultado de uma eleição.</div></div></div>` : ''}
+           ${callout('warn', 'alert', 'Contagem de protótipo, não confiável', '<p>Ainda não há registro anônimo nem prova de elegibilidade: qualquer chave é aceita. A apuração é refeita por qualquer pessoa a partir do quadro, mas <strong>não protege contra fraude</strong>. Com cédula pública, a distribuição é contável por todos mesmo que a política diga o contrário.</p>')}
+           <div id="res-tabs"></div><div id="res-grid" class="results-grid"></div>`}`;
+  }
+
+  function resUnavailable(r) {
+    return `<article class="card">
+      <div class="card__head"><div class="card__ico card__ico--onca">${ico('chart')}</div><h2>Ainda não há resultados para mostrar</h2></div>
+      <p class="muted">${esc(r.reason || '')}</p>
+      <div class="row"><button class="btn" data-act="publishboard">${ico('upload')}Publicar a eleição de exemplo no quadro</button></div>
+      <p class="muted">Depois, para ver os gráficos andando, abra outro terminal:</p>
+      <div class="codeblock"><span class="codeline">make simulate-live   <span class="dim"># ~15 cédulas/s por 2 min (DADOS SIMULADOS)</span></span><span class="codeline">make simulate        <span class="dim"># 5.000 eleitores sintéticos de uma vez</span></span></div>
+    </article>`;
+  }
+
+  function relTime(ms) {
+    const s = Math.max(0, Math.round((Date.now() - ms) / 1000));
+    return s < 2 ? 'agora' : s < 60 ? `há ${s} s` : `há ${Math.round(s / 60)} min`;
+  }
+
+  function renderResStatus() {
+    const el = $('#res-status'); if (!el) return;
+    const r = S.results;
+    const ok = r && r.available && !S.resultsErr;
+    const [visLabel, visKind] = (r && VIS[r.visibility]) || ['—', ''];
+    el.innerHTML = `<article class="card card--flat"><div class="livebar">
+      <span class="live-dot ${ok ? '' : 'live-dot--off'}" aria-hidden="true"></span>
+      <strong>${ok ? 'Ao vivo' : 'Sem conexão com o quadro'}</strong>
+      <span class="muted">${S.resultsAt ? `atualizado ${relTime(S.resultsAt)}` : ''}</span>
+      ${r && r.available ? `${chip(visLabel, visKind)}<span class="muted mono" title="Raiz Merkle do quadro">quadro: ${r.head_size} entradas · ${esc(short(r.head_root, 8, 6))}</span>${r.ignored_governance ? chip(`${r.ignored_governance} entradas de governança recusadas`, 'bad', 'alert') : ''}` : ''}
+      <span class="spacer"></span>${r && r.available ? `<span class="muted">${esc(r.title)} · rev. ${r.revision}</span>` : ''}
+    </div></article>`;
+  }
+
+  function renderResTabs(r) {
+    const el = $('#res-tabs'); if (!el) return;
+    const offices = officesOf(r);
+    if (!S.resultsOffice || !offices.some(([o]) => o === S.resultsOffice)) S.resultsOffice = offices[0] && offices[0][0];
+    el.innerHTML = `<div class="segmented" role="group" aria-label="Cargo">${offices.map(([o, list]) => `<button data-act="resoffice" data-o="${o}" aria-pressed="${o === S.resultsOffice}">${esc(OFFICES[o] || o)}<span class="count">${list.length}</span></button>`).join('')}</div>`;
+  }
+
+  function barRow(o, rank, max, total, kind) {
+    const pct = total > 0 ? (o.votes * 100) / total : 0;
+    const w = max > 0 ? (o.votes * 100) / max : 0;
+    const li = document.createElement('li');
+    li.className = `bar-row${kind === 'others' ? ' bar-row--others' : ''}`;
+    li.dataset.key = kind === 'others' ? 'others' : String(o.index);
+    li.innerHTML = `<span class="bar-rank"></span><span class="bar-name"></span><span class="bar-track" aria-hidden="true"><span class="bar-fill"></span></span><span class="bar-val"><b></b><span></span></span>`;
+    patchRow(li, o, rank, w, pct, kind);
+    return li;
+  }
+
+  function patchRow(li, o, rank, w, pct, kind) {
+    const set = (sel, text) => { const el = $(sel, li); if (el.textContent !== text) el.textContent = text; return el; };
+    set('.bar-rank', kind === 'others' ? '' : String(rank));
+    const nm = $('.bar-name', li);
+    const label = kind === 'others' ? `Outros (${o.count})` : o.name;
+    if (nm.dataset.l !== label) { nm.dataset.l = label; nm.innerHTML = ''; nm.append(label); if (o.number && kind !== 'others') { const sm = document.createElement('small'); sm.textContent = o.number; nm.append(sm); } nm.title = label; }
+    const valEl = $('.bar-val b', li);
+    const txt = nf.format(o.votes);
+    if (valEl.textContent !== txt) { const had = valEl.textContent !== ''; valEl.textContent = txt; if (had) { li.classList.remove('bump'); void li.offsetWidth; li.classList.add('bump'); } }
+    set('.bar-val span', `${pct.toFixed(1).replace('.', ',')}%`);
+    $('.bar-fill', li).style.width = `${w}%`;
+    li.setAttribute('role', 'img');
+    li.setAttribute('aria-label', `${label}: ${txt} votos, ${pct.toFixed(1)}%`);
+    li.classList.toggle('bar-row--lead', kind === 'lead');
+  }
+
+  function contestCardEl(c) {
+    const art = document.createElement('article');
+    art.className = `card rcard rcard--${c.office === 'governor' ? 'governor' : c.office === 'mayor' ? 'mayor' : c.office === 'president' ? 'president' : 'other'}`;
+    art.dataset.contest = c.contest_id;
+    art.innerHTML = `<div class="card__head"><div class="card__ico card__ico--${c.scope === 'national' ? 'arara' : c.scope === 'state' ? 'onca' : 'boto'}">${ico(c.scope === 'national' ? 'globe' : 'ballot')}</div>
+      <div style="min-width:0"><h2></h2><div class="row" style="gap:6px;margin-top:6px"><span data-slot="chips"></span></div></div></div>
+      <div class="row"><span class="muted" data-slot="total"></span></div>
+      <div data-slot="body"></div>`;
+    return art;
+  }
+
+  function patchContestCard(art, c, vis) {
+    const h = $('h2', art); if (h.textContent !== c.title) h.textContent = c.title;
+    const [phaseLabel, phaseKind] = PHASES[c.phase] || [c.phase, ''];
+    const scope = c.scope === 'national' ? 'Nacional' : c.scope === 'state' ? `Estado ${c.scope_code}` : `Município ${c.scope_code}`;
+    const chips = `${chip(scope, 'info')}${chip(phaseLabel, phaseKind)}`;
+    const chipsEl = $('[data-slot=chips]', art); if (chipsEl.dataset.v !== chips) { chipsEl.dataset.v = chips; chipsEl.innerHTML = chips; }
+    const totalEl = $('[data-slot=total]', art);
+    const total = c.accepted === null ? 'Total oculto até o fechamento' : `${nf.format(c.accepted)} cédulas aceitas${c.rejected ? ` · ${nf.format(c.rejected)} rejeitadas` : ''}`;
+    if (totalEl.textContent !== total) totalEl.textContent = total;
+    const body = $('[data-slot=body]', art);
+    if (!c.distribution_visible) {
+      const msg = c.accepted === null ? 'Oculto até o fechamento da votação (política do manifesto).'
+        : c.phase === 'voting_open' ? 'Só o comparecimento aparece agora; a distribuição é divulgada depois do fechamento.'
+        : 'Ainda sem votação neste pleito.';
+      if (!body.querySelector('.hidden-dist') || body.dataset.m !== msg) { body.dataset.m = msg; body.innerHTML = `<div class="hidden-dist">${ico('lock')}<div>${esc(msg)}</div></div>`; }
+      return;
+    }
+    let ul = body.querySelector('ul.bars');
+    if (!ul) { body.innerHTML = ''; body.dataset.m = ''; ul = document.createElement('ul'); ul.className = 'bars'; ul.setAttribute('aria-label', `Ranking: ${c.title}`); body.append(ul); }
+    const rows = c.top.map((o) => ({ ...o }));
+    if (c.others_count > 0) rows.push({ index: -1, votes: c.others_votes, count: c.others_count, others: true });
+    const max = Math.max(1, ...c.top.map((o) => o.votes));
+    const total2 = c.accepted || 0;
+    const existing = new Map([...ul.children].map((li) => [li.dataset.key, li]));
+    rows.forEach((o, i) => {
+      const key = o.others ? 'others' : String(o.index);
+      const kind = o.others ? 'others' : i === 0 && o.votes > 0 ? 'lead' : '';
+      const pct = total2 > 0 ? (o.votes * 100) / total2 : 0;
+      let li = existing.get(key);
+      if (li) { patchRow(li, o, i + 1, o.others ? (o.votes * 100) / Math.max(1, max) : (o.votes * 100) / max, pct, kind); existing.delete(key); }
+      else li = barRow(o, i + 1, max, total2, kind);
+      if (ul.children[i] !== li) ul.insertBefore(li, ul.children[i] || null);
+    });
+    existing.forEach((li) => li.remove());
+  }
+
+  function renderResults() {
+    const r = S.results;
+    renderResStatus();
+    if (!r || !r.available) return;
+    renderResTabs(r);
+    const grid = $('#res-grid'); if (!grid) return;
+    const list = (officesOf(r).find(([o]) => o === S.resultsOffice) || [null, []])[1]
+      .slice().sort((a, b) => (a.scope_code || '').localeCompare(b.scope_code || '') || a.title.localeCompare(b.title));
+    const want = list.map((c) => c.contest_id).join('|');
+    if (grid.dataset.want !== want) {
+      grid.dataset.want = want; grid.innerHTML = '';
+      list.forEach((c) => grid.append(contestCardEl(c)));
+    }
+    list.forEach((c) => { const el = grid.querySelector(`[data-contest="${CSS.escape(c.contest_id)}"]`); if (el) patchContestCard(el, c, r.visibility); });
+  }
+
+  async function pollResults() {
+    if (S.route !== 'results') return;
+    try {
+      S.results = await invoke('results_snapshot');
+      S.resultsErr = null; S.resultsAt = Date.now();
+    } catch (e) { S.resultsErr = asErr(e).message; }
+    const need = S.results && S.results.available ? 'ready' : 'empty';
+    if (S.resultsShape !== need) { S.resultsShape = need; renderMain(); }
+    renderResults();
+  }
+
   // ───────────────────────── ações ─────────────────────────
   const act = {
     nav(b) {
@@ -650,9 +820,16 @@
       if (!routeAllowed(id)) { toast(id === 'onboarding' ? 'A configuração já foi concluída.' : 'Conecte e desbloqueie seu dispositivo para usar esta área.', 'bad'); return; }
       S.route = id; S.userPicked = true; S.lastKey = '';
       if (id === 'vote') S.elecChecked = false;
+      if (id === 'results') { S.resultsShape = null; setTimeout(pollResults, 0); }
       if (id === 'identity') S.idTried = false;
       if (id === 'identity') loadId();
       render();
+    },
+    gotoresults() { S.route = 'results'; S.userPicked = true; S.resultsShape = null; S.lastKey = ''; render(); pollResults(); },
+    resoffice(b) { S.resultsOffice = b.dataset.o; $('#res-grid').dataset.want = ''; renderResults(); },
+    async publishboard() {
+      await guarded(async () => { const n = await invoke('board_publish'); toast(n ? 'Eleição publicada no quadro.' : 'A eleição já estava no quadro.', 'ok'); });
+      S.resultsShape = null; pollResults();
     },
     async rescan() { await poll(); if (phase() === 'none') toast('Nenhum dispositivo encontrado. O emulador está rodando?'); },
     async auth() {
@@ -767,10 +944,10 @@
       const idx = S.picks[id];
       if (idx === undefined) { toast('Escolha um candidato antes de votar.'); return; }
       await guarded(async () => {
-        const ballot = await call('election_vote', { electionId: S.election.election_id, contestId: id, optionIndex: idx });
-        S.ballots[id] = ballot;
+        const r = await call('election_vote', { electionId: S.election.election_id, contestId: id, optionIndex: idx });
+        S.ballots[id] = { ...r.ballot, submitted: r.submitted, board_index: r.board_index, note: r.note };
         S.election = await call('election_get');
-        toast('Cédula assinada pelo dispositivo (protótipo: não enviada).', 'ok');
+        toast(S.ballots[id].submitted ? 'Cédula assinada e enviada ao quadro local.' : 'Cédula assinada pelo dispositivo.', 'ok');
       });
       S.lastKey = ''; render();
     },
@@ -815,6 +992,7 @@
     if (S.route === 'onboarding' && onboardStep() === 'firmware') loadFirmware();
     if (S.route === 'identity') loadId();
     if (S.route === 'vote') loadElec();
+    if (S.route === 'results') renderResults();
     const dz = $('#dz');
     if (dz) {
       ['dragenter', 'dragover'].forEach((ev) => dz.addEventListener(ev, (e) => { e.preventDefault(); dz.classList.add('is-over'); }));
@@ -862,6 +1040,8 @@
     }
     await poll();
     setInterval(poll, 2000);
+    setInterval(pollResults, 1500);
+    setInterval(renderResStatus, 1000);
   }
 
   if (!TAURI) {

@@ -29,7 +29,7 @@ use teko_crypto::{
 };
 use teko_election::{
     BALLOT_KIND_PUBLIC, Contest, Domicile, ElectionBundle, ElectionManifest, ElectionOption,
-    Office, Phase, Schedule, Scope, Transition, contest_hash,
+    Office, Phase, ResultsVisibility, Schedule, Scope, Transition, contest_hash,
     sign_manifest as sign_election_manifest, sign_transition,
 };
 use teko_protocol::IdentityRequest;
@@ -219,7 +219,9 @@ impl Issuer {
             trust.gov_threshold = GOV_THRESHOLD;
             fs::write(self.dir.join("trust.txt"), trust.to_text())?;
         }
-        self.dev_election(now_secs())?;
+        if !self.dir.join("election.bundle").exists() {
+            self.dev_election(now_secs())?;
+        }
         for (version, signers) in [(1u32, [0usize, 1]), (2, [1, 2])] {
             let blob = make_firmware_blob(version, 48 * 1024);
             let manifest = self.sign_firmware(version, &blob, &signers)?;
@@ -236,11 +238,13 @@ impl Issuer {
         Ok(trust)
     }
 
-    /// Writes `election.bundle`: a demo election with FOUR contests on DIFFERENT
-    /// dates, so every phase is visible: President (voting open), Governor of SP
-    /// (registration only, voting opens tomorrow), Governor of RJ (voting open but
-    /// a different state), Mayor of São Paulo (candidates announced only).
-    /// Dates are relative to `now`. Re-running refreshes them.
+    /// Writes `election.bundle`: a demo election on DIFFERENT dates and states:
+    /// President (national), governors of SP (12 candidates, to show "top 10 +
+    /// others"), RJ, MG, BA and RS (voting open), and the Mayor of São Paulo
+    /// (candidates announced only). Dates are relative to `now`.
+    ///
+    /// A NEW bundle is a NEW election (the id carries today's date): the board and
+    /// the "simulated data" marker of the previous one are removed.
     pub fn dev_election(&self, now: u64) -> Result<(), IssuerError> {
         const DAY: u64 = 86_400;
         let gov: Vec<SigningKey> = (0..GOV_SIGNERS)
@@ -257,6 +261,8 @@ impl Issuer {
                 })
                 .collect()
         };
+        let open = (now - 5 * DAY, now - DAY, now + 3 * DAY);
+        let announced = (now + DAY, now + 3 * DAY, now + 4 * DAY);
         let contest = |id: &str,
                        office: Office,
                        title: &str,
@@ -274,55 +280,128 @@ impl Issuer {
                 voting_closes: s.2,
             }),
         };
+        let (y, m, d) = civil_from_days((now / 86_400) as i64);
+        let contests = vec![
+            contest(
+                "presidente",
+                Office::President,
+                "Presidente da República",
+                Scope::national(),
+                opts(
+                    &[
+                        "Candidata Onça-Pintada",
+                        "Candidato Boto-Cor-de-Rosa",
+                        "Candidata Arara-Azul",
+                    ],
+                    10,
+                ),
+                open,
+            ),
+            contest(
+                "governador-sp",
+                Office::Governor,
+                "Governador de São Paulo",
+                Scope::state("SP"),
+                opts(
+                    &[
+                        "Candidato Guará",
+                        "Candidata Vitória-Régia",
+                        "Candidato Lobo-Guará",
+                        "Candidata Arara-Canindé",
+                        "Candidato Tamanduá-Bandeira",
+                        "Candidata Capivara",
+                        "Candidato Jacaré-do-Papo-Amarelo",
+                        "Candidata Onça-Parda",
+                        "Candidato Mico-Leão-Dourado",
+                        "Candidata Ararinha-Azul",
+                        "Candidato Tatu-Canastra",
+                        "Candidata Sabiá-Laranjeira",
+                    ],
+                    20,
+                ),
+                open,
+            ),
+            contest(
+                "governador-rj",
+                Office::Governor,
+                "Governador do Rio de Janeiro",
+                Scope::state("RJ"),
+                opts(
+                    &[
+                        "Candidato Mico-Leão-Dourado",
+                        "Candidata Capivara",
+                        "Candidato Boto-Tucuxi",
+                    ],
+                    40,
+                ),
+                open,
+            ),
+            contest(
+                "governador-mg",
+                Office::Governor,
+                "Governador de Minas Gerais",
+                Scope::state("MG"),
+                opts(
+                    &[
+                        "Candidato Lobo-Guará",
+                        "Candidata Onça-Parda",
+                        "Candidato Tamanduá-Bandeira",
+                        "Candidata Seriema",
+                    ],
+                    50,
+                ),
+                open,
+            ),
+            contest(
+                "governador-ba",
+                Office::Governor,
+                "Governador da Bahia",
+                Scope::state("BA"),
+                opts(
+                    &[
+                        "Candidata Arara-Vermelha",
+                        "Candidato Tartaruga-Marinha",
+                        "Candidata Baleia-Jubarte",
+                    ],
+                    60,
+                ),
+                open,
+            ),
+            contest(
+                "governador-rs",
+                Office::Governor,
+                "Governador do Rio Grande do Sul",
+                Scope::state("RS"),
+                opts(
+                    &[
+                        "Candidato Quero-Quero",
+                        "Candidata Graxaim",
+                        "Candidato Zorrilho",
+                        "Candidata Ema",
+                    ],
+                    70,
+                ),
+                open,
+            ),
+            contest(
+                "prefeito-3550308",
+                Office::Mayor,
+                "Prefeito de São Paulo",
+                Scope::municipality("3550308"),
+                opts(&["Candidata Jaguatirica", "Candidato Tucano"], 30),
+                announced,
+            ),
+        ];
         let mut manifest = ElectionManifest {
             format_version: 2,
-            election_id: "eleicoes-exemplo-2026".to_string(),
-            title: "Eleições de exemplo 2026 (protótipo)".to_string(),
-            contests: vec![
-                contest(
-                    "presidente",
-                    Office::President,
-                    "Presidente da República",
-                    Scope::national(),
-                    opts(
-                        &[
-                            "Candidata Onça-Pintada",
-                            "Candidato Boto-Cor-de-Rosa",
-                            "Candidata Arara-Azul",
-                        ],
-                        10,
-                    ),
-                    (now - 5 * DAY, now - DAY, now + 3 * DAY),
-                ),
-                contest(
-                    "governador-sp",
-                    Office::Governor,
-                    "Governador de São Paulo",
-                    Scope::state("SP"),
-                    opts(&["Candidato Guará", "Candidata Vitória-Régia"], 20),
-                    (now - 3 * DAY, now + DAY, now + 5 * DAY),
-                ),
-                contest(
-                    "governador-rj",
-                    Office::Governor,
-                    "Governador do Rio de Janeiro",
-                    Scope::state("RJ"),
-                    opts(&["Candidato Mico-Leão-Dourado", "Candidata Capivara"], 40),
-                    (now - 4 * DAY, now - DAY, now + 2 * DAY),
-                ),
-                contest(
-                    "prefeito-3550308",
-                    Office::Mayor,
-                    "Prefeito de São Paulo",
-                    Scope::municipality("3550308"),
-                    opts(&["Candidata Jaguatirica", "Candidato Tucano"], 30),
-                    (now + DAY, now + 3 * DAY, now + 4 * DAY),
-                ),
-            ],
+            election_id: format!("eleicoes-exemplo-{y:04}{m:02}{d:02}"),
+            title: "Eleições de exemplo (protótipo, dados fictícios)".to_string(),
+            contests,
             ballot_kind: BALLOT_KIND_PUBLIC.to_string(),
             registry_key: Vec::new(),
             revision: 1,
             signatures: Vec::new(),
+            results_visibility: ResultsVisibility::Live as i32,
         };
         manifest.signatures = [0usize, 1]
             .iter()
@@ -330,16 +409,12 @@ impl Issuer {
             .collect();
 
         // Governance decisions, each contest on ITS OWN schedule.
-        let targets = [
-            ("presidente", Phase::VotingOpen),
-            ("governador-sp", Phase::RegistrationOpen),
-            ("governador-rj", Phase::VotingOpen),
-            ("prefeito-3550308", Phase::CandidatesPublished),
-        ];
         let mut transitions: Vec<Transition> = Vec::new();
-        for (id, upto) in targets {
-            let Some(c) = manifest.contest(id) else {
-                continue;
+        for c in &manifest.contests {
+            let upto = if c.contest_id.starts_with("prefeito") {
+                Phase::CandidatesPublished
+            } else {
+                Phase::VotingOpen
             };
             let s = c.schedule.clone().unwrap_or_default();
             let steps = [
@@ -361,7 +436,7 @@ impl Issuer {
                 }
                 let mut t = Transition {
                     election_id: manifest.election_id.clone(),
-                    contest_id: id.to_string(),
+                    contest_id: c.contest_id.clone(),
                     contest_hash: contest_hash(c).to_vec(),
                     from_phase: from as i32,
                     to_phase: to as i32,
@@ -382,6 +457,10 @@ impl Issuer {
             transitions: transitions.iter().map(|t| t.encode_to_vec()).collect(),
         };
         fs::write(self.dir.join("election.bundle"), bundle.encode_to_vec())?;
+        // A new election starts with a clean board and no "simulated" marker.
+        for stale in ["board.log", "board.simulated"] {
+            let _ = fs::remove_file(self.dir.join(stale));
+        }
         Ok(())
     }
 
@@ -792,7 +871,7 @@ mod tests {
     }
 
     #[test]
-    fn demo_election_is_signed_by_governance_and_replays_with_four_phases() {
+    fn demo_election_is_signed_by_governance_and_replays_with_open_and_announced_contests() {
         use teko_election::{GovernancePolicy, Phase, replay};
         let issuer = Issuer::open(scratch_dir("election"));
         let trust = issuer.dev_setup().unwrap();
@@ -811,18 +890,41 @@ mod tests {
             .collect();
         let policy = GovernancePolicy::new(trust.gov_signers.clone(), trust.gov_threshold).unwrap();
         let status = replay(&policy, &manifest, &ts).unwrap();
-        assert_eq!(status.phase_of("presidente"), Some(Phase::VotingOpen));
-        assert_eq!(
-            status.phase_of("governador-sp"),
-            Some(Phase::RegistrationOpen)
-        );
-        assert_eq!(status.phase_of("governador-rj"), Some(Phase::VotingOpen));
+        for open in [
+            "presidente",
+            "governador-sp",
+            "governador-rj",
+            "governador-mg",
+            "governador-ba",
+            "governador-rs",
+        ] {
+            assert_eq!(status.phase_of(open), Some(Phase::VotingOpen), "{open}");
+        }
         assert_eq!(
             status.phase_of("prefeito-3550308"),
             Some(Phase::CandidatesPublished)
         );
-        // re-running refreshes the dates but keeps the keys (idempotent)
+        assert_eq!(
+            manifest.contest("governador-sp").unwrap().options.len(),
+            12,
+            "top-10 + others demo"
+        );
+        assert!(manifest.election_id.starts_with("eleicoes-exemplo-"));
+        // re-running dev-setup keeps the SAME election (it is only recreated on purpose)
+        let before = fs::read(issuer.dir().join("election.bundle")).unwrap();
         assert_eq!(issuer.dev_setup().unwrap(), trust);
+        assert_eq!(
+            before,
+            fs::read(issuer.dir().join("election.bundle")).unwrap()
+        );
+        // a deliberate refresh removes the old board and the simulated marker
+        fs::write(issuer.dir().join("board.log"), b"x").unwrap();
+        fs::write(issuer.dir().join("board.simulated"), b"x").unwrap();
+        issuer.dev_election(1_900_000_000).unwrap();
+        assert!(
+            !issuer.dir().join("board.log").exists()
+                && !issuer.dir().join("board.simulated").exists()
+        );
         let _ = fs::remove_dir_all(issuer.dir());
     }
 

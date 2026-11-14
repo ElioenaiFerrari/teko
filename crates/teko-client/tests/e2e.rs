@@ -373,19 +373,25 @@ fn election_flow_president_for_all_governor_and_mayor_by_domicile() {
 
     // Suite verifies governance first; the device verifies again and asks on ITS screen.
     let e = c.load_election(&rig.trust, &election_bundle(&rig)).unwrap();
-    assert_eq!(e.contests.len(), 4);
+    let eid = e.election_id.clone();
+    assert!(eid.starts_with("eleicoes-exemplo-"));
+    assert_eq!(e.contests.len(), 7);
     let get = |id: &str| e.contests.iter().find(|x| x.contest_id == id).unwrap();
-    // Four contests, four situations at the same moment, decided by the DEVICE:
+    // Different contests, different situations at the same moment, decided by the DEVICE:
     assert_eq!(
         (get("presidente").phase, get("presidente").eligible),
         ("voting_open", true)
     );
     assert_eq!(
         (get("governador-sp").phase, get("governador-sp").eligible),
-        ("registration_open", true)
+        ("voting_open", true)
     );
     assert_eq!(
         (get("governador-rj").phase, get("governador-rj").eligible),
+        ("voting_open", false)
+    );
+    assert_eq!(
+        (get("governador-mg").phase, get("governador-mg").eligible),
         ("voting_open", false)
     );
     assert_eq!(
@@ -395,6 +401,7 @@ fn election_flow_president_for_all_governor_and_mayor_by_domicile() {
         ),
         ("candidates_published", true)
     );
+    assert_eq!(get("governador-sp").option_names.len(), 12);
     let shown = rig
         .hal
         .screens()
@@ -405,9 +412,7 @@ fn election_flow_president_for_all_governor_and_mayor_by_domicile() {
     assert!(shown.lines.join(" ").contains("Governança: 2 de 3"));
 
     // The President belongs to everyone: vote, verify, see the NAME on the device screen.
-    let ballot = c
-        .sign_ballot("eleicoes-exemplo-2026", "presidente", 1)
-        .unwrap();
+    let ballot = c.sign_ballot(&eid, "presidente", 1).unwrap();
     assert_eq!(ballot.option_name, "Candidato Boto-Cor-de-Rosa");
     let screen = rig
         .hal
@@ -421,31 +426,37 @@ fn election_flow_president_for_all_governor_and_mayor_by_domicile() {
         text.contains("Candidato Boto-Cor-de-Rosa") && text.contains("Presidente da República"),
         "{text}"
     );
-    assert!(!ballot.signature.is_empty() && !ballot.voter_key.is_empty());
+    assert!(
+        !ballot.signature.is_empty()
+            && !ballot.voter_key.is_empty()
+            && ballot.contest_hash.len() == 64
+    );
 
-    // Rio's governor: voting is open but it is not my state -> refused, no prompt.
+    // São Paulo's governor is MY contest and open: vote there too (a different key).
+    let gov = c.sign_ballot(&eid, "governador-sp", 3).unwrap();
+    assert_eq!(gov.option_name, "Candidata Arara-Canindé");
+    assert_ne!(
+        gov.voter_key, ballot.voter_key,
+        "keys are per contest: the two votes cannot be linked"
+    );
+
+    // Other states' governors: voting is open but it is not my state -> refused, no prompt.
     let before = rig.hal.confirms_requested();
-    assert_eq!(
-        device_code(
-            c.sign_ballot("eleicoes-exemplo-2026", "governador-rj", 0)
-                .unwrap_err()
-        ),
-        ErrorCode::NotEligible
-    );
-    // São Paulo's governor: mine, but voting opens tomorrow.
-    assert_eq!(
-        device_code(
-            c.sign_ballot("eleicoes-exemplo-2026", "governador-sp", 0)
-                .unwrap_err()
-        ),
-        ErrorCode::WrongPhase
-    );
+    for other in [
+        "governador-rj",
+        "governador-mg",
+        "governador-ba",
+        "governador-rs",
+    ] {
+        assert_eq!(
+            device_code(c.sign_ballot(&eid, other, 0).unwrap_err()),
+            ErrorCode::NotEligible,
+            "{other}"
+        );
+    }
     // The mayor: mine, but only the candidates are announced.
     assert_eq!(
-        device_code(
-            c.sign_ballot("eleicoes-exemplo-2026", "prefeito-3550308", 0)
-                .unwrap_err()
-        ),
+        device_code(c.sign_ballot(&eid, "prefeito-3550308", 0).unwrap_err()),
         ErrorCode::WrongPhase
     );
     assert_eq!(
@@ -456,38 +467,54 @@ fn election_flow_president_for_all_governor_and_mayor_by_domicile() {
 
     // One ballot per contest.
     assert_eq!(
-        device_code(
-            c.sign_ballot("eleicoes-exemplo-2026", "presidente", 0)
-                .unwrap_err()
-        ),
+        device_code(c.sign_ballot(&eid, "presidente", 0).unwrap_err()),
         ErrorCode::AlreadyVoted
     );
-    assert!(
-        c.election()
-            .unwrap()
-            .contests
-            .iter()
-            .find(|x| x.contest_id == "presidente")
-            .unwrap()
-            .voted
+    let after = c.election().unwrap();
+    let voted: Vec<&str> = after
+        .contests
+        .iter()
+        .filter(|x| x.voted)
+        .map(|x| x.contest_id.as_str())
+        .collect();
+    assert_eq!(voted, ["presidente", "governador-sp"]);
+
+    // Registration keys are per contest, unrelated, and the registered key is the one that signs.
+    let k_pres = c.voter_key(&eid, "presidente").unwrap();
+    assert_eq!(k_pres, ballot.voter_key);
+    assert_eq!(
+        device_code(c.voter_key(&eid, "prefeito-3550308").unwrap_err()),
+        ErrorCode::WrongPhase
     );
 
-    // Registration keys are per contest and unrelated to each other.
-    let k_pres = c.voter_key("eleicoes-exemplo-2026", "presidente").unwrap();
-    let k_gov = c
-        .voter_key("eleicoes-exemplo-2026", "governador-sp")
-        .unwrap();
-    assert_ne!(k_pres, k_gov);
+    // What the device signed is counted by the PUBLIC tally, once, from the board alone.
+    let admin = election_admin::Admin::open(rig.issuer.dir()).unwrap();
+    admin.publish().unwrap();
+    for b in [&ballot, &gov] {
+        admin
+            .submit_ballot(&teko_election::SubmittedBallot {
+                election_id: b.election_id.clone(),
+                contest_id: b.contest_id.clone(),
+                contest_hash: teko_crypto::hex::decode(&b.contest_hash).unwrap(),
+                option_index: b.option_index,
+                voter_key: teko_crypto::hex::decode(&b.voter_key).unwrap(),
+                signature: teko_crypto::hex::decode(&b.signature).unwrap(),
+            })
+            .unwrap();
+    }
+    let t = admin.tally().unwrap();
     assert_eq!(
-        k_pres, ballot.voter_key,
-        "the registered key is the one that signs"
-    );
-    assert_eq!(
-        device_code(
-            c.voter_key("eleicoes-exemplo-2026", "prefeito-3550308")
-                .unwrap_err()
+        (
+            t.contest("presidente").unwrap().accepted,
+            t.contest("presidente").unwrap().options[1].votes
         ),
-        ErrorCode::WrongPhase
+        (1, 1)
+    );
+    assert_eq!(t.contest("governador-sp").unwrap().options[3].votes, 1);
+    assert_eq!(
+        t.contests.iter().map(|x| x.rejected.total()).sum::<u64>(),
+        0,
+        "real device ballots are valid"
     );
     let _ = fs::remove_dir_all(rig.issuer.dir());
 }
@@ -525,7 +552,7 @@ fn a_forged_or_old_election_never_reaches_a_vote() {
 
     // Voting without a loaded election is impossible.
     assert!(matches!(
-        c.sign_ballot("eleicoes-exemplo-2026", "presidente", 0),
+        c.sign_ballot("any-election", "presidente", 0),
         Err(ClientError::Unexpected(_))
     ));
     let _ = fs::remove_dir_all(rig.issuer.dir());

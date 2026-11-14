@@ -129,6 +129,19 @@ impl ElectionStatus {
         }
     }
 
+    /// A later manifest revision may add contests: start them in `Draft`.
+    pub fn extend_for(&mut self, manifest: &ElectionManifest) {
+        for c in &manifest.contests {
+            if !self.contests.iter().any(|s| s.contest_id == c.contest_id) {
+                self.contests.push(ContestState {
+                    contest_id: c.contest_id.clone(),
+                    phase: Phase::Draft,
+                    at: 0,
+                });
+            }
+        }
+    }
+
     pub fn phase_of(&self, contest_id: &str) -> Option<Phase> {
         self.contests
             .iter()
@@ -172,7 +185,7 @@ pub fn verify_transition(policy: &GovernancePolicy, t: &Transition) -> Result<()
     Ok(())
 }
 
-fn apply(
+pub(crate) fn apply(
     manifest: &ElectionManifest,
     status: &mut ElectionStatus,
     t: &Transition,

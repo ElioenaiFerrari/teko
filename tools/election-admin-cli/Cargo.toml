@@ -1,0 +1,28 @@
+[package]
+name = "election-admin-cli"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[lib]
+name = "election_admin"
+path = "src/lib.rs"
+
+[[bin]]
+name = "election-admin"
+path = "src/main.rs"
+
+[dependencies]
+teko-crypto.workspace = true
+teko-attestation.workspace = true
+teko-election.workspace = true
+teko-bulletin.workspace = true
+prost.workspace = true
+thiserror = { workspace = true, features = ["std"] }
+
+[dev-dependencies]
+issuer-cli.workspace = true
+
+[lints]
+workspace = true

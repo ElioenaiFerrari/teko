@@ -27,6 +27,43 @@ fn split(n: usize) -> usize {
     k
 }
 
+/// Incremental Merkle root: O(log n) memory, O(1) amortised append, O(log n)
+/// root. Equal to `root(leaves)` at every size (tested).
+#[derive(Clone, Debug, Default)]
+pub struct Frontier {
+    /// Perfect subtrees, left to right, strictly decreasing in size.
+    peaks: Vec<(Hash, u64)>,
+}
+
+impl Frontier {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    pub fn push(&mut self, leaf: Hash) {
+        let mut cur = (leaf, 1u64);
+        while let Some(&(left, size)) = self.peaks.last() {
+            if size != cur.1 {
+                break;
+            }
+            self.peaks.pop();
+            cur = (node_hash(&left, &cur.0), size * 2);
+        }
+        self.peaks.push(cur);
+    }
+
+    pub fn root(&self) -> Hash {
+        let mut it = self.peaks.iter().rev();
+        let Some(&(mut r, _)) = it.next() else {
+            return empty_root();
+        };
+        for &(p, _) in it {
+            r = node_hash(&p, &r);
+        }
+        r
+    }
+}
+
 /// MTH(D[n]).
 pub fn root(leaves: &[Hash]) -> Hash {
     match leaves {
@@ -258,6 +295,17 @@ mod tests {
         );
         assert!(!verify_consistency(7, 13, &old, &r, &c), "wrong old size");
         assert!(!verify_consistency(13, 6, &r, &old, &c), "shrinking");
+    }
+
+    #[test]
+    fn the_incremental_frontier_equals_the_recursive_root_at_every_size() {
+        let mut f = Frontier::new();
+        assert_eq!(f.root(), empty_root());
+        let l = leaves(200);
+        for (i, leaf) in l.iter().enumerate() {
+            f.push(*leaf);
+            assert_eq!(f.root(), root(&l[..=i]), "size {}", i + 1);
+        }
     }
 
     #[test]

@@ -15,6 +15,7 @@ fn main() {
     let suite: Suite = Arc::new(SuiteInner {
         client: Mutex::new(None),
         addr,
+        results: Mutex::new(None),
     });
     let result = tauri::Builder::default()
         .manage(suite)
@@ -38,6 +39,8 @@ fn main() {
             commands::election_load,
             commands::election_get,
             commands::election_vote,
+            commands::results_snapshot,
+            commands::board_publish,
             commands::wipe,
         ])
         .run(tauri::generate_context!());

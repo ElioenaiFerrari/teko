@@ -21,6 +21,7 @@ mod error;
 mod lifecycle;
 mod manifest;
 mod policy;
+mod tally;
 mod text;
 
 pub use ballot::{BallotBody, ElectionBundle, sign_ballot, verify_ballot};
@@ -31,9 +32,13 @@ pub use lifecycle::{
     transition_hash, verify_transition,
 };
 pub use manifest::{
-    BALLOT_KIND_PUBLIC, Contest, ElectionManifest, ElectionOption, Office, Schedule, contest_hash,
-    manifest_hash, sign_manifest, validate_manifest, validate_revision, verify_manifest,
-    verify_manifest_chain,
+    BALLOT_KIND_PUBLIC, Contest, ElectionManifest, ElectionOption, Office, ResultsVisibility,
+    Schedule, contest_hash, manifest_hash, sign_manifest, validate_manifest, validate_revision,
+    verify_manifest, verify_manifest_chain,
 };
 pub use policy::GovernancePolicy;
+pub use tally::{
+    ContestTally, ElectionTally, LogEntry, LogKind, OptionTally, PublicView, Ranking, RejectCounts,
+    SubmittedBallot, Tallier, tally,
+};
 pub use text::sanitize_text;

@@ -21,7 +21,7 @@ pub enum ScopeLevel {
 
 /// The jurisdiction a contest covers. `code`: empty for National; the 2-letter
 /// UF for State (`"SP"`); the 7-digit IBGE code for Municipality (`"3550308"`).
-#[derive(Clone, PartialEq, prost::Message)]
+#[derive(Clone, PartialEq, Eq, prost::Message)]
 pub struct Scope {
     #[prost(enumeration = "ScopeLevel", tag = "1")]
     pub level: i32,

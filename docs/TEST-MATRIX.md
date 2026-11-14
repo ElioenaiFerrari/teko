@@ -87,10 +87,27 @@ Legenda: **P** = `proptest` (muitos casos), **U** = unitário, **E** = ponta a p
 | Governança no `trust.txt` é tudo-ou-nada | attestation: `governance_is_all_or_nothing` |
 | Tela do dispositivo quebra por palavra (nome de candidato nunca cortado) | device-core: `text::wrap_breaks_on_words_and_hard_splits_only_what_cannot_fit` |
 
+## Fase 2, etapa 4: apuração e resultados ao vivo
+
+| Garantia | Teste |
+|---|---|
+| A apuração é função pura do log: conta por opção, ranqueia (desempate por posição) com balde "Outros" | election: `counts_per_option_and_ranks_with_an_others_bucket` |
+| "Tempo" é a ordem do log: cédula só vale com o pleito em VotacaoAberta naquele ponto | election: `a_ballot_counts_only_while_its_contest_is_open_in_log_order`, `the_tally_is_deterministic_and_depends_on_log_order` |
+| Uma cédula por chave por pleito, a primeira vale | election: `one_ballot_per_voter_key_per_contest_first_wins`; proptest `totals_always_add_up` |
+| Toda rejeição é contada por motivo (assinatura, versão do pleito, opção, duplicada, malformada, pleito desconhecido); nada some | election: `every_invalid_ballot_is_counted_by_reason_never_dropped_silently` |
+| Governança forjada no log (transição com 1 assinatura, revisão que altera pleito) é ignorada e contada, sem parar a apuração | election: `forged_governance_entries_are_ignored_and_counted_without_stopping_the_count`, `ballots_before_any_valid_manifest_are_orphans` |
+| Política de visibilidade mascara parciais até o fechamento; cancelado oculta tudo | election: `visibility_policy_masks_the_public_view_until_the_voting_closes` |
+| Apuração incremental == replay completo a cada passo | election: `incremental_snapshots_equal_a_full_replay_at_every_point`; admin: `incremental_feeding_follows_the_board_and_equals_a_full_replay` |
+| Raiz Merkle incremental (O(log n)) == raiz recursiva em todo tamanho | bulletin: `the_incremental_frontier_equals_the_recursive_root_at_every_size` |
+| Leitor ao vivo ignora cauda de escrita em andamento; escritor continua estrito; dano no meio é erro | bulletin: `a_live_reader_ignores_an_in_progress_tail_but_a_writer_still_refuses_it`; admin: `tallying_while_a_writer_is_mid_append_still_works` |
+| Publicar é idempotente; simulação gera eleitores novos a cada rodada e marca o quadro como simulado; streaming ao vivo | admin: `publish_is_idempotent_...`, `simulated_voters_are_counted_valid_ranked_and_labelled_as_simulated`, `live_simulation_streams_ballots_that_a_reader_can_follow` |
+| **Voto real do dispositivo (Presidente e Governador de SP, chaves distintas) entra no quadro e é contado uma vez** | e2e: `election_flow_president_for_all_governor_and_mayor_by_domicile` |
+
 ## O que **não** está coberto por teste automático (honestidade)
 
 - **Tempo constante da comparação do PIN:** o código usa `subtle::ConstantTimeEq`, mas não há teste de temporização.
 - **`--listen` só em loopback:** verificado manualmente (recusa `0.0.0.0`); falta teste automatizado.
+- **A tela de Resultados ao vivo (JS):** só exercitada com o mock no navegador (reconciliação de DOM, animação, abas). A apuração que a alimenta é testada; o desenho, não.
 - **A janela da Suite (Tauri) e a UI JS:** não há teste automatizado de interface (a tela de votação foi exercitada só com o mock no navegador; ali um laço de re-render travou a página e foi corrigido); a UI foi exercitada com o mock no navegador e o app real só foi aberto até conectar no emulador.
 - **`no_std` em alvo embarcado real:** o CI compila o núcleo para `thumbv7em-none-eabihf` (passou em 2026-11-14); não há teste de execução em hardware.
 - **Quadro de avisos de operador único:** sem testemunhas independentes, um operador pode mostrar logs diferentes a pessoas diferentes (*split view*). Só um head fixado e comparado por terceiros detecta isso; não há essa comparação implementada.

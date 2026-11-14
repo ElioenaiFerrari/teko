@@ -9,8 +9,8 @@ use teko_crypto::credential::{self, IssuedCredential, Presentation};
 use teko_crypto::{SigningKey, generate_signing_key, hex, public_key_bytes, tags, verify_tagged};
 use teko_election::{
     BALLOT_KIND_PUBLIC, BallotBody, Contest, ElectionManifest, ElectionOption, GovernancePolicy,
-    Office, Phase, Schedule, Scope, Transition, contest_hash, sign_manifest as sign_election,
-    sign_transition, verify_ballot,
+    Office, Phase, ResultsVisibility, Schedule, Scope, Transition, contest_hash,
+    sign_manifest as sign_election, sign_transition, verify_ballot,
 };
 use teko_protocol::*;
 
@@ -916,6 +916,7 @@ fn election_manifest(w: &World) -> ElectionManifest {
             ),
         ],
         ballot_kind: BALLOT_KIND_PUBLIC.into(),
+        results_visibility: ResultsVisibility::Live as i32,
         registry_key: vec![],
         revision: 1,
         signatures: vec![],

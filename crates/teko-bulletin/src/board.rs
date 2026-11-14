@@ -72,6 +72,7 @@ pub trait BulletinBoard {
 pub struct MemoryBoard {
     entries: Vec<Entry>,
     leaves: Vec<Hash>,
+    frontier: merkle::Frontier,
 }
 
 impl MemoryBoard {
@@ -83,7 +84,9 @@ impl MemoryBoard {
         if entry.payload.len() > MAX_PAYLOAD {
             return Err(BoardError::TooLarge);
         }
-        self.leaves.push(entry.leaf_hash());
+        let leaf = entry.leaf_hash();
+        self.leaves.push(leaf);
+        self.frontier.push(leaf);
         self.entries.push(entry);
         Ok(Receipt {
             index: self.len() - 1,
@@ -107,7 +110,7 @@ impl BulletinBoard for MemoryBoard {
     }
 
     fn root(&self) -> Hash {
-        merkle::root(&self.leaves)
+        self.frontier.root()
     }
 
     fn inclusion_proof(&self, index: u64) -> Result<Vec<Hash>, BoardError> {
@@ -130,31 +133,83 @@ pub struct FileBoard {
 }
 
 impl FileBoard {
+    /// STRICT open: a truncated or corrupt file is refused (a log that lost its
+    /// tail must be investigated). Use this for anything that WRITES.
     pub fn open(path: impl AsRef<Path>) -> Result<Self, BoardError> {
-        let path = path.as_ref().to_path_buf();
+        let (board, partial) = Self::load(path.as_ref(), false)?;
+        debug_assert!(!partial);
+        Ok(board)
+    }
+
+    /// LIVE-READER open: an incomplete LAST record (a writer is mid-append) is
+    /// ignored and reported (`true`) instead of failing; any other corruption is
+    /// still an error. Never use it to write.
+    pub fn open_tolerant(path: impl AsRef<Path>) -> Result<(Self, bool), BoardError> {
+        Self::load(path.as_ref(), true)
+    }
+
+    fn load(path: &Path, tolerate_partial_tail: bool) -> Result<(Self, bool), BoardError> {
+        let path = path.to_path_buf();
         let mut inner = MemoryBoard::new();
+        let mut partial = false;
         if path.exists() {
             let mut bytes = Vec::new();
             File::open(&path)?.read_to_end(&mut bytes)?;
             let mut pos = 0usize;
             while pos < bytes.len() {
-                let hdr = bytes
-                    .get(pos..pos + 4)
-                    .ok_or(BoardError::Corrupt("truncated length"))?;
+                let Some(hdr) = bytes.get(pos..pos + 4) else {
+                    if tolerate_partial_tail {
+                        partial = true;
+                        break;
+                    }
+                    return Err(BoardError::Corrupt("truncated length"));
+                };
                 let len = u32::from_be_bytes([hdr[0], hdr[1], hdr[2], hdr[3]]) as usize;
                 if len == 0 || len > MAX_PAYLOAD + 1 {
                     return Err(BoardError::Corrupt("bad entry length"));
                 }
-                let body = bytes
-                    .get(pos + 4..pos + 4 + len)
-                    .ok_or(BoardError::Corrupt("truncated entry"))?;
+                let Some(body) = bytes.get(pos + 4..pos + 4 + len) else {
+                    if tolerate_partial_tail {
+                        partial = true;
+                        break;
+                    }
+                    return Err(BoardError::Corrupt("truncated entry"));
+                };
                 inner.push(Entry::new(EntryKind(body[0]), body[1..].to_vec()))?;
                 pos += 4 + len;
             }
         } else if let Some(dir) = path.parent() {
             fs::create_dir_all(dir)?;
         }
-        Ok(Self { path, inner })
+        Ok((Self { path, inner }, partial))
+    }
+
+    /// Appends many entries with ONE write and ONE `fsync`.
+    pub fn append_many(&mut self, entries: Vec<Entry>) -> Result<Receipt, BoardError> {
+        if entries.iter().any(|e| e.payload.len() > MAX_PAYLOAD) {
+            return Err(BoardError::TooLarge);
+        }
+        let mut buf = Vec::new();
+        for e in &entries {
+            let data = e.leaf_data();
+            buf.extend_from_slice(&(data.len() as u32).to_be_bytes());
+            buf.extend_from_slice(&data);
+        }
+        let mut f = OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(&self.path)?;
+        f.write_all(&buf)?;
+        f.sync_all()?;
+        let mut last = Receipt {
+            index: 0,
+            size: self.len(),
+            root: self.root(),
+        };
+        for e in entries {
+            last = self.inner.push(e)?;
+        }
+        Ok(last)
     }
 }
 
@@ -419,6 +474,47 @@ mod tests {
             Err(BoardError::Corrupt(_))
         ));
         let _ = fs::remove_file(&path);
+    }
+
+    #[test]
+    fn a_live_reader_ignores_an_in_progress_tail_but_a_writer_still_refuses_it() {
+        let path = tmp("tail");
+        {
+            let mut b = FileBoard::open(&path).unwrap();
+            b.append_many((0..5).map(entry).collect()).unwrap();
+        }
+        let good = fs::read(&path).unwrap();
+        fs::write(&path, &good[..good.len() - 2]).unwrap(); // a writer is mid-record
+        let (r, partial) = FileBoard::open_tolerant(&path).unwrap();
+        assert!(partial);
+        assert_eq!(r.len(), 4, "the complete records are readable");
+        assert!(
+            matches!(FileBoard::open(&path), Err(BoardError::Corrupt(_))),
+            "writers stay strict"
+        );
+        // damage in the MIDDLE is never tolerated
+        let mut bad = good.clone();
+        bad[0..4].copy_from_slice(&0u32.to_be_bytes());
+        fs::write(&path, &bad).unwrap();
+        assert!(matches!(
+            FileBoard::open_tolerant(&path),
+            Err(BoardError::Corrupt(_))
+        ));
+        let _ = fs::remove_file(&path);
+    }
+
+    #[test]
+    fn append_many_equals_appending_one_by_one() {
+        let (pa, pb) = (tmp("many"), tmp("one"));
+        let mut a = FileBoard::open(&pa).unwrap();
+        let mut b = FileBoard::open(&pb).unwrap();
+        a.append_many((0..13).map(entry).collect()).unwrap();
+        for i in 0..13 {
+            b.append(entry(i)).unwrap();
+        }
+        assert_eq!((a.len(), a.root()), (b.len(), b.root()));
+        assert_eq!(FileBoard::open(&pa).unwrap().root(), a.root());
+        let _ = (fs::remove_file(&pa), fs::remove_file(&pb));
     }
 
     #[test]

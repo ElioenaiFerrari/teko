@@ -11,6 +11,7 @@ members = [
   "crates/teko-client",
   "tools/device-emulator",
   "tools/issuer-cli",
+  "tools/election-admin-cli",
   "apps/suite/src-tauri",
 ]
 
@@ -42,6 +43,7 @@ teko-transport = { path = "crates/teko-transport" }
 teko-client = { path = "crates/teko-client" }
 device-emulator = { path = "tools/device-emulator" }
 issuer-cli = { path = "tools/issuer-cli" }
+election-admin = { package = "election-admin-cli", path = "tools/election-admin-cli" }
 
 [workspace.lints.clippy]
 unwrap_used = "deny"

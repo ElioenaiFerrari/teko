@@ -905,6 +905,19 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "0e9c71c2167ca323c882b99918929403426e2373ea17242ff5653e0d5e1058be"
 
 [[package]]
+name = "election-admin-cli"
+version = "0.1.0"
+dependencies = [
+ "issuer-cli",
+ "prost",
+ "teko-attestation",
+ "teko-bulletin",
+ "teko-crypto",
+ "teko-election",
+ "thiserror 2.0.21",
+]
+
+[[package]]
 name = "elliptic-curve"
 version = "0.14.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3966,6 +3979,7 @@ name = "teko-client"
 version = "0.1.0"
 dependencies = [
  "device-emulator",
+ "election-admin-cli",
  "issuer-cli",
  "prost",
  "rand",
@@ -4037,6 +4051,7 @@ dependencies = [
 name = "teko-suite"
 version = "0.1.0"
 dependencies = [
+ "election-admin-cli",
  "issuer-cli",
  "prost",
  "serde",
@@ -4044,8 +4059,10 @@ dependencies = [
  "tauri",
  "tauri-build",
  "teko-attestation",
+ "teko-bulletin",
  "teko-client",
  "teko-crypto",
+ "teko-election",
  "teko-protocol",
  "teko-transport",
 ]

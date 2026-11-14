@@ -1,0 +1,835 @@
+//! Tally: counting ballots is a PURE FUNCTION of the bulletin-board log (ADR-0018).
+//!
+//! Anyone can replay the same entries and get the same numbers; nothing is taken
+//! on trust. "Time" is the ORDER of the log, not a clock: a ballot counts only if
+//! its contest was in `VotingOpen` at the point where the ballot was appended.
+//!
+//! PROTOTYPE LIMITS: there is no anonymous registration yet (ADR-0008), so any
+//! well-formed key is accepted, and no ZK proof/nullifier (ADR-0013): the voter
+//! key itself de-duplicates. The counts are NOT trustworthy against fraud.
+
+use alloc::collections::BTreeSet;
+use alloc::string::String;
+use alloc::vec::Vec;
+
+use prost::Message;
+
+use crate::ballot::{BallotBody, verify_ballot};
+use crate::eligibility::Scope;
+use crate::lifecycle::{ElectionStatus, Phase, Transition, apply};
+use crate::manifest::{
+    ElectionManifest, Office, ResultsVisibility, contest_hash, validate_revision, verify_manifest,
+};
+use crate::policy::GovernancePolicy;
+
+/// What a log entry carries. The bulletin board maps its own kind byte to this.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum LogKind {
+    Manifest,
+    Transition,
+    Ballot,
+}
+
+#[derive(Clone, Copy, Debug)]
+pub struct LogEntry<'a> {
+    pub kind: LogKind,
+    pub payload: &'a [u8],
+}
+
+/// A ballot as it is published on the board.
+#[derive(Clone, PartialEq, Message)]
+pub struct SubmittedBallot {
+    #[prost(string, tag = "1")]
+    pub election_id: String,
+    #[prost(string, tag = "2")]
+    pub contest_id: String,
+    #[prost(bytes = "vec", tag = "3")]
+    pub contest_hash: Vec<u8>,
+    #[prost(uint32, tag = "4")]
+    pub option_index: u32,
+    /// PUBLIC per-contest voter key.
+    #[prost(bytes = "vec", tag = "5")]
+    pub voter_key: Vec<u8>,
+    #[prost(bytes = "vec", tag = "6")]
+    pub signature: Vec<u8>,
+}
+
+impl SubmittedBallot {
+    pub fn body(&self) -> BallotBody {
+        BallotBody {
+            election_id: self.election_id.clone(),
+            contest_id: self.contest_id.clone(),
+            contest_hash: self.contest_hash.clone(),
+            option_index: self.option_index,
+        }
+    }
+}
+
+/// Why ballots were NOT counted (they are counted as rejected, never dropped silently).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct RejectCounts {
+    pub malformed: u64,
+    pub unknown_contest: u64,
+    pub wrong_contest_version: u64,
+    pub not_open: u64,
+    pub unknown_option: u64,
+    pub bad_signature: u64,
+    pub duplicate: u64,
+}
+
+impl RejectCounts {
+    pub fn total(&self) -> u64 {
+        self.malformed
+            + self.unknown_contest
+            + self.wrong_contest_version
+            + self.not_open
+            + self.unknown_option
+            + self.bad_signature
+            + self.duplicate
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct OptionTally {
+    pub index: u32,
+    pub name: String,
+    pub number: String,
+    pub votes: u64,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ContestTally {
+    pub contest_id: String,
+    pub title: String,
+    pub office: Office,
+    pub scope: Scope,
+    pub phase: Phase,
+    /// Counted ballots.
+    pub accepted: u64,
+    pub rejected: RejectCounts,
+    /// In ballot order (NOT ranked); see `ranked`.
+    pub options: Vec<OptionTally>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ElectionTally {
+    pub election_id: String,
+    pub title: String,
+    pub revision: u32,
+    pub visibility: ResultsVisibility,
+    /// Last governance sequence applied.
+    pub seq: u64,
+    pub contests: Vec<ContestTally>,
+    /// Manifest/transition entries refused (bad signatures, illegal steps, ...).
+    pub ignored_governance: u64,
+    /// Ballots that arrived before any valid manifest existed.
+    pub orphan_ballots: u64,
+    /// Rejections with no contest to blame (malformed bytes, wrong election, unknown contest).
+    pub unattributed: RejectCounts,
+    pub entries_seen: u64,
+}
+
+impl ElectionTally {
+    pub fn contest(&self, id: &str) -> Option<&ContestTally> {
+        self.contests.iter().find(|c| c.contest_id == id)
+    }
+}
+
+/// Options sorted by votes (desc), ties by ballot position; `top` kept, the rest
+/// folded into `others`.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Ranking {
+    pub top: Vec<OptionTally>,
+    pub others_votes: u64,
+    pub others_count: usize,
+}
+
+impl ContestTally {
+    pub fn ranked(&self, top_n: usize) -> Ranking {
+        let mut all = self.options.clone();
+        all.sort_by(|a, b| b.votes.cmp(&a.votes).then(a.index.cmp(&b.index)));
+        let rest = all.split_off(top_n.min(all.len()));
+        Ranking {
+            top: all,
+            others_votes: rest.iter().map(|o| o.votes).sum(),
+            others_count: rest.len(),
+        }
+    }
+
+    /// What the PUBLIC may see under `visibility` (ADR-0018). Presentation only:
+    /// with public ballots the log itself is countable by anyone.
+    pub fn public_view(&self, visibility: ResultsVisibility) -> PublicView {
+        let closed = matches!(
+            self.phase,
+            Phase::VotingClosed | Phase::Tallied | Phase::Audited
+        );
+        if self.phase == Phase::Cancelled {
+            return PublicView {
+                accepted: None,
+                distribution: false,
+            };
+        }
+        match visibility {
+            ResultsVisibility::Live => PublicView {
+                accepted: Some(self.accepted),
+                distribution: true,
+            },
+            ResultsVisibility::TurnoutOnly => PublicView {
+                accepted: Some(self.accepted),
+                distribution: closed,
+            },
+            ResultsVisibility::AfterClose | ResultsVisibility::Unspecified => PublicView {
+                accepted: closed.then_some(self.accepted),
+                distribution: closed,
+            },
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct PublicView {
+    /// `None` = hidden.
+    pub accepted: Option<u64>,
+    pub distribution: bool,
+}
+
+/// Incremental tally: feed entries as the log grows and take a `snapshot()` at
+/// any time (what a live view does). Equivalent to `tally()` over the same entries.
+pub struct Tallier {
+    policy: GovernancePolicy,
+    manifest: Option<ElectionManifest>,
+    status: Option<ElectionStatus>,
+    contests: Vec<ContestTally>,
+    seen: BTreeSet<(String, Vec<u8>)>,
+    ignored: u64,
+    orphans: u64,
+    count: u64,
+    unattributed: RejectCounts,
+}
+
+impl Tallier {
+    pub fn new(policy: GovernancePolicy) -> Self {
+        Self {
+            policy,
+            manifest: None,
+            status: None,
+            contests: Vec::new(),
+            seen: BTreeSet::new(),
+            ignored: 0,
+            orphans: 0,
+            count: 0,
+            unattributed: RejectCounts::default(),
+        }
+    }
+
+    /// Advances the cursor over a log entry this tally does not interpret.
+    pub fn skip(&mut self) {
+        self.count += 1;
+    }
+
+    /// The manifest currently in force (latest valid revision), if any.
+    pub fn manifest(&self) -> Option<&ElectionManifest> {
+        self.manifest.as_ref()
+    }
+
+    /// Number of log entries consumed so far (the cursor for the next `feed`).
+    pub fn consumed(&self) -> u64 {
+        self.count
+    }
+
+    /// Invalid governance entries (a rogue operator appending a forged transition,
+    /// a manifest that alters a contest...) are IGNORED and counted, so one bad
+    /// entry cannot stop the public count.
+    pub fn feed(&mut self, e: LogEntry<'_>) {
+        self.count += 1;
+        match e.kind {
+            LogKind::Manifest => self.feed_manifest(e.payload),
+            LogKind::Transition => self.feed_transition(e.payload),
+            LogKind::Ballot => {
+                let (Some(m), Some(s)) = (self.manifest.as_ref(), self.status.as_ref()) else {
+                    self.orphans += 1;
+                    return;
+                };
+                count_ballot(
+                    m,
+                    s,
+                    &mut self.contests,
+                    &mut self.seen,
+                    &mut self.unattributed,
+                    e.payload,
+                );
+            }
+        }
+    }
+
+    fn feed_manifest(&mut self, payload: &[u8]) {
+        let Ok(m) = ElectionManifest::decode(payload) else {
+            self.ignored += 1;
+            return;
+        };
+        let ok = verify_manifest(&self.policy, &m).is_ok()
+            && match &self.manifest {
+                None => m.revision == 1,
+                Some(prev) => validate_revision(prev, &m).is_ok(),
+            };
+        if !ok {
+            self.ignored += 1;
+            return;
+        }
+        match self.status.as_mut() {
+            Some(s) => s.extend_for(&m),
+            None => self.status = Some(ElectionStatus::new(&m)),
+        }
+        for c in &m.contests {
+            if !self.contests.iter().any(|t| t.contest_id == c.contest_id) {
+                self.contests.push(ContestTally {
+                    contest_id: c.contest_id.clone(),
+                    title: c.title.clone(),
+                    office: c.office(),
+                    scope: c.scope.clone().unwrap_or_default(),
+                    phase: Phase::Draft,
+                    accepted: 0,
+                    rejected: RejectCounts::default(),
+                    options: c
+                        .options
+                        .iter()
+                        .map(|o| OptionTally {
+                            index: o.index,
+                            name: o.name.clone(),
+                            number: o.number.clone(),
+                            votes: 0,
+                        })
+                        .collect(),
+                });
+            }
+        }
+        self.manifest = Some(m);
+    }
+
+    fn feed_transition(&mut self, payload: &[u8]) {
+        let (Some(m), Some(s)) = (self.manifest.as_ref(), self.status.as_mut()) else {
+            self.ignored += 1;
+            return;
+        };
+        let Ok(t) = Transition::decode(payload) else {
+            self.ignored += 1;
+            return;
+        };
+        // Work on a copy so a refused transition leaves no trace.
+        let mut trial = s.clone();
+        if apply(m, &mut trial, &t, &self.policy).is_err() {
+            self.ignored += 1;
+            return;
+        }
+        *s = trial;
+        if let Some(ct) = self
+            .contests
+            .iter_mut()
+            .find(|c| c.contest_id == t.contest_id)
+        {
+            ct.phase = s.phase_of(&t.contest_id).unwrap_or(ct.phase);
+        }
+    }
+
+    pub fn snapshot(&self) -> ElectionTally {
+        let (election_id, title, revision, visibility) = match &self.manifest {
+            Some(m) => (
+                m.election_id.clone(),
+                m.title.clone(),
+                m.revision,
+                m.results_visibility(),
+            ),
+            None => (
+                String::new(),
+                String::new(),
+                0,
+                ResultsVisibility::Unspecified,
+            ),
+        };
+        ElectionTally {
+            election_id,
+            title,
+            revision,
+            visibility,
+            seq: self.status.as_ref().map_or(0, |s| s.seq),
+            contests: self.contests.clone(),
+            ignored_governance: self.ignored,
+            orphan_ballots: self.orphans,
+            unattributed: self.unattributed,
+            entries_seen: self.count,
+        }
+    }
+}
+
+/// Replays a whole log. Pure: same entries, same numbers.
+pub fn tally<'a>(
+    policy: &GovernancePolicy,
+    entries: impl IntoIterator<Item = LogEntry<'a>>,
+) -> ElectionTally {
+    let mut t = Tallier::new(policy.clone());
+    for e in entries {
+        t.feed(e);
+    }
+    t.snapshot()
+}
+
+fn count_ballot(
+    m: &ElectionManifest,
+    s: &ElectionStatus,
+    contests: &mut [ContestTally],
+    seen: &mut BTreeSet<(String, Vec<u8>)>,
+    unattributed: &mut RejectCounts,
+    payload: &[u8],
+) {
+    let Ok(b) = SubmittedBallot::decode(payload) else {
+        unattributed.malformed += 1;
+        return;
+    };
+    let Some(contest) = m
+        .contest(&b.contest_id)
+        .filter(|_| b.election_id == m.election_id)
+    else {
+        unattributed.unknown_contest += 1;
+        return;
+    };
+    let Some(ct) = contests.iter_mut().find(|c| c.contest_id == b.contest_id) else {
+        unattributed.unknown_contest += 1;
+        return;
+    };
+    if b.contest_hash.as_slice() != contest_hash(contest).as_slice() {
+        ct.rejected.wrong_contest_version += 1;
+        return;
+    }
+    if s.phase_of(&b.contest_id) != Some(Phase::VotingOpen) {
+        ct.rejected.not_open += 1;
+        return;
+    }
+    let Some(opt) = ct.options.iter().position(|o| o.index == b.option_index) else {
+        ct.rejected.unknown_option += 1;
+        return;
+    };
+    if verify_ballot(&b.voter_key, &b.body(), &b.signature).is_err() {
+        ct.rejected.bad_signature += 1;
+        return;
+    }
+    if !seen.insert((b.contest_id.clone(), b.voter_key.clone())) {
+        ct.rejected.duplicate += 1;
+        return;
+    }
+    ct.accepted += 1;
+    ct.options[opt].votes += 1;
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::ballot::sign_ballot;
+    use crate::lifecycle::sign_transition;
+    use crate::manifest::fixtures::*;
+    use crate::manifest::sign_manifest;
+    use proptest::prelude::*;
+    use teko_crypto::SigningKey;
+    use teko_crypto::voter::derive_voter_key;
+
+    type Log = Vec<(LogKind, Vec<u8>)>;
+
+    fn world(seed: u64) -> (Vec<SigningKey>, GovernancePolicy, ElectionManifest) {
+        let k = keys(3, seed);
+        let pol = policy(&k, 2);
+        let m = signed(&k, &[0, 1]);
+        (k, pol, m)
+    }
+
+    fn run(pol: &GovernancePolicy, log: &Log) -> ElectionTally {
+        tally(
+            pol,
+            log.iter().map(|(kind, p)| LogEntry {
+                kind: *kind,
+                payload: p.as_slice(),
+            }),
+        )
+    }
+
+    /// Transitions that move `contest` to VotingClosed (4 steps), on ITS schedule.
+    fn steps(m: &ElectionManifest, k: &[SigningKey], contest: &str, seq0: u64) -> Vec<Transition> {
+        let c = m.contest(contest).unwrap();
+        let s = c.schedule.clone().unwrap();
+        let plan = [
+            (
+                Phase::Draft,
+                Phase::CandidatesPublished,
+                s.registration_opens - 50,
+            ),
+            (
+                Phase::CandidatesPublished,
+                Phase::RegistrationOpen,
+                s.registration_opens,
+            ),
+            (Phase::RegistrationOpen, Phase::VotingOpen, s.voting_opens),
+            (Phase::VotingOpen, Phase::VotingClosed, s.voting_closes),
+        ];
+        plan.iter()
+            .enumerate()
+            .map(|(i, (f, to, at))| {
+                let mut t = Transition {
+                    election_id: m.election_id.clone(),
+                    contest_id: contest.into(),
+                    contest_hash: contest_hash(c).to_vec(),
+                    from_phase: *f as i32,
+                    to_phase: *to as i32,
+                    seq: seq0 + i as u64 + 1,
+                    at: *at,
+                    reason: String::new(),
+                    signatures: vec![],
+                };
+                t.signatures = [0usize, 1]
+                    .iter()
+                    .map(|j| sign_transition(&k[*j], &t))
+                    .collect();
+                t
+            })
+            .collect()
+    }
+
+    fn tr(t: &Transition) -> (LogKind, Vec<u8>) {
+        (LogKind::Transition, t.encode_to_vec())
+    }
+
+    fn ballot_msg(m: &ElectionManifest, contest: &str, voter: u8, option: u32) -> SubmittedBallot {
+        let key = derive_voter_key(&[voter; 32], &m.election_id, contest).unwrap();
+        let body = BallotBody {
+            election_id: m.election_id.clone(),
+            contest_id: contest.into(),
+            contest_hash: contest_hash(m.contest(contest).unwrap()).to_vec(),
+            option_index: option,
+        };
+        SubmittedBallot {
+            election_id: body.election_id.clone(),
+            contest_id: body.contest_id.clone(),
+            contest_hash: body.contest_hash.clone(),
+            option_index: option,
+            voter_key: teko_crypto::public_key_bytes(&key),
+            signature: sign_ballot(&key, &body),
+        }
+    }
+
+    fn b(m: &ElectionManifest, contest: &str, voter: u8, option: u32) -> (LogKind, Vec<u8>) {
+        (
+            LogKind::Ballot,
+            ballot_msg(m, contest, voter, option).encode_to_vec(),
+        )
+    }
+
+    /// manifest + President brought to VotingOpen.
+    fn open_president(m: &ElectionManifest, k: &[SigningKey]) -> Log {
+        let mut log: Log = vec![(LogKind::Manifest, m.encode_to_vec())];
+        log.extend(steps(m, k, PRESIDENT, 0)[..3].iter().map(tr));
+        log
+    }
+
+    #[test]
+    fn counts_per_option_and_ranks_with_an_others_bucket() {
+        let (k, pol, m) = world(1);
+        let mut log = open_president(&m, &k);
+        for (voter, opt) in [(1u8, 0u32), (2, 1), (3, 1), (4, 2), (5, 1), (6, 0), (7, 1)] {
+            log.push(b(&m, PRESIDENT, voter, opt));
+        }
+        let t = run(&pol, &log);
+        let c = t.contest(PRESIDENT).unwrap();
+        assert_eq!(
+            (c.accepted, c.rejected.total(), c.phase),
+            (7, 0, Phase::VotingOpen)
+        );
+        assert_eq!(
+            c.options.iter().map(|o| o.votes).collect::<Vec<_>>(),
+            [2, 4, 1]
+        );
+        let r = c.ranked(2);
+        assert_eq!(
+            r.top.iter().map(|o| (o.index, o.votes)).collect::<Vec<_>>(),
+            [(1, 4), (0, 2)]
+        );
+        assert_eq!((r.others_votes, r.others_count), (1, 1));
+        // ties are broken by ballot position, so the ranking is deterministic
+        let mut tie = open_president(&m, &k);
+        tie.push(b(&m, PRESIDENT, 1, 2));
+        tie.push(b(&m, PRESIDENT, 2, 0));
+        let r = run(&pol, &tie).contest(PRESIDENT).unwrap().ranked(10);
+        assert_eq!(r.top.iter().map(|o| o.index).collect::<Vec<_>>(), [0, 2, 1]);
+        // other contests are untouched
+        assert_eq!(t.contest(GOVERNOR_SP).unwrap().accepted, 0);
+    }
+
+    #[test]
+    fn a_ballot_counts_only_while_its_contest_is_open_in_log_order() {
+        let (k, pol, m) = world(2);
+        let st = steps(&m, &k, PRESIDENT, 0);
+        let log: Log = vec![
+            (LogKind::Manifest, m.encode_to_vec()),
+            b(&m, PRESIDENT, 1, 0), // draft: too early
+            tr(&st[0]),
+            tr(&st[1]),
+            b(&m, PRESIDENT, 2, 0), // registration only: too early
+            tr(&st[2]),
+            b(&m, PRESIDENT, 3, 1), // OPEN: counts
+            b(&m, PRESIDENT, 4, 1), // OPEN: counts
+            tr(&st[3]),
+            b(&m, PRESIDENT, 5, 1), // closed: too late
+        ];
+        let c = run(&pol, &log).contest(PRESIDENT).cloned().unwrap();
+        assert_eq!(
+            (c.accepted, c.rejected.not_open, c.phase),
+            (2, 3, Phase::VotingClosed)
+        );
+        assert_eq!(c.options[1].votes, 2);
+    }
+
+    #[test]
+    fn one_ballot_per_voter_key_per_contest_first_wins() {
+        let (k, pol, m) = world(3);
+        let mut log = open_president(&m, &k);
+        log.push(b(&m, PRESIDENT, 9, 0));
+        log.push(b(&m, PRESIDENT, 9, 2)); // same voter, other option: ignored
+        log.push(b(&m, PRESIDENT, 9, 0)); // replay: ignored
+        let c = run(&pol, &log).contest(PRESIDENT).cloned().unwrap();
+        assert_eq!((c.accepted, c.rejected.duplicate), (1, 2));
+        assert_eq!(
+            c.options.iter().map(|o| o.votes).collect::<Vec<_>>(),
+            [1, 0, 0],
+            "the FIRST vote stands"
+        );
+    }
+
+    #[test]
+    fn every_invalid_ballot_is_counted_by_reason_never_dropped_silently() {
+        let (k, pol, m) = world(4);
+        let mut log = open_president(&m, &k);
+        // bad signature
+        let mut bad = ballot_msg(&m, PRESIDENT, 1, 0);
+        bad.signature[3] ^= 1;
+        log.push((LogKind::Ballot, bad.encode_to_vec()));
+        // signed for option 0 but claims option 1
+        let mut forged = ballot_msg(&m, PRESIDENT, 2, 0);
+        forged.option_index = 1;
+        log.push((LogKind::Ballot, forged.encode_to_vec()));
+        // another version of the contest
+        let mut stale = ballot_msg(&m, PRESIDENT, 3, 0);
+        stale.contest_hash = vec![9; 32];
+        log.push((LogKind::Ballot, stale.encode_to_vec()));
+        // option that does not exist (even though correctly signed)
+        log.push(b(&m, PRESIDENT, 4, 9));
+        // wrong election / unknown contest / garbage
+        let mut other = ballot_msg(&m, PRESIDENT, 5, 0);
+        other.election_id = "outra-eleicao".into();
+        log.push((LogKind::Ballot, other.encode_to_vec()));
+        log.push((
+            LogKind::Ballot,
+            ballot_msg(&m, PRESIDENT, 6, 0)
+                .encode_to_vec()
+                .into_iter()
+                .map(|_| 0xFF)
+                .collect(),
+        ));
+        log.push(b(&m, PRESIDENT, 7, 2)); // the only good one
+        let t = run(&pol, &log);
+        let c = t.contest(PRESIDENT).unwrap();
+        assert_eq!(c.accepted, 1);
+        assert_eq!(
+            (
+                c.rejected.bad_signature,
+                c.rejected.wrong_contest_version,
+                c.rejected.unknown_option
+            ),
+            (2, 1, 1)
+        );
+        assert_eq!(
+            (t.unattributed.unknown_contest, t.unattributed.malformed),
+            (1, 1)
+        );
+        // nothing vanished: 7 ballot entries = accepted + all rejections
+        assert_eq!(c.accepted + c.rejected.total() + t.unattributed.total(), 7);
+    }
+
+    #[test]
+    fn forged_governance_entries_are_ignored_and_counted_without_stopping_the_count() {
+        let (k, pol, m) = world(5);
+        let mut log = open_president(&m, &k);
+        let st = steps(&m, &k, PRESIDENT, 0);
+        // a rogue "close" signed by ONE institution
+        let mut rogue = st[3].clone();
+        rogue.signatures.truncate(1);
+        log.push(tr(&rogue));
+        // a manifest revision that ALTERS a contest (even if M-of-N signed)
+        let mut evil = m.clone();
+        evil.revision = 2;
+        evil.contests[0].options[0].name = "Candidato Trocado".into();
+        evil.signatures = [0usize, 1]
+            .iter()
+            .map(|i| sign_manifest(&k[*i], &evil))
+            .collect();
+        log.push((LogKind::Manifest, evil.encode_to_vec()));
+        log.push(b(&m, PRESIDENT, 1, 1));
+        let t = run(&pol, &log);
+        assert_eq!(t.ignored_governance, 2);
+        let c = t.contest(PRESIDENT).unwrap();
+        assert_eq!(
+            (c.accepted, c.phase),
+            (1, Phase::VotingOpen),
+            "voting was NOT closed by the rogue entry"
+        );
+        assert_eq!(
+            c.options[0].name, "Candidata Onça",
+            "the altered candidate was NOT adopted"
+        );
+    }
+
+    #[test]
+    fn ballots_before_any_valid_manifest_are_orphans() {
+        let (k, pol, m) = world(6);
+        let weak = signed(&k, &[0]); // only 1 of 2 signatures
+        let log: Log = vec![
+            b(&m, PRESIDENT, 1, 0),
+            (LogKind::Manifest, weak.encode_to_vec()),
+            b(&m, PRESIDENT, 2, 0),
+        ];
+        let t = run(&pol, &log);
+        assert_eq!(
+            (t.orphan_ballots, t.ignored_governance, t.contests.len()),
+            (2, 1, 0)
+        );
+    }
+
+    #[test]
+    fn a_later_revision_adds_contests_and_keeps_counting() {
+        let (k, pol, m) = world(7);
+        let mut log = open_president(&m, &k);
+        log.push(b(&m, PRESIDENT, 1, 0));
+        let mut rev2 = m.clone();
+        rev2.revision = 2;
+        let mut extra = rev2.contests[2].clone();
+        extra.contest_id = "prefeito-3550308-2turno".into();
+        rev2.contests.push(extra);
+        rev2.signatures = [0usize, 1]
+            .iter()
+            .map(|i| sign_manifest(&k[*i], &rev2))
+            .collect();
+        log.push((LogKind::Manifest, rev2.encode_to_vec()));
+        log.push(b(&m, PRESIDENT, 2, 1));
+        let t = run(&pol, &log);
+        assert_eq!(
+            (
+                t.revision,
+                t.contests.len(),
+                t.contest(PRESIDENT).unwrap().accepted
+            ),
+            (2, 4, 2)
+        );
+        assert_eq!(
+            t.contest("prefeito-3550308-2turno").unwrap().phase,
+            Phase::Draft
+        );
+    }
+
+    #[test]
+    fn visibility_policy_masks_the_public_view_until_the_voting_closes() {
+        let mut c = ContestTally {
+            contest_id: "x".into(),
+            title: "x".into(),
+            office: Office::President,
+            scope: Scope::national(),
+            phase: Phase::VotingOpen,
+            accepted: 42,
+            rejected: RejectCounts::default(),
+            options: vec![],
+        };
+        let live = c.public_view(ResultsVisibility::Live);
+        assert_eq!((live.accepted, live.distribution), (Some(42), true));
+        let turnout = c.public_view(ResultsVisibility::TurnoutOnly);
+        assert_eq!((turnout.accepted, turnout.distribution), (Some(42), false));
+        let after = c.public_view(ResultsVisibility::AfterClose);
+        assert_eq!((after.accepted, after.distribution), (None, false));
+        c.phase = Phase::VotingClosed;
+        for v in [
+            ResultsVisibility::Live,
+            ResultsVisibility::TurnoutOnly,
+            ResultsVisibility::AfterClose,
+        ] {
+            let p = c.public_view(v);
+            assert_eq!(
+                (p.accepted, p.distribution),
+                (Some(42), true),
+                "{v:?} after close"
+            );
+        }
+        c.phase = Phase::Cancelled;
+        assert_eq!(
+            c.public_view(ResultsVisibility::Live),
+            PublicView {
+                accepted: None,
+                distribution: false
+            }
+        );
+    }
+
+    #[test]
+    fn incremental_snapshots_equal_a_full_replay_at_every_point() {
+        let (k, pol, m) = world(10);
+        let mut log = open_president(&m, &k);
+        for v in 0..6u8 {
+            log.push(b(&m, PRESIDENT, v % 4, (v % 3) as u32)); // includes duplicates
+        }
+        let mut t = Tallier::new(pol.clone());
+        for (i, (kind, p)) in log.iter().enumerate() {
+            t.feed(LogEntry {
+                kind: *kind,
+                payload: p.as_slice(),
+            });
+            assert_eq!(t.consumed(), i as u64 + 1);
+            assert_eq!(
+                t.snapshot(),
+                run(&pol, &log[..=i].to_vec()),
+                "after entry {i}"
+            );
+        }
+    }
+
+    #[test]
+    fn the_tally_is_deterministic_and_depends_on_log_order() {
+        let (k, pol, m) = world(8);
+        let opened = open_president(&m, &k);
+        let mut late = opened.clone();
+        late.push(b(&m, PRESIDENT, 1, 0));
+        assert_eq!(run(&pol, &late), run(&pol, &late), "same log, same numbers");
+        // the SAME ballot placed BEFORE the opening transitions is not counted
+        let mut early: Log = vec![opened[0].clone(), b(&m, PRESIDENT, 1, 0)];
+        early.extend(opened[1..].iter().cloned());
+        assert_eq!(run(&pol, &late).contest(PRESIDENT).unwrap().accepted, 1);
+        let e = run(&pol, &early);
+        assert_eq!(e.contest(PRESIDENT).unwrap().accepted, 0);
+        assert_eq!(e.contest(PRESIDENT).unwrap().rejected.not_open, 1);
+    }
+
+    proptest! {
+        #![proptest_config(ProptestConfig::with_cases(10))]
+        /// However many times each voter submits, each distinct key counts once and
+        /// the per-option totals always add up to the accepted count.
+        #[test]
+        fn totals_always_add_up(seed in any::<u64>(), picks in proptest::collection::vec((0u8..12, 0u32..3), 1..24)) {
+            let (k, pol, m) = world(seed);
+            let mut log = open_president(&m, &k);
+            for (voter, opt) in &picks { log.push(b(&m, PRESIDENT, *voter, *opt)); }
+            let t = run(&pol, &log);
+            let c = t.contest(PRESIDENT).unwrap();
+            let distinct: BTreeSet<u8> = picks.iter().map(|(v, _)| *v).collect();
+            prop_assert_eq!(c.accepted, distinct.len() as u64);
+            prop_assert_eq!(c.options.iter().map(|o| o.votes).sum::<u64>(), c.accepted);
+            prop_assert_eq!(c.rejected.duplicate, (picks.len() - distinct.len()) as u64);
+            // the FIRST pick of each voter is the one counted
+            let mut first: alloc::collections::BTreeMap<u8, u32> = Default::default();
+            for (v, o) in &picks { first.entry(*v).or_insert(*o); }
+            for (i, o) in c.options.iter().enumerate() {
+                prop_assert_eq!(o.votes, first.values().filter(|x| **x as usize == i).count() as u64);
+            }
+        }
+    }
+}

@@ -305,6 +305,59 @@ input[type="checkbox"] { width: 20px; height: 20px; accent-color: var(--primary)
 .avatar { width: 46px; height: 46px; border-radius: 50%; display: grid; place-items: center; font-weight: 750; color: #fff; flex: none; }
 .empty { display: grid; place-items: center; text-align: center; gap: 8px; padding: 22px; border: 2px dashed var(--border); border-radius: 14px; color: var(--muted); }
 
+/* ───────── Resultados ao vivo ───────── */
+.livebar { display: flex; flex-wrap: wrap; align-items: center; gap: 10px 16px; }
+.live-dot { width: 10px; height: 10px; border-radius: 50%; background: var(--primary); position: relative; flex: none; }
+.live-dot::after { content: ""; position: absolute; inset: -5px; border-radius: 50%; border: 2px solid var(--primary); opacity: 0; animation: ring 1.8s ease-out infinite; }
+.live-dot--off { background: var(--muted); }
+.live-dot--off::after { display: none; }
+.simbanner {
+  display: flex; align-items: center; gap: 14px; padding: 14px 18px; border-radius: 14px;
+  border: 2px dashed var(--onca); color: var(--text);
+  background: repeating-linear-gradient(135deg, var(--tint-onca) 0 16px, transparent 16px 32px);
+}
+.simbanner strong { font-size: 1.05rem; letter-spacing: .06em; text-transform: uppercase; color: var(--onca); }
+.segmented { display: inline-flex; flex-wrap: wrap; gap: 4px; padding: 4px; border-radius: 14px; background: var(--surface-2); }
+.segmented button {
+  min-height: 40px; padding: 6px 14px; border: 0; border-radius: 10px; background: transparent; color: var(--muted);
+  font: inherit; font-weight: 650; cursor: pointer; transition: background .15s, color .15s;
+}
+.segmented button:hover { color: var(--text); }
+.segmented button[aria-pressed="true"] { background: var(--surface); color: var(--text); box-shadow: var(--shadow); }
+.segmented .count { margin-left: 6px; font-weight: 500; opacity: .75; }
+.results-grid { display: grid; gap: 18px; grid-template-columns: repeat(auto-fit, minmax(min(100%, 420px), 1fr)); }
+.rcard { display: grid; gap: 12px; align-content: start; }
+.rcard__total { font-variant-numeric: tabular-nums; font-weight: 700; }
+.bars { list-style: none; margin: 0; padding: 0; display: grid; gap: 7px; }
+.bar-row {
+  display: grid; grid-template-columns: 24px minmax(0, 1fr) auto; grid-template-areas: "rank name val" ". track track";
+  column-gap: 10px; row-gap: 5px; align-items: center; padding: 3px 0;
+}
+.bar-rank { grid-area: rank; }
+.bar-name { grid-area: name; }
+.bar-track { grid-area: track; display: block; }
+.bar-fill { display: block; }
+.bar-val { grid-area: val; }
+.bar-rank { color: var(--muted); font-size: .8rem; font-weight: 700; text-align: right; font-variant-numeric: tabular-nums; }
+.bar-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: .95rem; }
+.bar-name small { color: var(--muted); margin-left: 6px; }
+.bar-track { height: 12px; border-radius: 999px; background: var(--surface-2); overflow: hidden; }
+.bar-fill { height: 100%; width: 0; border-radius: 999px; background: var(--arara); transition: width .7s cubic-bezier(.2, .7, .2, 1); }
+.rcard--governor .bar-fill { background: var(--onca); }
+.rcard--mayor .bar-fill { background: var(--boto); }
+.rcard--other .bar-fill { background: var(--primary); }
+.bar-row--lead .bar-fill { background: var(--gold); box-shadow: 0 0 0 1px color-mix(in srgb, var(--gold) 55%, #000 25%) inset; }
+.bar-row--lead .bar-name { font-weight: 700; }
+.bar-row--others .bar-fill { background: color-mix(in srgb, var(--muted) 60%, transparent); }
+.bar-row--others .bar-name { color: var(--muted); font-style: italic; }
+.bar-val { text-align: right; font-variant-numeric: tabular-nums; font-size: .9rem; white-space: nowrap; }
+.bar-val b { font-weight: 700; }
+.bar-val span { color: var(--muted); margin-left: 6px; font-size: .8rem; }
+.bump { animation: bump .6s ease-out; }
+@keyframes bump { 0% { background: color-mix(in srgb, var(--gold) 45%, transparent); } 100% { background: transparent; } }
+.hidden-dist { display: grid; place-items: center; text-align: center; gap: 6px; padding: 20px; border: 2px dashed var(--border); border-radius: 14px; color: var(--muted); }
+.codeline { display: block; margin: 4px 0; }
+
 /* Overlay "confirme no dispositivo" */
 .overlay { position: fixed; inset: 0; z-index: 40; display: grid; place-items: center; padding: 24px; background: rgba(8, 24, 17, .62); backdrop-filter: blur(3px); }
 .overlay[hidden] { display: none; }

@@ -599,6 +599,7 @@ impl<T: Transport> DeviceClient<T> {
         Ok(SignedBallot {
             election_id: election_id.to_string(),
             contest_id: contest_id.to_string(),
+            contest_hash: hex::encode(&body.contest_hash),
             contest_title: contest.title.clone(),
             option_index,
             option_name,
@@ -637,6 +638,7 @@ pub struct ElectionSummary {
 pub struct SignedBallot {
     pub election_id: String,
     pub contest_id: String,
+    pub contest_hash: String,
     pub contest_title: String,
     pub option_index: u32,
     pub option_name: String,

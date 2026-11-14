@@ -34,6 +34,20 @@
   ].map((c) => ({ ...c, voted: !!voted[c.contest_id] }));
   const electionSummary = () => ({ election_id: 'eleicoes-exemplo-2026', title: 'Eleições de exemplo 2026 (protótipo)', revision: 1, seq: 6, contests: contests() });
 
+  let published = q === 'ready' && false;
+  let headExtra = 0;
+  const mk = (id, title, office, scope, code, phase, names, first, base) => ({ id, title, office, scope, code, phase, names, first, votes: names.map((_, i) => Math.round(base / (i + 1) ** 1.2)) });
+  const live = Object.fromEntries([
+    mk('presidente', 'Presidente da República', 'president', 'national', '', 'voting_open', ['Candidata Onça-Pintada', 'Candidato Boto-Cor-de-Rosa', 'Candidata Arara-Azul'], 10, 4200),
+    mk('governador-sp', 'Governador de São Paulo', 'governor', 'state', 'SP', 'voting_open', ['Candidato Guará', 'Candidata Vitória-Régia', 'Candidato Lobo-Guará', 'Candidata Arara-Canindé', 'Candidato Tamanduá-Bandeira', 'Candidata Capivara', 'Candidato Jacaré-do-Papo-Amarelo', 'Candidata Onça-Parda', 'Candidato Mico-Leão-Dourado', 'Candidata Ararinha-Azul', 'Candidato Tatu-Canastra', 'Candidata Sabiá-Laranjeira'], 20, 900),
+    mk('governador-rj', 'Governador do Rio de Janeiro', 'governor', 'state', 'RJ', 'voting_open', ['Candidato Mico-Leão-Dourado', 'Candidata Capivara', 'Candidato Boto-Tucuxi'], 40, 380),
+    mk('governador-mg', 'Governador de Minas Gerais', 'governor', 'state', 'MG', 'voting_open', ['Candidato Lobo-Guará', 'Candidata Onça-Parda', 'Candidato Tamanduá-Bandeira', 'Candidata Seriema'], 50, 420),
+    mk('governador-ba', 'Governador da Bahia', 'governor', 'state', 'BA', 'voting_open', ['Candidata Arara-Vermelha', 'Candidato Tartaruga-Marinha', 'Candidata Baleia-Jubarte'], 60, 300),
+    mk('governador-rs', 'Governador do Rio Grande do Sul', 'governor', 'state', 'RS', 'voting_open', ['Candidato Quero-Quero', 'Candidata Graxaim', 'Candidato Zorrilho', 'Candidata Ema'], 70, 240),
+    mk('prefeito-3550308', 'Prefeito de São Paulo', 'mayor', 'municipality', '3550308', 'candidates_published', ['Candidata Jaguatirica', 'Candidato Tucano'], 30, 0),
+  ].map((c) => [c.id, c]));
+  const tick = () => { for (const c of Object.values(live)) { if (c.phase !== 'voting_open') continue; const n = Math.ceil(Math.random() * 4); for (let k = 0; k < n; k++) { const r = Math.random() ** 2.2; c.votes[Math.min(c.names.length - 1, Math.floor(r * c.names.length))] += 1; headExtra += 1; } } };
+
   const H = {
     device_status: async () => status(),
     dev_info: async () => ({ dev_dir: 'dev', addr: '127.0.0.1:7878', authority_root: '02ab' }),
@@ -58,7 +72,20 @@
       if (!c.eligible) throw { code: 'NotEligible', message: 'fora do seu domicílio', retry_after_ms: 0, remaining: 0 };
       if (c.phase !== 'voting_open') throw { code: 'WrongPhase', message: 'votação fechada', retry_after_ms: 0, remaining: 0 };
       await prompt('sign_ballot', 1500); voted[contestId] = true;
-      return { election_id: 'eleicoes-exemplo-2026', contest_id: contestId, contest_title: c.title, option_index: optionIndex, option_name: c.option_names[optionIndex], voter_key: '03' + 'cd'.repeat(32), signature: 'ef'.repeat(64) };
+      const rc = live[contestId]; if (rc) rc.votes[optionIndex] += 1;
+      return { ballot: { election_id: 'eleicoes-exemplo-2026', contest_id: contestId, contest_title: c.title, option_index: optionIndex, option_name: c.option_names[optionIndex], voter_key: '03' + 'cd'.repeat(32), signature: 'ef'.repeat(64) }, submitted: true, board_index: 4242, note: null };
+    },
+    board_publish: async () => { published = true; return 12; },
+    results_snapshot: async () => {
+      if (!published) return { available: false, reason: 'O quadro de avisos ainda está vazio: publique a eleição.', election_id: '', title: '', revision: 0, visibility: 'unspecified', simulated: false, head_size: 0, head_root: '', ignored_governance: 0, contests: [] };
+      tick();
+      const cs = Object.values(live).map((c) => {
+        const total = c.votes.reduce((a, b) => a + b, 0);
+        const ranked = c.names.map((n, i) => ({ index: i, name: n, number: String(c.first + i), votes: c.votes[i] })).sort((a, b) => b.votes - a.votes || a.index - b.index);
+        const top = ranked.slice(0, 10), rest = ranked.slice(10);
+        return { contest_id: c.id, title: c.title, office: c.office, scope: c.scope, scope_code: c.code, phase: c.phase, accepted: total, rejected: 0, distribution_visible: c.phase === 'voting_open', top: c.phase === 'voting_open' ? top : [], others_votes: rest.reduce((a, b) => a + b.votes, 0), others_count: rest.length };
+      });
+      return { available: true, reason: null, election_id: 'eleicoes-exemplo-2026', title: 'Eleições de exemplo (protótipo, dados fictícios)', revision: 1, visibility: 'live', simulated: true, head_size: 12 + headExtra, head_root: 'ab12cd34ef56' + '00'.repeat(26), ignored_governance: 0, contests: cs };
     },
     wipe: async () => { await prompt('wipe'); dev.state = 'firmware_installed'; dev.locked = false; },
   };

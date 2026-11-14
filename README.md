@@ -26,6 +26,16 @@ Depois: ver identidade, assinar documentos, provar atributos e **votar por pleit
 - Apagar o estado do dispositivo (voltar a "virgem"): `cargo run -p device-emulator -- --reset`
 - Outro endereço: `TEKO_DEVICE_ADDR=127.0.0.1:9000 cargo run -p teko-suite` (e `--listen` no emulador)
 
+## Resultados ao vivo (gráficos por cargo e por estado)
+
+```bash
+make publish         # publica a eleição de exemplo no quadro de avisos (dev/board.log)
+make simulate-live   # outro terminal: ~15 cédulas/s por 2 min (DADOS SIMULADOS)
+# na Suite: menu "Resultados ao vivo" -> abas Presidente / Governador / Prefeito
+make tally           # a mesma apuração no terminal (top 10 por pleito)
+```
+Ao votar com o dispositivo na tela **Votar**, a cédula entra no quadro e aparece no gráfico. `make election` recria a eleição de exemplo (apaga o quadro). Os dados simulados são **sempre** rotulados; a contagem do protótipo **não é confiável** (sem registro anônimo).
+
 ## Pré-visualizar a interface sem Tauri (só desenvolvimento)
 
 ```bash

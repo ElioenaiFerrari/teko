@@ -20,6 +20,9 @@ teko-protocol.workspace = true
 teko-transport.workspace = true
 teko-crypto.workspace = true
 issuer-cli.workspace = true
+election-admin.workspace = true
+teko-bulletin.workspace = true
+teko-election.workspace = true
 
 [features]
 default = ["custom-protocol"]

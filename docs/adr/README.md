@@ -24,3 +24,4 @@ Regra: decisões de produto/segurança só passam a `Aceito` pela aprovação do
 | [0015](0015-sigilo-e-resistencia-a-coercao.md) | Sigilo e resistência à coerção | Proposto | PENDENTE (Fase 2, crítico) |
 | [0016](0016-manifesto-de-eleicao-e-governanca.md) | Manifesto de eleição e governança | Proposto | PENDENTE (Fase 2) |
 | [0017](0017-cargos-jurisdicao-e-elegibilidade.md) | Cargos, jurisdição e elegibilidade (vários pleitos) | Proposto | PENDENTE (modelo de dados implementado) |
+| [0018](0018-resultados-ao-vivo-e-visibilidade.md) | Resultados em tempo real e visibilidade | Proposto | PENDENTE (demo em andamento) |

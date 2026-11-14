@@ -143,6 +143,10 @@ Não implementadas; ver `PHASE-2-VOTING.md`. Cada linha vira teste quando houver
 | V12 | **Conjunto de anonimato pequeno** em município pequeno (centenas de eleitores) | Limiar mínimo de eleitores por pleito (ADR-0017); aviso na UI | Em município muito pequeno o sigilo é fraco por natureza |
 | V13 | Registrar-se em jurisdição onde não mora (domicílio falso) | A **autoridade** valida o domicílio ao conceder o direito de registro; o dispositivo não decide | Autoridade/cadastro errado ou fraudado |
 | V14 | Correlação por **tempo e rede** entre os registros de vários pleitos | Registrar cada pleito em sessão/canal/horário distintos | Só mitigação operacional |
+| V16 | **Resultado parcial ao vivo** influencia eleitores e ajuda a monitorar/comprar voto | Política de visibilidade no manifesto (`turnout_only`/`after_close`); **só impõe com cédula cifrada** (ADR-0015/0018) | Com cédula pública, o log em claro é contável por qualquer um |
+| V17 | **Dados simulados** confundidos com resultado real | Marcador "DADOS SIMULADOS" inconfundível; simulador só no `election-admin-cli` | Usuário ignora o aviso |
+| V18 | **Quebra por UF de pleito nacional** reduz o anonimato ao estado | Não fazer no primeiro corte (decisão #15) | Eleitorado pequeno |
+| V19 | Operador do quadro mostra logs diferentes a pessoas diferentes (*split view*) ou atrasa/omite cédulas | *Heads* assinados fixados e comparados por testemunhas; apuração refeita por terceiros | Sem testemunhas independentes hoje |
 | V15 | Mudança de domicílio perto da eleição (voto duplo em dois lugares ou perda do direito) | Data de corte e fotografia da lista (decisão #10) | Casos de borda |
 
 ## 6. Perguntas em aberto

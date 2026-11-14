@@ -76,6 +76,20 @@
       const rc = live[contestId]; if (rc) rc.votes[optionIndex] += 1;
       return { ballot: { election_id: 'eleicoes-exemplo-2026', contest_id: contestId, contest_title: c.title, option_index: optionIndex, option_name: c.option_names[optionIndex], voter_key: '03' + 'cd'.repeat(32), signature: 'ef'.repeat(64) }, submitted: true, board_index: 4242, note: null };
     },
+    explorer_snapshot: async () => {
+      if (!published) return { available: false, reason: 'O quadro de avisos ainda está vazio: publique a eleição.' };
+      const cs = contests().map((c) => ({ contest_id: c.contest_id, title: c.title, office: 'governor', scope: c.scope, scope_code: c.scope_code, phase: c.phase, registration_opens: c.voting_opens - 2 * DAY, voting_opens: c.voting_opens, voting_closes: c.voting_closes, registration_required: true, options: c.option_names.map((n, i) => ({ number: String(10 + i), name: n })) }));
+      return { available: true, reason: null, election_id: 'eleicoes-exemplo-2026', title: 'Eleições de exemplo (protótipo, dados fictícios)', revision: 1, head_size: 12, head_root: 'ab12cd34ef56' + '00'.repeat(26), contests: cs,
+        governance: [{ seq: 1, contest_id: 'presidente', from: 'draft', to: 'candidates_published', at: NOW - 6 * DAY, signatures: 2, board_index: 1 }, { seq: 2, contest_id: 'presidente', from: 'candidates_published', to: 'registration_open', at: NOW - 5 * DAY, signatures: 2, board_index: 2 }] };
+    },
+    verify_inclusion: async ({ index }) => ({ valid: true, kind: index === 0 ? 'manifesto' : 'decisão da governança', index, size: 12, root: 'ab12cd34ef56', proof_len: 4 }),
+    network_status: async () => {
+      if (!published) return { mode: 'file', name: 'arquivo local', chain_id: '', threshold: 1, validators: 1, height: 0, nodes: [], blocks: [], error: null };
+      const h = 7 + headExtra;
+      return { mode: 'net', name: 'devnet', chain_id: 'teko-devnet-1', threshold: 2, validators: 3, height: h,
+        nodes: [0, 1, 2].map((i) => ({ index: i, addr: `127.0.0.1:${7901 + i}`, up: i !== 2, height: i === 2 ? h - 2 : h, mempool: 0, peers_online: i === 2 ? 0 : 1, equivocations: 0 })),
+        blocks: Array.from({ length: h }, (_, k) => h - 1 - k).map((b) => ({ height: b, entries: 1 + (b * 7) % 5, signatures: b % 4 === 3 ? 3 : 2, round: b === 4 ? 1 : 0, timestamp: Math.floor(Date.now() / 1000) - (h - b) * 2, proposer: (b + (b === 4 ? 1 : 0)) % 3, hash: 'ab12cd34ef56' + String(b).padStart(2, '0').repeat(26) })), error: null };
+    },
     board_publish: async () => { published = true; return 12; },
     results_snapshot: async () => {
       if (!published) return { available: false, reason: 'O quadro de avisos ainda está vazio: publique a eleição.', election_id: '', title: '', revision: 0, visibility: 'unspecified', simulated: false, head_size: 0, head_root: '', ignored_governance: 0, contests: [] };

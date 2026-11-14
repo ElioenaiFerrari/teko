@@ -144,6 +144,7 @@
     resultsErr: null,
     resultsShape: null,
     elecChecked: false,
+    explorer: null, explorerTried: false, inclusion: null, net: null,
     idTried: false,       // evitam laços de re-tentativa em loadId/loadFirmware
     fwTried: false,
     fwLoading: false,   // já perguntei ao dispositivo por uma eleição nesta visita?
@@ -380,6 +381,64 @@
   const callout = (kind, icon, title, body) => `<div class="callout callout--${kind}">${ico(icon)}<div>${title ? `<strong>${esc(title)}</strong>` : ''}${body}</div></div>`;
 
   // ───────────────────────── explorador (sem dispositivo) ─────────────────────────
+  function explorerBody() {
+    const x = S.explorer;
+    if (!x) return `<article class="card"><p class="muted">${S.explorerTried ? 'Carregando o quadro de avisos…' : ''}</p></article>`;
+    if (!x.available) return callout('info', 'link', 'Quadro ainda vazio', `<p>${esc(x.reason || 'Publique a eleição no quadro (make publish).')}</p>`);
+    const head = `<article class="card">
+      <div class="card__head"><div class="card__ico card__ico--arara">${ico('globe')}</div><div><h2>${esc(x.title)}</h2>
+        <p class="muted">Eleição <span class="mono">${esc(x.election_id)}</span> · revisão ${x.revision}</p></div></div>
+      <p class="muted">Quadro de avisos: <strong>${nf.format(x.head_size)}</strong> entradas · raiz Merkle <span class="mono">${esc(short(x.head_root, 12, 10))}</span></p>
+      <div class="row"><label class="muted" for="incl-idx">Conferir a posição nº</label>
+        <input class="input" id="incl-idx" type="number" min="0" max="${Math.max(0, x.head_size - 1)}" style="max-width:140px" value="${S.inclusion ? S.inclusion.index : 0}">
+        <button class="btn" data-act="checkincl">${ico('check')}Conferir inclusão</button></div>
+      ${S.inclusion ? callout(S.inclusion.valid ? 'ok' : 'bad', S.inclusion.valid ? 'check' : 'alert', S.inclusion.valid ? 'Está no quadro' : 'NÃO confere',
+        `<p>A entrada nº ${S.inclusion.index} (${esc(S.inclusion.kind)}) ${S.inclusion.valid ? 'pertence ao log' : 'não bate com a raiz atual'}: prova Merkle de ${S.inclusion.proof_len} passos recalculada aqui contra a raiz de ${nf.format(S.inclusion.size)} entradas.</p>`) : ''}
+    </article>`;
+    const contests = x.contests.map((c) => {
+      const [pl, pk] = PHASES[c.phase] || [c.phase, ''];
+      return `<article class="card">
+        <div class="card__head"><div class="card__ico card__ico--${c.scope === 'national' ? 'arara' : c.scope === 'state' ? 'onca' : 'boto'}">${ico(c.scope === 'national' ? 'globe' : 'ballot')}</div>
+          <div><h3>${esc(c.title)}</h3><div class="row" style="gap:6px;margin-top:6px">${chip(scopeLabel(c), 'info')}${chip(pl, pk)}${c.registration_required ? chip('Registro anônimo', 'info', 'shield') : ''}</div></div></div>
+        <p class="muted">Registro: ${esc(fmtDate(c.registration_opens))} · Votação: ${esc(fmtDate(c.voting_opens))} até ${esc(fmtDate(c.voting_closes))}</p>
+        <ol class="muted" style="margin:0;padding-left:1.2em">${c.options.map((o) => `<li><span class="mono">${esc(o.number)}</span> ${esc(o.name)}</li>`).join('')}</ol>
+      </article>`;
+    }).join('');
+    const gov = x.governance.length ? `<article class="card">
+      <div class="card__head"><div class="card__ico card__ico--onca">${ico('shield')}</div><h3>Decisões da governança (em ordem do log)</h3></div>
+      <p class="muted">Cada decisão exige a assinatura de instituições independentes (M de N) e fica no quadro, a prova de que ninguém abriu ou fechou um pleito sozinho.</p>
+      <ol class="muted" style="margin:0;padding-left:1.2em">${x.governance.map((g) => `<li>nº ${g.seq} · <strong>${esc(g.contest_id)}</strong>: ${esc((PHASES[g.from] || [g.from])[0])} → ${esc((PHASES[g.to] || [g.to])[0])} · ${esc(fmtDate(g.at))} · ${g.signatures} assinaturas · posição #${g.board_index}</li>`).join('')}</ol>
+    </article>` : '';
+    return `${head}${networkCard()}<div class="grid grid--3">${contests}</div>${gov}`;
+  }
+
+  function networkCard() {
+    const n = S.net;
+    if (!n) return '';
+    if (n.mode !== 'net') return `<article class="card"><div class="card__head"><div class="card__ico">${ico('link')}</div><div><h3>Quadro: arquivo local</h3><p class="muted">Um único operador, sem rede. Rode <code>make devnet</code> para ver a blockchain de teste com 3 validadores.</p></div></div></article>`;
+    const nodes = n.nodes.map((x) => `<li class="node ${x.up ? 'node--up' : 'node--down'}" data-tip="Validador ${x.index}|${x.up ? `altura ${x.height} · mempool ${x.mempool} · ${x.peers_online} pares${x.equivocations ? ` · ${x.equivocations} equívoco(s)!` : ''}` : 'fora do ar'}"><span class="node__dot"></span>V${x.index}<small>${x.up ? `#${x.height}` : 'off'}</small></li>`).join('');
+    const blocks = n.blocks.map((b) => `<li class="blk" data-tip="Bloco ${b.height}|${esc(short(b.hash, 10, 8))} · proposto por V${b.proposer}">
+        <span class="blk__h">#${b.height}</span><span>${b.entries} entradas</span>
+        <span class="blk__sig">${'●'.repeat(Math.min(b.signatures, n.validators))}${'○'.repeat(Math.max(0, n.validators - b.signatures))} ${b.signatures}/${n.validators}</span>
+        <span class="muted">V${b.proposer}${b.round ? ' · troca de turno' : ''} · ${esc(fmtDate(b.timestamp))}</span></li>`).join('');
+    return `<article class="card">
+      <div class="card__head"><div class="card__ico card__ico--arara">${ico('link')}</div><div><h3>Rede ${esc(n.name)} <span class="muted mono">${esc(n.chain_id)}</span></h3>
+        <p class="muted">${n.threshold} de ${n.validators} validadores assinam cada bloco · verificado aqui, bloco a bloco</p></div></div>
+      <ul class="nodes">${nodes}</ul>
+      ${n.error ? callout('bad', 'alert', 'Réplica não verificada', `<p>${esc(n.error)}</p>`) : ''}
+      <ol class="blocks" reversed>${blocks || '<li class="muted">Nenhum bloco ainda: publique a eleição.</li>'}</ol>
+    </article>`;
+  }
+
+  async function loadExplorer() {
+    // UMA tentativa por visita (mesma regra dos outros carregamentos: sem laço de render).
+    if (S.explorerTried) return;
+    S.explorerTried = true;
+    try { S.net = await invoke('network_status'); } catch { S.net = null; }
+    try { S.explorer = await invoke('explorer_snapshot'); } catch { S.explorer = { available: false, reason: 'Não foi possível ler o quadro.' }; }
+    S.lastKey = ''; render();
+  }
+
   function vExplorer() {
     const connected = phase() !== 'none';
     return `
@@ -392,19 +451,7 @@
         ${connected ? '' : `<div class="row"><button class="btn btn--gold" data-act="rescan">${ico('usb')}Procurar dispositivo</button></div>`}
       </section>
 
-      <div class="grid grid--3">
-        ${[['list', 'Eleições', 'Calendário e regras de cada eleição.', ''],
-           ['users', 'Candidatos', 'Quem concorre e suas propostas.', 'arara'],
-           ['chart', 'Resultados apurados', 'Totais verificáveis, apurados publicamente.', 'onca']]
-          .map(([i, t, d, c]) => `
-          <article class="card">
-            <div class="card__head"><div class="card__ico ${c ? `card__ico--${c}` : ''}">${ico(i)}</div><h3>${t}</h3></div>
-            <p class="muted">${d}</p>
-            ${t === 'Resultados apurados'
-              ? `<div class="row"><button class="btn" data-act="gotoresults">${ico('chart')}Ver resultados ao vivo</button></div>`
-              : `<div class="empty">${ico('link')}<div><strong>Em breve</strong><br>Será alimentado pela blockchain de votação.</div></div>`}
-          </article>`).join('')}
-      </div>
+      ${explorerBody()}
 
       ${connected ? '' : `
       <article class="card">
@@ -723,6 +770,105 @@
   const VIS = { live: ['Parciais ao vivo', 'info'], turnout_only: ['Só comparecimento até o fechamento', 'warn'], after_close: ['Nada até o fechamento', 'warn'] };
   const nf = new Intl.NumberFormat('pt-BR');
 
+  // ───────────────────────── visual: cores, dicas, indicadores, mapa ─────────────────────────
+  // Cor FIXA por candidato (índice no manifesto): não troca quando o ranking muda.
+  const CAND = ['#1F4BB8', '#C62F24', '#12663B', '#B8365F', '#9A5208', '#7A3FB8', '#0E8A8A', '#6B7A1F', '#D9822B', '#566A5E'];
+  const candColor = (i) => CAND[((i % CAND.length) + CAND.length) % CAND.length];
+  const pctTxt = (x) => `${x.toFixed(1).replace('.', ',')}%`;
+  // Mapa-tile do Brasil: [coluna, linha]. Cada UF tem o mesmo tamanho (não distorce por área).
+  const UF_TILES = { RR: [2, 0], AP: [4, 0], AM: [2, 1], PA: [4, 1], MA: [5, 1], CE: [6, 1], RN: [7, 1], AC: [1, 2], RO: [2, 2], MT: [3, 2], TO: [4, 2], PI: [5, 2], PE: [6, 2], PB: [7, 2],
+    MS: [2, 3], GO: [3, 3], DF: [4, 3], BA: [5, 3], SE: [6, 3], AL: [7, 3], SP: [3, 4], MG: [4, 4], ES: [5, 4], PR: [3, 5], RJ: [4, 5], RS: [2, 6], SC: [3, 6] };
+
+  function sparkline(vals, w = 120, h = 34) {
+    if (vals.length < 2) return `<svg class="spark" viewBox="0 0 ${w} ${h}" aria-hidden="true"><line x1="0" y1="${h - 2}" x2="${w}" y2="${h - 2}" stroke="currentColor" opacity=".25"/></svg>`;
+    const lo = Math.min(...vals), hi = Math.max(...vals), span = Math.max(1, hi - lo);
+    const pts = vals.map((v, i) => `${((i / (vals.length - 1)) * (w - 4) + 2).toFixed(1)},${(h - 3 - ((v - lo) / span) * (h - 8)).toFixed(1)}`);
+    return `<svg class="spark" viewBox="0 0 ${w} ${h}" aria-hidden="true"><polyline points="${pts.join(' ')}" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round" stroke-linecap="round"/><circle cx="${pts[pts.length - 1].split(',')[0]}" cy="${pts[pts.length - 1].split(',')[1]}" r="3" fill="currentColor"/></svg>`;
+  }
+
+  function donutSvg(c, size = 150) {
+    const total = c.accepted || 0;
+    const rows = c.top.filter((o) => o.votes > 0).map((o) => ({ key: String(o.index), name: o.name, votes: o.votes, color: candColor(o.index) }));
+    if (c.others_votes > 0) rows.push({ key: 'others', name: `Outros (${c.others_count})`, votes: c.others_votes, color: '#8A978F' });
+    if (!total || !rows.length) return `<svg viewBox="0 0 42 42" width="${size}" height="${size}" role="img" aria-label="Sem votos ainda"><circle cx="21" cy="21" r="15.9155" fill="none" stroke="var(--surface-2)" stroke-width="6"/></svg>`;
+    let off = 25;   // começa às 12h
+    const arcs = rows.map((r) => {
+      const p = (r.votes * 100) / total;
+      const a = `<circle class="slice" data-key="${esc(r.key)}" data-tip="${esc(r.name)}|${nf.format(r.votes)} votos · ${pctTxt(p)}" cx="21" cy="21" r="15.9155" fill="none" stroke="${r.color}" stroke-width="6" stroke-dasharray="${Math.max(0, p - 0.4).toFixed(2)} ${(100 - Math.max(0, p - 0.4)).toFixed(2)}" stroke-dashoffset="${off.toFixed(2)}"/>`;
+      off -= p; return a;
+    }).join('');
+    const lead = rows[0], lp = (lead.votes * 100) / total;
+    return `<svg viewBox="0 0 42 42" width="${size}" height="${size}" role="img" aria-label="Participação de cada candidato">${arcs}
+      <text x="21" y="20.2" text-anchor="middle" class="donut-pct">${pctTxt(lp)}</text><text x="21" y="25.6" text-anchor="middle" class="donut-sub">lidera</text></svg>`;
+  }
+
+  // Dica flutuante única (mouse e teclado): qualquer elemento com data-tip="título|detalhe".
+  function tipEl() { let t = $('#tip'); if (!t) { t = document.createElement('div'); t.id = 'tip'; t.setAttribute('role', 'tooltip'); t.hidden = true; document.body.append(t); } return t; }
+  document.addEventListener('mouseover', (e) => {
+    const el = e.target.closest && e.target.closest('[data-tip]');
+    const card = e.target.closest && e.target.closest('.rcard');
+    // ligação entre rosca e barras do MESMO pleito
+    document.querySelectorAll('.rcard.has-hot').forEach((c) => { if (c !== card) { c.classList.remove('has-hot'); c.querySelectorAll('.is-hot').forEach((x) => x.classList.remove('is-hot')); } });
+    if (card) {
+      const k = e.target.closest('[data-key]');
+      card.querySelectorAll('.is-hot').forEach((x) => x.classList.remove('is-hot'));
+      if (k) { card.classList.add('has-hot'); card.querySelectorAll(`[data-key="${CSS.escape(k.dataset.key)}"]`).forEach((x) => x.classList.add('is-hot')); } else card.classList.remove('has-hot');
+    }
+    const t = tipEl();
+    if (!el) { t.hidden = true; return; }
+    const [a, b] = el.dataset.tip.split('|');
+    t.innerHTML = `<strong>${esc(a)}</strong>${b ? `<span>${esc(b)}</span>` : ''}`; t.hidden = false;
+  });
+  document.addEventListener('mousemove', (e) => { const t = $('#tip'); if (t && !t.hidden) { t.style.left = `${Math.min(e.clientX + 14, innerWidth - t.offsetWidth - 8)}px`; t.style.top = `${Math.min(e.clientY + 16, innerHeight - t.offsetHeight - 8)}px`; } });
+  document.addEventListener('mouseleave', () => { const t = $('#tip'); if (t) t.hidden = true; });
+
+  function renderOverview(r) {
+    const el = $('#res-overview'); if (!el) return;
+    const cs = r.contests;
+    const known = cs.filter((c) => c.accepted !== null);
+    const total = known.reduce((a, c) => a + c.accepted, 0);
+    const hidden = known.length === 0;
+    const registered = cs.reduce((a, c) => a + (c.registration_required ? c.registered : 0), 0);
+    const rejected = cs.reduce((a, c) => a + c.rejected, 0);
+    const byPhase = { open: cs.filter((c) => c.phase === 'voting_open').length, closed: cs.filter((c) => ['voting_closed', 'tallied', 'audited'].includes(c.phase)).length };
+    byPhase.other = cs.length - byPhase.open - byPhase.closed;
+    // histórico para o minigráfico (só cresce; zera se o quadro for reiniciado)
+    S.resultsHist = S.resultsHist || [];
+    if (!hidden && (!S.resultsHist.length || S.resultsHist[S.resultsHist.length - 1] !== total)) { if (S.resultsHist.length && total < S.resultsHist[S.resultsHist.length - 1]) S.resultsHist = []; S.resultsHist.push(total); if (S.resultsHist.length > 40) S.resultsHist.shift(); }
+    const part = registered > 0 && !hidden ? Math.min(100, (total * 100) / registered) : null;
+    const seg = (n, color, label) => (cs.length && n ? `<span class="stack__seg" style="flex:${n};background:${color}" data-tip="${esc(label)}|${n} pleito(s)"></span>` : '');
+    const kpis = `<div class="kpis">
+      <div class="kpi"><div class="kpi__label">Cédulas aceitas</div><div class="kpi__val">${hidden ? '—' : nf.format(total)}</div>${hidden ? '<div class="kpi__sub">oculto até o fechamento</div>' : `<div class="kpi__spark">${sparkline(S.resultsHist)}</div>`}</div>
+      <div class="kpi"><div class="kpi__label">Registrados</div><div class="kpi__val">${nf.format(registered)}</div>${part === null ? '<div class="kpi__sub">anônimos, por pleito</div>' : `<div class="meter" data-tip="Comparecimento|${nf.format(total)} de ${nf.format(registered)} registrados"><span style="width:${part}%"></span></div><div class="kpi__sub">${pctTxt(part)} já votaram</div>`}</div>
+      <div class="kpi"><div class="kpi__label">Pleitos</div><div class="kpi__val">${cs.length}</div><div class="stack">${seg(byPhase.open, 'var(--primary)', 'Votação aberta')}${seg(byPhase.closed, 'var(--gold)', 'Encerrados')}${seg(byPhase.other, 'var(--surface-2)', 'Outras fases')}</div><div class="kpi__sub">${byPhase.open} abertos · ${byPhase.closed} encerrados</div></div>
+      <div class="kpi"><div class="kpi__label">Rejeitadas</div><div class="kpi__val">${nf.format(rejected)}</div><div class="kpi__sub">${rejected ? 'veja o motivo no quadro' : 'nenhuma'}</div></div>
+    </div>`;
+    const govs = {}; cs.filter((c) => c.office === 'governor').forEach((c) => { govs[c.scope_code] = c; });
+    const tile = (uf) => {
+      const [col, row] = UF_TILES[uf]; const c = govs[uf];
+      let cls = 'tile tile--none', style = '', tip = `${uf}|sem pleito de governador`, inner = uf;
+      if (c) {
+        const lead = c.distribution_visible && c.top[0] && c.top[0].votes > 0 ? c.top[0] : null;
+        if (lead) {
+          const share = c.accepted ? (lead.votes * 100) / c.accepted : 0;
+          cls = 'tile tile--lead'; style = `background:${candColor(lead.index)};--a:${(0.45 + Math.min(1, share / 70) * 0.55).toFixed(2)}`;
+          tip = `${uf} · ${c.title}|${lead.name}: ${pctTxt(share)} (${nf.format(lead.votes)} votos)`;
+        } else {
+          cls = `tile tile--${c.phase === 'voting_open' ? 'open' : ['voting_closed', 'tallied', 'audited'].includes(c.phase) ? 'closed' : 'wait'}`;
+          tip = `${uf} · ${c.title}|${(PHASES[c.phase] || [c.phase])[0]}${c.accepted === null ? ' · resultado oculto até o fechamento' : ''}`;
+        }
+        cls += ' tile--click';
+      }
+      return `<button type="button" class="${cls}" style="grid-column:${col + 1};grid-row:${row + 1};${style}" data-tip="${esc(tip)}" ${c ? `data-act="mapstate" data-uf="${uf}"` : 'disabled tabindex="-1"'} aria-label="${esc(tip.replace('|', ': '))}">${uf}</button>`;
+    };
+    const anyLead = cs.some((c) => c.office === 'governor' && c.distribution_visible && c.top[0] && c.top[0].votes > 0);
+    const map = `<article class="card mapcard"><div class="card__head"><div class="card__ico card__ico--onca">${ico('globe')}</div><div><h3>Governadores por estado</h3><div class="muted">${anyLead ? 'Cor = quem lidera · intensidade = vantagem' : 'Cor = situação do pleito'} · clique para ver</div></div></div>
+      <div class="tilemap" role="group" aria-label="Mapa de estados">${Object.keys(UF_TILES).map(tile).join('')}</div>
+      ${anyLead ? '' : `<div class="legend"><span class="lg lg--open"></span>votando <span class="lg lg--closed"></span>encerrado <span class="lg lg--wait"></span>aguardando <span class="lg lg--none"></span>sem pleito</div>`}</article>`;
+    const html = `${kpis}${map}`;
+    if (el.dataset.v !== html) { el.dataset.v = html; el.innerHTML = html; }
+  }
+
   function officesOf(r) {
     const by = {};
     for (const c of r.contests) (by[c.office] = by[c.office] || []).push(c);
@@ -732,12 +878,14 @@
   function vResults() {
     const r = S.results;
     const sim = r && r.available && r.simulated;
-    return `${head('Resultados · tempo real', 'Quem está na frente, pleito a pleito', 'Cada gráfico é a apuração pública de um pleito: o top 10 do mais votado ao menos votado, atualizado a cada cédula que entra no quadro de avisos.')}
+    return `${head('Resultados', 'Quem está na frente', 'Passe o mouse ou clique nos gráficos para explorar.')}
       <div id="res-status"></div>
       ${!r ? `<article class="card"><div class="row">${ico('spin', 'spin')}<span>Lendo o quadro de avisos…</span></div></article>`
         : !r.available ? resUnavailable(r)
-        : `${sim ? `<div class="simbanner" role="alert">${ico('alert')}<div><strong>Dados simulados</strong><div class="muted">As cédulas abaixo foram geradas por um simulador. Isto <strong>não</strong> é resultado de uma eleição.</div></div></div>` : ''}
-           ${callout('warn', 'alert', 'Contagem de protótipo, não confiável', '<p>Ainda não há registro anônimo nem prova de elegibilidade: qualquer chave é aceita. A apuração é refeita por qualquer pessoa a partir do quadro, mas <strong>não protege contra fraude</strong>. Com cédula pública, a distribuição é contável por todos mesmo que a política diga o contrário.</p>')}
+        : `${sim ? `<div class="simbanner" role="alert">${ico('alert')}<div><strong>Dados simulados</strong><div class="muted">Gerados por simulador: <strong>não</strong> é resultado de eleição.</div></div></div>` : ''}
+           <details class="protonote"><summary>${ico('alert')}Contagem de protótipo: sem prova ZK; cédulas públicas</summary>
+             <p class="muted">Há registro anônimo, mas ainda não há prova ZK nem nullifier. Com cédula pública, qualquer pessoa pode contar a distribuição mesmo quando a política a esconde da tela. A apuração é refeita por qualquer um a partir do quadro.</p></details>
+           <div id="res-overview"></div>
            <div id="res-tabs"></div><div id="res-grid" class="results-grid"></div>`}`;
   }
 
@@ -756,6 +904,15 @@
     return s < 2 ? 'agora' : s < 60 ? `há ${s} s` : `há ${Math.round(s / 60)} min`;
   }
 
+  function netChip() {
+    const n = S.net;
+    if (!n) return '';
+    if (n.mode !== 'net') return chip('Arquivo local (sem rede)', '', 'link');
+    const up = n.nodes.filter((x) => x.up).length;
+    const bad = n.nodes.some((x) => x.equivocations > 0);
+    return `${chip(`${n.name} · altura ${n.height} · ${up}/${n.validators} nós`, bad ? 'bad' : up >= n.threshold ? 'ok' : 'warn', 'link')}`;
+  }
+
   function renderResStatus() {
     const el = $('#res-status'); if (!el) return;
     const r = S.results;
@@ -763,10 +920,10 @@
     const [visLabel, visKind] = (r && VIS[r.visibility]) || ['—', ''];
     el.innerHTML = `<article class="card card--flat"><div class="livebar">
       <span class="live-dot ${ok ? '' : 'live-dot--off'}" aria-hidden="true"></span>
-      <strong>${ok ? 'Ao vivo' : 'Sem conexão com o quadro'}</strong>
+      <strong>${ok ? 'Ao vivo' : 'Sem conexão com o quadro'}</strong>${netChip()}
       <span class="muted">${S.resultsAt ? `atualizado ${relTime(S.resultsAt)}` : ''}</span>
-      ${r && r.available ? `${chip(visLabel, visKind)}<span class="muted mono" title="Raiz Merkle do quadro">quadro: ${r.head_size} entradas · ${esc(short(r.head_root, 8, 6))}</span>${r.ignored_governance ? chip(`${r.ignored_governance} entradas de governança recusadas`, 'bad', 'alert') : ''}` : ''}
-      <span class="spacer"></span>${r && r.available ? `<span class="muted">${esc(r.title)} · rev. ${r.revision}</span>` : ''}
+      ${r && r.available ? `${chip(visLabel, visKind)}<span class="muted mono" title="Raiz Merkle do quadro ${esc(r.head_root)}">${nf.format(r.head_size)} entradas</span>${r.ignored_governance ? chip(`${r.ignored_governance} entradas de governança recusadas`, 'bad', 'alert') : ''}` : ''}
+
     </div></article>`;
   }
 
@@ -802,6 +959,8 @@
     li.setAttribute('role', 'img');
     li.setAttribute('aria-label', `${label}: ${txt} votos, ${pct.toFixed(1)}%`);
     li.classList.toggle('bar-row--lead', kind === 'lead');
+    li.style.setProperty('--c', kind === 'others' ? '#8A978F' : candColor(o.index));
+    li.dataset.tip = `${label}|${txt} votos · ${pctTxt(pct)}`;
   }
 
   function contestCardEl(c) {
@@ -833,7 +992,16 @@
       return;
     }
     let ul = body.querySelector('ul.bars');
-    if (!ul) { body.innerHTML = ''; body.dataset.m = ''; ul = document.createElement('ul'); ul.className = 'bars'; ul.setAttribute('aria-label', `Ranking: ${c.title}`); body.append(ul); }
+    if (!ul) {
+      body.innerHTML = '<div class="viz"><div class="viz__donut" data-slot="donut"></div><div class="viz__bars"><div class="lead-badge" data-slot="lead"></div></div></div>';
+      body.dataset.m = ''; ul = document.createElement('ul'); ul.className = 'bars'; ul.setAttribute('aria-label', `Ranking: ${c.title}`); $('.viz__bars', body).append(ul);
+    }
+    const dn = $('[data-slot=donut]', body), dv = `${c.accepted}|${c.top.map((o) => o.votes).join(',')}|${c.others_votes}`;
+    if (dn.dataset.v !== dv) { dn.dataset.v = dv; dn.innerHTML = donutSvg(c); }
+    const lb = $('[data-slot=lead]', body);
+    const l1 = c.top[0], l2 = c.top[1];
+    const badge = l1 && l1.votes > 0 && c.accepted ? `<span class="dot" style="background:${candColor(l1.index)}"></span><strong>${esc(l1.name)}</strong> lidera${l2 ? ` com <b>+${pctTxt(((l1.votes - l2.votes) * 100) / c.accepted).replace('%', ' p.p.')}</b> sobre ${esc(l2.name)}` : ''}` : '';
+    if (lb.innerHTML !== badge) lb.innerHTML = badge;
     const rows = c.top.map((o) => ({ ...o }));
     if (c.others_count > 0) rows.push({ index: -1, votes: c.others_votes, count: c.others_count, others: true });
     const max = Math.max(1, ...c.top.map((o) => o.votes));
@@ -855,6 +1023,7 @@
     const r = S.results;
     renderResStatus();
     if (!r || !r.available) return;
+    renderOverview(r);
     renderResTabs(r);
     const grid = $('#res-grid'); if (!grid) return;
     const list = (officesOf(r).find(([o]) => o === S.resultsOffice) || [null, []])[1]
@@ -872,6 +1041,7 @@
     try {
       S.results = await invoke('results_snapshot');
       S.resultsErr = null; S.resultsAt = Date.now();
+      try { S.net = await invoke('network_status'); } catch { /* sem rede: tudo bem */ }
     } catch (e) { S.resultsErr = asErr(e).message; }
     const need = S.results && S.results.available ? 'ready' : 'empty';
     if (S.resultsShape !== need) { S.resultsShape = need; renderMain(); }
@@ -885,12 +1055,24 @@
       if (!routeAllowed(id)) { toast(id === 'onboarding' ? 'A configuração já foi concluída.' : 'Conecte e desbloqueie seu dispositivo para usar esta área.', 'bad'); return; }
       S.route = id; S.userPicked = true; S.lastKey = '';
       if (id === 'vote') S.elecChecked = false;
+      if (id === 'explorer') { S.explorerTried = false; S.inclusion = null; }
       if (id === 'results') { S.resultsShape = null; setTimeout(pollResults, 0); }
       if (id === 'identity') S.idTried = false;
       if (id === 'identity') loadId();
       render();
     },
+    async checkincl() {
+      const index = Number($('#incl-idx').value);
+      await guarded(async () => { S.inclusion = await invoke('verify_inclusion', { index }); });
+      S.lastKey = ''; render();
+    },
     gotoresults() { S.route = 'results'; S.userPicked = true; S.resultsShape = null; S.lastKey = ''; render(); pollResults(); },
+    mapstate(b) {
+      S.resultsOffice = 'governor'; renderResults();
+      const g = $('#res-grid'); const c = (S.results.contests || []).find((x) => x.office === 'governor' && x.scope_code === b.dataset.uf);
+      const card = c && g && g.querySelector(`[data-contest="${CSS.escape(c.contest_id)}"]`);
+      if (card) { card.scrollIntoView({ behavior: 'smooth', block: 'center' }); card.classList.add('flash'); setTimeout(() => card.classList.remove('flash'), 1600); }
+    },
     resoffice(b) { S.resultsOffice = b.dataset.o; $('#res-grid').dataset.want = ''; renderResults(); },
     async publishboard() {
       await guarded(async () => { const n = await invoke('board_publish'); toast(n ? 'Eleição publicada no quadro.' : 'A eleição já estava no quadro.', 'ok'); });
@@ -1058,6 +1240,7 @@
     if (S.route === 'onboarding' && onboardStep() === 'firmware') loadFirmware();
     if (S.route === 'identity') loadId();
     if (S.route === 'vote') loadElec();
+    if (S.route === 'explorer') loadExplorer();
     if (S.route === 'results') renderResults();
     const dz = $('#dz');
     if (dz) {

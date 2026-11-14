@@ -227,7 +227,7 @@ Invariantes novas a testar: a cédula só é assinada se o candidato exibido vei
 5. ✅ Registro anônimo (ADR-0008: RFC 9474, chave RSA por pleito) + `issuer-cli` como autoridade de registro. Implementado; falta ZK/nullifier (etapa 6).
 6. Prova de voto: primeiro uma **prova simulada** com a mesma interface (para fechar o fluxo e a UI), depois o provador real (ADR-0013).
 7. Apuração aberta + verificação independente (`election-admin-cli verify`).
-8. Suite: explorador público com dados reais do quadro, fluxo de voto e conferência do recibo de inclusão.
+8. ✅ Suite: explorador público com dados reais do quadro (regras, candidatos, calendário, decisões da governança com assinaturas) e conferência de inclusão Merkle por posição. Fechamento automático no prazo (`election-admin close-due`). Falta: comparar heads com testemunhas independentes (split view, V19).
 9. Atualizar THREAT-MODEL, KEY-HIERARCHY, DEVICE-PROTOCOL, TEST-MATRIX a cada etapa.
 
 ---

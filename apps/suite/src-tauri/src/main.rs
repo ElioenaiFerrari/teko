@@ -40,6 +40,9 @@ fn main() {
             commands::election_get,
             commands::election_vote,
             commands::results_snapshot,
+            commands::explorer_snapshot,
+            commands::network_status,
+            commands::verify_inclusion,
             commands::board_publish,
             commands::wipe,
         ])

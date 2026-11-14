@@ -2,13 +2,13 @@ use std::fs;
 use std::sync::{Arc, Mutex, MutexGuard, TryLockError};
 use std::time::Duration;
 
-use election_admin::{Admin, feed_new, new_tallier};
+use election_admin::{Admin, feed_new};
 use issuer_cli::{ISSUER_NAME, Issuer, Subject};
 use prost::Message;
 use serde::Serialize;
 use tauri::{AppHandle, Emitter, Manager, State};
 use teko_attestation::TrustPolicy;
-use teko_bulletin::{BulletinBoard, FileBoard};
+use teko_bulletin::BulletinBoard;
 use teko_client::{
     AttributeResult, AuthenticityReport, CivicIdInfo, ClientError, DeviceClient, DeviceStatus,
     ElectionSummary, FirmwareInfo, SignedBallot, SignedDocument, UnlockOutcome, VerifiedDocument,
@@ -648,7 +648,7 @@ fn register_anonymously(
     let published = Admin::open(resolve_dev_dir())
         .map_err(|e| e.to_string())
         .and_then(|admin| {
-            if !admin.board_path().exists() {
+            if !admin.has_board() {
                 return Err("o quadro ainda não foi publicado".to_string());
             }
             admin
@@ -668,7 +668,7 @@ fn register_anonymously(
 
 fn submit_to_board(b: &SignedBallot) -> Result<u64, String> {
     let admin = Admin::open(resolve_dev_dir()).map_err(|e| e.to_string())?;
-    if !admin.board_path().exists() {
+    if !admin.has_board() {
         return Err(
             "O quadro ainda não foi publicado: a cédula não entrou na contagem ao vivo.".into(),
         );
@@ -799,7 +799,7 @@ pub async fn results_snapshot(suite: State<'_, Suite>) -> Result<ResultsReply, U
                 let _ = admin.close_due(now);
             }
         }
-        let (board, _partial) = match FileBoard::open_tolerant(admin.board_path()) {
+        let board = match admin.read_board() {
             Ok(b) => b,
             Err(e) => return unavailable(&format!("quadro ilegível: {e}")),
         };
@@ -811,7 +811,7 @@ pub async fn results_snapshot(suite: State<'_, Suite>) -> Result<ResultsReply, U
         if guard.as_ref().is_some_and(|t| t.consumed() > board.len()) {
             *guard = None;
         }
-        let tallier = guard.get_or_insert_with(|| new_tallier(admin.policy()));
+        let tallier = guard.get_or_insert_with(|| admin.new_tallier());
         feed_new(tallier, &board);
         let t = tallier.snapshot();
         let manifest = tallier.manifest().cloned();
@@ -894,6 +894,340 @@ pub async fn results_snapshot(suite: State<'_, Suite>) -> Result<ResultsReply, U
     })
     .await
     .map_err(|e| ui_err("Internal", e))
+}
+
+// ───────────────────────── public explorer (no device needed) ─────────────────────────
+
+#[derive(Serialize)]
+pub struct ExplorerOption {
+    number: String,
+    name: String,
+}
+
+#[derive(Serialize)]
+pub struct ExplorerContest {
+    contest_id: String,
+    title: String,
+    office: &'static str,
+    scope: &'static str,
+    scope_code: String,
+    phase: &'static str,
+    registration_opens: u64,
+    voting_opens: u64,
+    voting_closes: u64,
+    registration_required: bool,
+    options: Vec<ExplorerOption>,
+}
+
+#[derive(Serialize)]
+pub struct GovernanceStep {
+    seq: u64,
+    contest_id: String,
+    from: &'static str,
+    to: &'static str,
+    at: u64,
+    signatures: usize,
+    /// Position of this decision in the public log.
+    board_index: u64,
+}
+
+#[derive(Serialize)]
+pub struct ExplorerReply {
+    available: bool,
+    reason: Option<String>,
+    election_id: String,
+    title: String,
+    revision: u32,
+    head_size: u64,
+    head_root: String,
+    contests: Vec<ExplorerContest>,
+    governance: Vec<GovernanceStep>,
+}
+
+fn explorer_unavailable(reason: &str) -> ExplorerReply {
+    ExplorerReply {
+        available: false,
+        reason: Some(reason.to_string()),
+        election_id: String::new(),
+        title: String::new(),
+        revision: 0,
+        head_size: 0,
+        head_root: String::new(),
+        contests: Vec::new(),
+        governance: Vec::new(),
+    }
+}
+
+/// Everything PUBLIC about the election, straight from the bulletin board: rules,
+/// candidates, calendar and the signed governance decisions in log order. It
+/// replays the log itself (M-of-N checked), so nothing here is taken on trust.
+#[tauri::command]
+pub async fn explorer_snapshot() -> Result<ExplorerReply, UiError> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let admin = match Admin::open(resolve_dev_dir()) {
+            Ok(a) => a,
+            Err(e) => return explorer_unavailable(&e.to_string()),
+        };
+        let board = match admin.read_board() {
+            Ok(b) => b,
+            Err(e) => return explorer_unavailable(&format!("quadro ilegível: {e}")),
+        };
+        if board.is_empty() {
+            return explorer_unavailable(
+                "O quadro de avisos ainda está vazio: publique a eleição.",
+            );
+        }
+        let mut t = admin.new_tallier();
+        feed_new(&mut t, &board);
+        let (Some(m), snap) = (t.manifest().cloned(), t.snapshot()) else {
+            return explorer_unavailable("Nenhuma eleição válida no quadro.");
+        };
+        let contests = m
+            .contests
+            .iter()
+            .map(|c| {
+                let sch = c.schedule.clone().unwrap_or_default();
+                let scope = c.scope.clone().unwrap_or_default();
+                ExplorerContest {
+                    contest_id: c.contest_id.clone(),
+                    title: c.title.clone(),
+                    office: office_name(c.office()),
+                    scope: match scope.level() {
+                        teko_election::ScopeLevel::National => "national",
+                        teko_election::ScopeLevel::State => "state",
+                        teko_election::ScopeLevel::Municipality => "municipality",
+                        teko_election::ScopeLevel::Unspecified => "unknown",
+                    },
+                    scope_code: scope.code.clone(),
+                    phase: snap
+                        .contest(&c.contest_id)
+                        .map_or("draft", |x| phase_name(x.phase)),
+                    registration_opens: sch.registration_opens,
+                    voting_opens: sch.voting_opens,
+                    voting_closes: sch.voting_closes,
+                    registration_required: !c.registration_key.is_empty(),
+                    options: c
+                        .options
+                        .iter()
+                        .map(|o| ExplorerOption {
+                            number: o.number.clone(),
+                            name: o.name.clone(),
+                        })
+                        .collect(),
+                }
+            })
+            .collect();
+        let phase_of = |p: i32| Phase::try_from(p).map_or("draft", phase_name);
+        let governance = (0..board.len())
+            .filter_map(|i| {
+                let e = board.entry(i)?;
+                if e.kind != teko_bulletin::EntryKind::TRANSITION {
+                    return None;
+                }
+                let tr =
+                    <teko_election::Transition as prost::Message>::decode(e.payload.as_slice())
+                        .ok()?;
+                Some(GovernanceStep {
+                    seq: tr.seq,
+                    contest_id: tr.contest_id.clone(),
+                    from: phase_of(tr.from_phase),
+                    to: phase_of(tr.to_phase),
+                    at: tr.at,
+                    signatures: tr.signatures.len(),
+                    board_index: i,
+                })
+            })
+            .collect();
+        ExplorerReply {
+            available: true,
+            reason: None,
+            election_id: snap.election_id,
+            title: snap.title,
+            revision: snap.revision,
+            head_size: board.len(),
+            head_root: hex::encode(&board.root()),
+            contests,
+            governance,
+        }
+    })
+    .await
+    .map_err(|e| ui_err("Internal", e))
+}
+
+#[derive(Serialize)]
+pub struct NodeView {
+    index: usize,
+    addr: String,
+    up: bool,
+    height: u64,
+    mempool: u32,
+    peers_online: u32,
+    equivocations: u32,
+}
+
+#[derive(Serialize)]
+pub struct BlockView {
+    height: u64,
+    entries: usize,
+    signatures: usize,
+    round: u32,
+    timestamp: u64,
+    /// Validator (by index) that proposed it.
+    proposer: usize,
+    hash: String,
+}
+
+#[derive(Serialize)]
+pub struct NetworkReply {
+    /// "file" = local single-operator log; "net" = federated PoA test network.
+    mode: &'static str,
+    name: String,
+    chain_id: String,
+    threshold: usize,
+    validators: usize,
+    height: u64,
+    nodes: Vec<NodeView>,
+    /// Most recent blocks, newest first (every one verified here).
+    blocks: Vec<BlockView>,
+    error: Option<String>,
+}
+
+/// Which "blockchain" the Suite is reading, with the state of each node and the
+/// latest blocks. The blocks shown were verified in THIS process (M-of-N
+/// signatures, hash chain, Merkle state), not taken from a node's word.
+#[tauri::command]
+pub async fn network_status() -> Result<NetworkReply, UiError> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let file_mode = NetworkReply {
+            mode: "file",
+            name: "arquivo local".into(),
+            chain_id: String::new(),
+            threshold: 1,
+            validators: 1,
+            height: 0,
+            nodes: Vec::new(),
+            blocks: Vec::new(),
+            error: None,
+        };
+        let Ok(admin) = Admin::open(resolve_dev_dir()) else {
+            return file_mode;
+        };
+        let Some(net) = admin.network() else {
+            return NetworkReply {
+                height: admin.read_board().map_or(0, |b| b.len()),
+                ..file_mode
+            };
+        };
+        let nodes = net
+            .client()
+            .statuses()
+            .into_iter()
+            .enumerate()
+            .map(|(i, (addr, s))| NodeView {
+                index: i,
+                addr: addr.to_string(),
+                up: s.is_some(),
+                height: s.as_ref().map_or(0, |s| s.height),
+                mempool: s.as_ref().map_or(0, |s| s.mempool),
+                peers_online: s.as_ref().map_or(0, |s| s.peers_online),
+                equivocations: s.as_ref().map_or(0, |s| s.equivocations),
+            })
+            .collect();
+        let (blocks, height, error) = match admin.read_board() {
+            Ok(election_admin::AnyBoard::Net(nb)) => {
+                let chain = nb.chain();
+                let validators = &net.profile.validators;
+                let v = chain
+                    .map(|c| {
+                        c.blocks()
+                            .iter()
+                            .rev()
+                            .take(20)
+                            .map(|b| BlockView {
+                                height: b.height,
+                                entries: b.entries.len(),
+                                signatures: b.signatures.len(),
+                                round: b.round,
+                                timestamp: b.timestamp,
+                                proposer: validators
+                                    .iter()
+                                    .position(|k| *k == b.proposer)
+                                    .unwrap_or(0),
+                                hash: hex::encode(&b.header_hash()),
+                            })
+                            .collect()
+                    })
+                    .unwrap_or_default();
+                (v, nb.height(), None)
+            }
+            Ok(_) => (Vec::new(), 0, None),
+            Err(e) => (Vec::new(), 0, Some(e.to_string())),
+        };
+        NetworkReply {
+            mode: "net",
+            name: net.profile.kind.name().to_string(),
+            chain_id: net.profile.chain_id.clone(),
+            threshold: net.profile.threshold,
+            validators: net.profile.validators.len(),
+            height,
+            nodes,
+            blocks,
+            error,
+        }
+    })
+    .await
+    .map_err(|e| ui_err("Internal", e))
+}
+
+#[derive(Serialize)]
+pub struct InclusionReply {
+    valid: bool,
+    kind: &'static str,
+    index: u64,
+    size: u64,
+    root: String,
+    proof_len: usize,
+}
+
+/// "Is entry #index really in the log?": recomputes the Merkle inclusion proof
+/// against the CURRENT root (RFC 9162). The check runs here, not on trust of the
+/// board file's own bookkeeping.
+#[tauri::command]
+pub async fn verify_inclusion(index: u64) -> Result<InclusionReply, UiError> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let admin = Admin::open(resolve_dev_dir()).map_err(|e| ui_err("NoElection", e))?;
+        let board = admin
+            .read_board()
+            .map_err(|e| ui_err("NoElection", format!("quadro ilegível: {e}")))?;
+        let entry = board
+            .entry(index)
+            .ok_or_else(|| ui_err("InvalidArgument", "não existe essa posição no quadro"))?;
+        let proof = board
+            .inclusion_proof(index)
+            .map_err(|e| ui_err("Internal", e))?;
+        let head = teko_bulletin::SignedHead {
+            size: board.len(),
+            root: board.root(),
+            operator_key: Vec::new(),
+            signature: Vec::new(),
+        };
+        Ok(InclusionReply {
+            valid: teko_bulletin::verify_entry_inclusion(entry, index, &head, &proof),
+            kind: match entry.kind {
+                teko_bulletin::EntryKind::MANIFEST => "manifesto",
+                teko_bulletin::EntryKind::TRANSITION => "decisão da governança",
+                teko_bulletin::EntryKind::REGISTRATION => "registro anônimo",
+                teko_bulletin::EntryKind::BALLOT => "cédula",
+                _ => "outro",
+            },
+            index,
+            size: board.len(),
+            root: hex::encode(&board.root()),
+            proof_len: proof.len(),
+        })
+    })
+    .await
+    .map_err(|e| ui_err("Internal", e))?
 }
 
 /// Publishes the demo election on the local board (idempotent).

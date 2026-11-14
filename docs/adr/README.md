@@ -29,3 +29,4 @@ Regra: decisões de produto/segurança só passam a `Aceito` pela aprovação do
 | [0020](0020-livro-razao-generico-e-modulos.md) | Livro-razão genérico com módulos (`teko-ledger`) | Aceito provisoriamente (M2) | confirmar |
 | [0021](0021-moeda-teto-fixo-stake-e-taxas.md) | Moeda de teto fixo, stake, taxas e penalidades (`teko-coin`) | Aceito provisoriamente (M3) | PENDENTE: início da rede (A/B/C) |
 | [0022](0022-bens-registro-com-orgao-e-troca-atomica.md) | Bens: registro com órgão M-de-N, consentimentos e troca atômica (`teko-assets`) | Aceito provisoriamente (M4) | confirmar |
+| [0023](0023-carteira-com-seed-bip39.md) | Carteira com frase de recuperação (BIP-39 + SLIP-10 P-256), separada da identidade | **Aceito** (M5a); supera em parte o 0003 | — |

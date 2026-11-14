@@ -12,6 +12,7 @@
     usb: '<rect x="7" y="3" width="10" height="7" rx="1.5"/><path d="M9.5 10v2.5M14.5 10v2.5"/><rect x="6" y="12.5" width="12" height="8" rx="2"/><path d="M10 16.5h4"/>',
     shield: '<path d="M12 3l7 3v5c0 5-3.5 8.5-7 10-3.5-1.5-7-5-7-10V6l7-3z"/><path d="M9 12l2 2 4-4"/>',
     key: '<circle cx="8" cy="15" r="4"/><path d="M11 12l9-9M16 7l3 3"/>',
+    wallet: '<rect x="3" y="6" width="18" height="13" rx="2"/><path d="M3 10h18M16 14.5h2"/>',
     pen: '<path d="M4 20h16"/><path d="M5 16l9-9 3 3-9 9H5v-3z"/>',
     badge: '<circle cx="12" cy="12" r="9"/><path d="M8 12l3 3 5-6"/>',
     ballot: '<rect x="4" y="9" width="16" height="11" rx="2"/><path d="M8 9V5h8v4M9 14h6"/>',
@@ -166,6 +167,7 @@
   const NAV = [
     { id: 'onboarding', label: 'Configurar dispositivo', icon: 'usb', need: 'onboarding' },
     { id: 'identity', label: 'Minha identidade', icon: 'id', need: 'ready' },
+    { id: 'wallet', label: 'Carteira', icon: 'wallet', need: 'ready' },
     { id: 'sign', label: 'Assinar documento', icon: 'pen', need: 'ready' },
     { id: 'prove', label: 'Provar atributo', icon: 'badge', need: 'ready' },
     { id: 'vote', label: 'Votar', icon: 'ballot', need: 'ready' },
@@ -213,6 +215,12 @@
     voter_key: ['Confirme no dispositivo', 'Será exportada a chave PÚBLICA de eleitor deste pleito.'],
     export_commitment: ['Confirme no dispositivo', 'Exportar o compromisso de eleitor.'],
     wipe: ['Confirme o apagamento no dispositivo', 'No dispositivo, digite APAGAR para confirmar. Isso é irreversível.'],
+    wallet_create: ['Crie a carteira no dispositivo', 'O dispositivo vai mostrar 24 palavras NA TELA DELE. Elas nunca passam por este computador. Tenha papel e caneta.'],
+    seed_words: ['Anote as palavras no dispositivo', 'Escreva cada palavra, na ordem, em papel. Não fotografe nem digite em nenhum computador. Confirme cada página no dispositivo.'],
+    wallet_confirm: ['Confirme a sua anotação no dispositivo', 'O dispositivo vai pedir palavras de posições sorteadas. Digite-as no dispositivo, lendo do seu papel.'],
+    wallet_passphrase: ['Escolha no dispositivo: usar passphrase?', 'Uma senha extra protege a frase, mas esquecê-la significa perder os fundos. Decida no dispositivo.'],
+    wallet_restore: ['Restaure a carteira no dispositivo', 'Digite as 24 palavras NO DISPOSITIVO e confira o endereço mostrado. Esta janela nunca vê as palavras.'],
+    wallet_check: ['Verifique o backup no dispositivo', 'Digite a frase do seu papel no dispositivo. Ele só diz se confere ou não.'],
     unknown: ['Aguardando o dispositivo', 'Olhe a tela do dispositivo.'],
   };
 
@@ -371,7 +379,7 @@
 
   function renderMain() {
     const m = $('#main');
-    const views = { results: vResults, explorer: vExplorer, onboarding: vOnboarding, unlock: vUnlock, identity: vIdentity, sign: vSign, prove: vProve, vote: vVote };
+    const views = { results: vResults, explorer: vExplorer, onboarding: vOnboarding, unlock: vUnlock, identity: vIdentity, wallet: vWallet, sign: vSign, prove: vProve, vote: vVote };
     m.innerHTML = `<div class="view">${(views[S.route] || vExplorer)()}</div>`;
     afterRender();
   }
@@ -469,7 +477,7 @@
   }
 
   // ───────────────────────── onboarding ─────────────────────────
-  const STEPS = [['detect', 'Dispositivo'], ['auth', 'Autenticidade'], ['firmware', 'Firmware'], ['pin', 'PIN'], ['id', 'ID Cívico'], ['issue', 'Credencial'], ['done', 'Pronto']];
+  const STEPS = [['detect', 'Dispositivo'], ['auth', 'Autenticidade'], ['firmware', 'Firmware'], ['pin', 'PIN'], ['wallet', 'Carteira'], ['id', 'ID Cívico'], ['issue', 'Credencial'], ['done', 'Pronto']];
 
   function onboardStep() {
     const st = S.dev.status;
@@ -477,7 +485,7 @@
     switch (st.state) {
       case 'virgin': return S.authAck ? 'firmware' : 'auth';
       case 'firmware_installed': return 'pin';
-      case 'initialized': return S.civic ? 'issue' : 'id';
+      case 'initialized': return !st.wallet_ready ? 'wallet' : S.civic ? 'issue' : 'id';
       default: return 'done';
     }
   }
@@ -488,10 +496,10 @@
     const stepper = STEPS.map(([k, label], i) => `
       <li class="step ${i < idx ? 'step--done' : i === idx ? 'step--now' : ''}" ${i === idx ? 'aria-current="step"' : ''}>
         <span class="step__n">${i < idx ? ico('check') : i + 1}</span>${esc(label)}</li>`).join('');
-    const body = { detect: sDetect, auth: sAuth, firmware: sFirmware, pin: sPin, id: sId, issue: sIssue, done: sDone }[cur]();
+    const body = { detect: sDetect, auth: sAuth, firmware: sFirmware, pin: sPin, wallet: sWallet, id: sId, issue: sIssue, done: sDone }[cur]();
     const wipedBanner = S.wiped
       ? `<div class="callout callout--bad" role="alert">${ico('alert')}<div><strong>Seu dispositivo foi apagado</strong>
-          <p>Houve excesso de tentativas de PIN (ou o dispositivo foi apagado). Chaves, ID Cívico e credencial foram <strong>destruídos</strong> e não há seed para recuperar. É preciso configurar de novo e refazer a emissão da credencial (na vida real, presencialmente na autoridade).</p>
+          <p>Houve excesso de tentativas de PIN (ou o dispositivo foi apagado). Chaves, ID Cívico e credencial foram <strong>destruídos</strong>. A <strong>identidade</strong> não tem seed: é preciso configurar de novo e refazer a emissão da credencial (na vida real, presencialmente na autoridade). Já a <strong>carteira</strong> se recupera com a sua frase de 24 palavras (etapa Carteira → Restaurar).</p>
           <div class="row" style="margin-top:8px"><button class="btn btn--ghost btn--sm" data-act="dismisswipe">Entendi</button></div></div></div>`
       : '';
     return `${wipedBanner}${head('Primeira utilização', 'Vamos configurar seu dispositivo', 'Cada etapa sensível é confirmada na tela e nos botões do dispositivo, nunca neste computador.')}
@@ -552,8 +560,21 @@
     return `<article class="card">
       <div class="card__head"><div class="card__ico card__ico--onca">${ico('lock')}</div><h2>Defina seu PIN no dispositivo</h2></div>
       <p class="muted">O PIN é digitado <strong>no terminal do emulador</strong> (a "tela e botões" do dispositivo), duas vezes. Esta janela nunca o vê.</p>
-      ${callout('warn', 'alert', 'Guarde bem o PIN', '<p>Sem seed de recuperação: se perder o PIN ou errar 8 vezes, o dispositivo se apaga e é preciso refazer a emissão presencialmente. PINs fracos (123456, 111111) são recusados pelo dispositivo.</p>')}
+      ${callout('warn', 'alert', 'Guarde bem o PIN', '<p>Se perder o PIN ou errar 8 vezes, o dispositivo se apaga. A identidade se refaz presencialmente na autoridade; a carteira se recupera com a frase de 24 palavras (próxima etapa). PINs fracos (123456, 111111) são recusados pelo dispositivo.</p>')}
       <div class="row"><button class="btn" data-act="pin">${ico('lock')}Definir PIN no dispositivo</button></div>
+    </article>`;
+  }
+
+  function sWallet() {
+    return `<article class="card">
+      <div class="card__head"><div class="card__ico card__ico--boto">${ico('wallet')}</div><h2>Sua carteira e a frase de recuperação</h2></div>
+      <p class="muted">O dispositivo cria a carteira e mostra <strong>24 palavras na tela dele</strong>. Elas <strong>nunca</strong> passam por este computador. Depois ele pede algumas palavras de posições sorteadas para ter certeza de que você anotou.</p>
+      ${callout('warn', 'alert', 'Quem tem a frase tem o dinheiro', '<p>Anote em <strong>papel</strong>, na ordem, e guarde em lugar seguro. Não fotografe, não digite em computador nem celular, não envie a ninguém. Se perder o dispositivo, é a única forma de recuperar os fundos. A <strong>identidade</strong> continua sem seed (reemissão presencial); a frase serve só para a carteira.</p>')}
+      <div class="row">
+        <button class="btn" data-act="walletnew">${ico('key')}Criar nova carteira</button>
+        <button class="btn btn--ghost" data-act="walletrestore">${ico('upload')}Restaurar com minha frase</button>
+      </div>
+      <p class="muted" style="margin-top:10px">Opcional: o dispositivo perguntará se você quer uma <em>passphrase</em> (senha extra). Se esquecê-la, os fundos se perdem.</p>
     </article>`;
   }
 
@@ -584,7 +605,7 @@
       </div>
       <p class="muted">Quem atesta o domicílio no mundo real é o cadastro eleitoral; aqui o <code>issuer-cli</code> simula esse papel.</p>
       <details class="protonote" ${S.reissue ? 'open' : ''}><summary>${ico('lock')}Perdi ou troquei de dispositivo (reemissão)</summary>
-        <p class="muted">Não existe frase de recuperação: a chave só existe no dispositivo. Para voltar a usar sua identidade, a autoridade confere você <strong>presencialmente</strong>, <strong>revoga</strong> a credencial anterior e emite uma nova. Quem estiver com o dispositivo antigo não consegue mais provar nada. Se você já se registrou para votar em um pleito, esse registro continua valendo (e não pode ser refeito).</p>
+        <p class="muted">A identidade não tem frase de recuperação (a carteira tem): a chave de identidade só existe no dispositivo. Para voltar a usar sua identidade, a autoridade confere você <strong>presencialmente</strong>, <strong>revoga</strong> a credencial anterior e emite uma nova. Quem estiver com o dispositivo antigo não consegue mais provar nada. Se você já se registrou para votar em um pleito, esse registro continua valendo (e não pode ser refeito).</p>
         <div class="fields">
           <div class="field"><label for="f-old">ID Cívico do dispositivo anterior</label><input class="input" id="f-old" placeholder="teko1…" autocomplete="off" spellcheck="false" value="${esc(S.oldCivic || '')}"><span class="hint">Deixe em branco se é a sua primeira credencial.</span></div>
           <div class="field"><label for="f-why">Motivo</label><select class="input" id="f-why"><option value="lost">Perdido</option><option value="stolen">Roubado</option><option value="replaced">Troquei de aparelho</option></select></div>
@@ -631,6 +652,32 @@
   }
 
   // ───────────────────────── identidade ─────────────────────────
+  function vWallet() {
+    const a = S.walletAddr;
+    const b = S.balance;
+    const bal = !b ? `<div class="row">${ico('spin', 'spin')}<span>Lendo o saldo…</span></div>`
+      : b.available
+        ? `<div class="kpi__val">${esc(String(b.amount))} <span class="muted" style="font-size:1rem;font-weight:600">moedas</span></div><div class="row">${chip('moeda de TESTE', 'warn')}</div><p class="muted">${esc(b.note || '')}</p>`
+        : `<p class="muted">${esc(b.reason || 'Saldo indisponível.')}</p>`;
+    return `${head('Carteira', 'Seu endereço e seu saldo', 'A chave desta carteira nasceu no dispositivo e nunca sai dele. Só o endereço, que é público, aparece aqui.')}
+      <article class="card">
+        <div class="card__head"><div class="card__ico card__ico--boto">${ico('wallet')}</div><h2>Endereço</h2></div>
+        ${a ? `<div class="screen"><div class="screen__label">Endereço da carteira (público)</div><div class="id-big">${esc(a.address)}</div></div>
+          <div class="row"><button class="btn btn--ghost btn--sm" data-act="copy" data-text="${esc(a.address)}">${ico('copy')}Copiar</button></div>`
+        : `<div class="row">${ico('spin', 'spin')}<span>Lendo do dispositivo…</span></div>`}
+      </article>
+      <article class="card">
+        <div class="card__head"><div class="card__ico card__ico--arara">${ico('chart')}</div><h2>Saldo</h2></div>
+        ${bal}
+      </article>
+      <article class="card">
+        <div class="card__head"><div class="card__ico">${ico('shield')}</div><h2>Backup da frase</h2></div>
+        <p class="muted">Quer ter certeza de que a sua anotação está correta? O dispositivo pede a frase inteira e só responde se confere ou não. Nada é exibido aqui.</p>
+        <div class="row"><button class="btn" data-act="walletcheck">${ico('check')}Verificar meu backup</button></div>
+        ${callout('warn', 'alert', 'Nunca digite as palavras neste computador', '<p>Esta janela não tem campo para a frase de propósito. Se algum site ou programa pedir as 24 palavras, é golpe.</p>')}
+      </article>`;
+  }
+
   function vIdentity() {
     const id = S.civic;
     const data = S.identity;
@@ -1075,6 +1122,7 @@
       if (id === 'explorer') { S.explorerTried = false; S.inclusion = null; }
       if (id === 'results') { S.resultsShape = null; setTimeout(pollResults, 0); }
       if (id === 'identity') S.idTried = false;
+      if (id === 'wallet') { S.walletTried = false; S.walletAddr = null; S.balance = null; }
       if (id === 'identity') loadId();
       render();
     },
@@ -1115,6 +1163,17 @@
     async pin() {
       await guarded(async () => { await call('setup_pin'); toast('PIN definido no dispositivo.', 'ok'); });
       S.lastKey = ''; await poll();
+    },
+    async walletnew() {
+      await guarded(async () => { const w = await call('wallet_setup'); S.wallet = w; toast('Carteira criada e backup confirmado no dispositivo.', 'ok'); });
+      S.lastKey = ''; await poll();
+    },
+    async walletrestore() {
+      await guarded(async () => { const w = await call('wallet_restore'); S.wallet = w; toast('Carteira restaurada. Confira o endereço.', 'ok'); });
+      S.lastKey = ''; await poll();
+    },
+    async walletcheck() {
+      await guarded(async () => { await call('wallet_check_backup'); toast('Backup conferido: a frase confere com esta carteira.', 'ok'); });
     },
     async showid() {
       await guarded(async () => { S.civic = await call('civic_id'); });
@@ -1236,6 +1295,16 @@
     if (S.election) { S.lastKey = ''; render(); }
   }
 
+  async function loadWallet() {
+    if (S.walletTried || phase() !== 'ready') return;
+    S.walletTried = true;
+    await guarded(async () => { S.walletAddr = await call('wallet_address', {}, { delay: 5000 }); }, { silent: true });
+    if (S.walletAddr) {
+      try { S.balance = await invoke('wallet_balance', { address: S.walletAddr.address }); } catch { S.balance = { available: false, reason: 'Não foi possível ler o saldo.' }; }
+    }
+    S.lastKey = ''; render();
+  }
+
   async function loadId() {
     if (S.civic || S.idTried || phase() !== 'ready') return;
     S.idTried = true;
@@ -1257,6 +1326,7 @@
     if (S.route === 'onboarding' && onboardStep() === 'auth' && !S.genuine && !S.authRunning && !S.busy) act.auth();
     if (S.route === 'onboarding' && onboardStep() === 'firmware') loadFirmware();
     if (S.route === 'identity') loadId();
+    if (S.route === 'wallet') loadWallet();
     if (S.route === 'vote') loadElec();
     if (S.route === 'explorer') loadExplorer();
     if (S.route === 'results') renderResults();

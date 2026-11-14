@@ -20,7 +20,8 @@ pub mod voter;
 
 pub use error::CryptoError;
 pub use ids::{
-    CIVIC_HRP, PAIRWISE_HRP, canonical_service_id, civic_id, pairwise_id, parse_civic_id,
+    CIVIC_HRP, PAIRWISE_HRP, WALLET_HRP, canonical_service_id, civic_id, ledger_address,
+    pairwise_id, parse_civic_id, parse_wallet_address, wallet_address,
 };
 pub use keys::{
     derive_key, derive_signing_key, generate_signing_key, public_key_bytes, tagged_hash,

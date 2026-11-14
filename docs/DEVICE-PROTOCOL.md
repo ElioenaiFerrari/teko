@@ -5,7 +5,7 @@ Status: **rascunho para revisão**. Serialização do payload depende do ADR-000
 ## 1. Princípios
 
 - Mensagens tipadas e versionadas; o parser é **total** (nunca entra em pânico) e rejeita o que não reconhece.
-- **Nenhuma mensagem carrega PIN, chave privada, seed ou `s`.** O PIN é digitado no dispositivo.
+- **Nenhuma mensagem carrega PIN, chave privada, seed ou `s`.** O PIN é digitado no dispositivo. Na **carteira** (ADR-0023) a frase de 24 palavras e a passphrase são **mostradas e digitadas só no dispositivo**: o host recebe apenas `ButtonRequest` (tipo) e o endereço público.
 - Todo pedido que exige confirmação mostra **no dispositivo** o que será assinado; o dispositivo assina o que ele mesmo exibiu.
 - O dispositivo é um servidor de uma requisição por vez (como Trezor): uma requisição pendente por vez; novo pedido durante interação → `Busy` ou `Cancel` explícito.
 
@@ -59,6 +59,10 @@ Legenda — **Confirma?**: exige confirmação física no dispositivo. Todas as 
 | `ProveAttribute{predicate, verifier_nonce}` → `ButtonRequest` → `AttributeProof{proof}` | Desbloqueado | **Sim** | "Provar: `idade ≥ 18` para <verificador>?" |
 | `GetVoterCommitment` → `VoterCommitment{C}` | Desbloqueado | Sim | "Exportar commitment de eleitor?" (stub) |
 | `SignBallot{election_id, ballot_hash}` → `BallotSignature` | Desbloqueado | **Sim** | "Votar em <opção>?" (**stub**: retorna `NotImplemented` ou assinatura fictícia marcada) |
+| `SetupWallet` → `ButtonRequest(WalletCreate, SeedWords×4, WalletPassphrase, WalletConfirm)` → `WalletReady{address, has_passphrase}` | Inicializado, desbloqueado, sem carteira | **Sim** (cada página + 3 posições digitadas no dispositivo) | Mostra 24 palavras em 4 páginas; pergunta passphrase; pede as palavras das posições sorteadas |
+| `RestoreWallet` → `ButtonRequest(WalletRestore…)` → `WalletReady` | Idem | **Sim** (24 palavras digitadas + conferir o endereço) | "Digite as 24 palavras AQUI"; mostra o endereço derivado |
+| `CheckWalletBackup` → `ButtonRequest(WalletCheck)` → `WalletBackupOk` ou `Failure` | Desbloqueado, com carteira | **Sim** (redigitar a frase) | "Verificar backup"; só diz se confere |
+| `GetAddress` → `Address{address, public_key}` | Desbloqueado, com carteira | Não (dados públicos) | — |
 | `Wipe` → `ButtonRequest` → `WipeDone` | todos exceto Virgem | **Sim** (pressionar e segurar) | "APAGAR TUDO? Irreversível." |
 
 Mensagens de apoio:
@@ -126,7 +130,11 @@ Mensagens de erro **nunca** incluem material secreto nem diferenciam causas de f
 | ProveAttribute | ✖ | ✖ | ✖ | ✖ | ✖ | ✔(c) |
 | GetVoterCommitment | ✖ | ✖ | ✖ | ✖ | ✖ | ✔(c) |
 | SignBallot (stub) | ✖ | ✖ | ✖ | ✖ | ✖ | ✔(c) |
+| SetupWallet / RestoreWallet | ✖ | ✖ | ✖ | ✖ | ✖ | ✔(c)\* |
+| CheckWalletBackup / GetAddress | ✖ | ✖ | ✖ | ✖ | ✖ | ✔ (c) |
 | Wipe | ✖ | ✔(c) | ✔(c) | ✔(c) | ✔(c) | ✔(c) |
+
+\* Só em `Inicializado` (antes do ID Cívico) e uma única vez: `GetCivicId` e `GetIdentityRequest` respondem `InvalidState` enquanto não houver carteira pronta (`Features.wallet_ready`).
 
 Nota: após `CredenciaisEmitidas` o dispositivo entra em `Bloqueado` no próximo ciclo/no reinício/após inatividade; `Desbloqueado` expira por inatividade. O estado "Inicializado" é transitório e **desbloqueado** (acabou de definir o PIN). Mensagens de emissão de credencial (`GetIdentityRequest` / `LoadCredential`) são detalhadas no ONBOARDING-FLOW e serão adicionadas ao catálogo (pergunta 2).
 
@@ -139,6 +147,7 @@ Nota: após `CredenciaisEmitidas` o dispositivo entra em `Bloqueado` no próximo
 5. O parser aceita ou rejeita qualquer sequência de bytes sem pânico; `decode(encode(m)) == m`.
 6. Mensagem fora do estado permitido → `InvalidState` sem efeito colateral.
 7. Respostas de erro não variam em função de segredo.
+8. **Carteira:** nenhuma resposta ou mensagem intermediária contém palavra da frase, entropia, semente ou passphrase (teste varre todos os frames de um fluxo completo); erros nunca ecoam palavras nem posições.
 
 ## 8.1 Estado implementado (Fase 1)
 

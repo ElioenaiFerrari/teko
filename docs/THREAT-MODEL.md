@@ -59,7 +59,9 @@ Colunas: **STRIDE** (S spoofing, T tampering, R repudiation, I info disclosure, 
 
 | # | Ameaça | Mitigação | Risco residual |
 |---|---|---|---|
-| C1 | **Seed phrase vendável**: vendê-la transfere identidade e voto | Recomendação: **sem seed** (ADR-0003, pendente) | Se houver seed, a compra de voto é trivial |
+| C1 | **Seed phrase vendável**: vendê-la transfere identidade e voto | **Identidade e voto sem seed** (ADR-0003); a frase existe **só para a carteira**, com entropia separada (ADR-0023) | A frase transfere **dinheiro**, não identidade nem voto |
+| C1b | **Frase da carteira roubada** (foto, phishing, papel perdido, olhar por cima do ombro) | Mostrada só na tela do dispositivo; a Suite não tem campo de frase; passphrase opcional; confirmação por posições; o emulador limpa a tela e não registra a tela em log | Quem obtém a frase (sem passphrase) controla os fundos; emulador sem isolamento de hardware |
+| C1c | **Frase mal anotada ou passphrase esquecida** | 3 posições sorteadas no onboarding; "Verificar backup" a qualquer momento; avisos fortes sobre a passphrase | Fundos perdidos se a anotação estiver errada e o dispositivo se perder |
 | C2 | Comprador exige **prova de como votou** (recibo) | O dispositivo não emite comprovante transferível de voto | Receipt-freeness completa exige desenho da fase de votação; **trabalho futuro** |
 | C3 | Votar sob vigilância (coerção presencial) | Fora de escopo desta fase; mecanismos como re-voto pertencem à fase da blockchain | Total nesta fase |
 | C4 | Comprador exige entrega do dispositivo + PIN | Impossível impedir tecnicamente; mitigado por re-voto/revogação (futuro) | Total |

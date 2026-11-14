@@ -38,6 +38,16 @@ pub enum ButtonKind {
     LoadElection = 12,
     VoterKey = 13,
     Register = 14,
+    /// "Create a wallet?" prompt.
+    WalletCreate = 15,
+    /// A page of the recovery phrase is on the DEVICE screen (never sent to the host).
+    SeedWords = 16,
+    /// The device asks the user to type words at given positions.
+    WalletConfirm = 17,
+    WalletRestore = 18,
+    WalletCheck = 19,
+    /// "Use a passphrase?" prompt.
+    WalletPassphrase = 20,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, prost::Enumeration)]
@@ -124,6 +134,18 @@ pub struct SetupPin {}
 pub struct Unlock {}
 #[derive(Clone, PartialEq, prost::Message)]
 pub struct GetCivicId {}
+/// Starts wallet creation ON THE DEVICE: it generates the phrase, shows it on its own
+/// screen and asks for word positions. The host only waits; no words ever reach it.
+#[derive(Clone, PartialEq, prost::Message)]
+pub struct SetupWallet {}
+/// Restores a wallet from a phrase typed ON THE DEVICE.
+#[derive(Clone, PartialEq, prost::Message)]
+pub struct RestoreWallet {}
+/// Re-checks a written backup: the user retypes the phrase on the device.
+#[derive(Clone, PartialEq, prost::Message)]
+pub struct CheckWalletBackup {}
+#[derive(Clone, PartialEq, prost::Message)]
+pub struct GetAddress {}
 #[derive(Clone, PartialEq, prost::Message)]
 pub struct GetPairwiseId {
     #[prost(string, tag = "1")]
@@ -220,6 +242,26 @@ pub struct Ping {}
 
 // ───────────────────────── responses ─────────────────────────
 
+/// Wallet created or restored (public data only).
+#[derive(Clone, PartialEq, prost::Message)]
+pub struct WalletReady {
+    /// bech32m `tekow1…` address.
+    #[prost(string, tag = "1")]
+    pub address: String,
+    #[prost(bool, tag = "2")]
+    pub has_passphrase: bool,
+}
+#[derive(Clone, PartialEq, prost::Message)]
+pub struct Address {
+    #[prost(string, tag = "1")]
+    pub address: String,
+    /// SEC1 public key of the address (verifies signatures made by the wallet).
+    #[prost(bytes = "vec", tag = "2")]
+    pub public_key: Vec<u8>,
+}
+#[derive(Clone, PartialEq, prost::Message)]
+pub struct WalletBackupOk {}
+
 #[derive(Clone, PartialEq, prost::Message)]
 pub struct Features {
     #[prost(uint32, tag = "1")]
@@ -238,6 +280,9 @@ pub struct Features {
     pub label: String,
     #[prost(bool, tag = "8")]
     pub has_credential: bool,
+    /// A wallet exists on the device (created and backup confirmed, or restored).
+    #[prost(bool, tag = "9")]
+    pub wallet_ready: bool,
 }
 #[derive(Clone, PartialEq, prost::Message)]
 pub struct AttestationResponse {
@@ -482,6 +527,10 @@ define_messages! {
         GetElection(GetElection) = 0x0016,
         BeginRegistration(BeginRegistration) = 0x0017,
         FinishRegistration(FinishRegistration) = 0x0018,
+        SetupWallet(SetupWallet) = 0x0019,
+        RestoreWallet(RestoreWallet) = 0x001A,
+        CheckWalletBackup(CheckWalletBackup) = 0x001B,
+        GetAddress(GetAddress) = 0x001C,
     }
 }
 
@@ -509,6 +558,9 @@ define_messages! {
         ElectionLoaded(ElectionLoaded) = 0x0113,
         RegistrationRequest(RegistrationRequest) = 0x0114,
         RegistrationToken(RegistrationToken) = 0x0115,
+        WalletReady(WalletReady) = 0x0116,
+        Address(Address) = 0x0117,
+        WalletBackupOk(WalletBackupOk) = 0x0118,
     }
 }
 

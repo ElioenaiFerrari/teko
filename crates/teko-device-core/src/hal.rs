@@ -38,6 +38,17 @@ pub trait Buttons {
     fn confirm(&mut self, kind: ButtonKind) -> Decision;
     /// Reads a PIN typed ON THE DEVICE. `None` = user cancelled.
     fn read_pin(&mut self, prompt: &str) -> Option<Zeroizing<Vec<u8>>>;
+    /// Reads the recovery-phrase word number `position` (1-based) typed ON THE DEVICE.
+    /// `None` = cancelled. The default refuses, so a HAL without text input simply
+    /// cannot create or restore wallets.
+    fn read_word(&mut self, _position: usize) -> Option<Zeroizing<String>> {
+        None
+    }
+    /// Reads a secret text (the wallet passphrase) typed ON THE DEVICE, hidden.
+    /// `None` = cancelled.
+    fn read_secret_text(&mut self, _prompt: &str) -> Option<Zeroizing<String>> {
+        None
+    }
 }
 
 pub trait SecureStorage {

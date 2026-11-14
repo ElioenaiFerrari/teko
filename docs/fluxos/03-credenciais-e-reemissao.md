@@ -34,4 +34,4 @@ Primeira emissão para quem já existe: **recusada**. Fraude presencial: depende
 Testes do `issuer-cli` e do registro (uma vez por cidadão) em `tools/election-admin-cli/tests`.
 
 ## Limites honestos
-Por escolha, não há seed/mnemônico: a recuperação depende do emissor. A autoridade e o operador de teste só existem com a feature `dev-simulation`.
+Por escolha, a **identidade** não tem seed/mnemônico: a recuperação depende do emissor. (A **carteira** tem frase de recuperação própria e independente: [fluxo 14](14-carteira-e-seed.md).) A autoridade e o operador de teste só existem com a feature `dev-simulation`.

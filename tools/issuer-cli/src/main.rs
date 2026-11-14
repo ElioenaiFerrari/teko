@@ -30,6 +30,8 @@ USO:
       Bloqueia já um dispositivo perdido/roubado (a pessoa ainda pode pedir reemissão depois).
   issuer-cli dev-forget [--dir dev]
       TESTE: esquece cidadãos/registros/revogações (use junto com `make reset`).
+  issuer-cli economy-fund [--dir dev] --address tekow1… --amount N
+      TESTE (devnet): aloca N moedas de TESTE ao endereço da carteira (grava dev/economy.txt).
   issuer-cli trust [--dir dev]
   issuer-cli verify-firmware [--dir dev] --manifest ARQ --blob ARQ [--installed N]
       Verificação INDEPENDENTE da Suite: assinaturas M-de-N, hash e anti-downgrade.
@@ -170,6 +172,22 @@ fn run(args: Vec<String>) -> Result<(), String> {
             teko_attestation::verify_manifest(&trust, &manifest, installed)
                 .map_err(|x| format!("FALHOU: {x}"))?;
             println!("OK: firmware aceitável (M-de-N válido, hash confere, sem downgrade)");
+        }
+        "economy-fund" => {
+            let address = flags
+                .get("address")
+                .ok_or_else(|| "--address é obrigatório".to_string())?;
+            let amount: u64 = flags
+                .get("amount")
+                .ok_or_else(|| "--amount é obrigatório".to_string())?
+                .parse()
+                .map_err(|_| "--amount inválido".to_string())?;
+            let path = dir.join(teko_coin::devnet::ECONOMY_FILE);
+            teko_coin::devnet::append_allocation(&path, address, amount)?;
+            println!(
+                "Alocadas {amount} moedas de TESTE (devnet) para {address} em {}",
+                path.display()
+            );
         }
         "dev-election" => {
             let now = std::time::SystemTime::now()

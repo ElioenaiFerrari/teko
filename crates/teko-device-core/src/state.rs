@@ -40,4 +40,11 @@ pub struct Persisted {
     /// `contest_hash` of every contest this device already signed a ballot for.
     #[prost(bytes = "vec", repeated, tag = "13")]
     pub ballots_signed: Vec<Vec<u8>>,
+    /// Wallet master key (SLIP-10 key ‖ chain code, 64 bytes). INDEPENDENT of `k_root`
+    /// and `voter_secret`; the recovery phrase itself is never stored (ADR-0023).
+    #[prost(bytes = "vec", tag = "14")]
+    pub wallet_master: Vec<u8>,
+    /// The wallet was derived with a BIP-39 passphrase (the passphrase is NOT stored).
+    #[prost(bool, tag = "15")]
+    pub wallet_passphrase: bool,
 }

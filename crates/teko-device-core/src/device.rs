@@ -27,8 +27,9 @@ use teko_protocol::{
     ContestInfo, CredentialLoaded, DeviceState, DocumentSignature, ElectionLoaded, ErrorCode,
     Failure, Features, FirmwareStatus, IdentityRequest, PROTO_VERSION, PairwiseId, PinSet,
     PinWrong, Predicate, PredicateKind, RegistrationRequest, RegistrationToken, Request, Response,
-    Success, Unlocked, VoterKey, WipeDone,
+    Success, Unlocked, VoterKey, WalletBackupOk, WalletReady, WipeDone,
 };
+use teko_wallet::{MasterKey, Phrase, WORD_COUNT};
 use zeroize::{Zeroize, Zeroizing};
 
 use crate::config::DeviceConfig;
@@ -82,6 +83,7 @@ impl<H: Hal, R: Rng + CryptoRng> Drop for Device<H, R> {
         self.p.voter_secret.zeroize();
         self.p.pin_hash.zeroize();
         self.p.batch_key.zeroize();
+        self.p.wallet_master.zeroize();
     }
 }
 
@@ -149,6 +151,8 @@ impl<H: Hal, R: Rng + CryptoRng> Device<H, R> {
         if let Ok(k) = self.identity_key() {
             v.push(k.to_bytes().to_vec());
         }
+        // Appended LAST: tests index [0] as `k_root`.
+        v.push(self.p.wallet_master.clone());
         v
     }
 
@@ -317,6 +321,7 @@ impl<H: Hal, R: Rng + CryptoRng> Device<H, R> {
         self.p.voter_secret.zeroize();
         self.p.pin_hash.zeroize();
         self.p.credential.zeroize();
+        self.p.wallet_master.zeroize();
         let fw_version = self.p.fw_version;
         let batch_key = core::mem::take(&mut self.p.batch_key);
         let batch_cert = core::mem::take(&mut self.p.batch_cert);
@@ -356,12 +361,14 @@ impl<H: Hal, R: Rng + CryptoRng> Device<H, R> {
                 "pairwise-id",
                 "voter-commitment",
                 "ballot-stub",
+                "wallet-seed",
             ]
             .iter()
             .map(|s| s.to_string())
             .collect(),
             label: self.cfg.label.clone(),
             has_credential: !self.p.credential.is_empty(),
+            wallet_ready: self.wallet_ready(),
         }
     }
 
@@ -386,6 +393,10 @@ impl<H: Hal, R: Rng + CryptoRng> Device<H, R> {
             Request::SetupPin(_) => self.setup_pin(),
             Request::Unlock(_) => self.unlock(),
             Request::GetCivicId(_) => self.get_civic_id(),
+            Request::SetupWallet(_) => self.setup_wallet(),
+            Request::RestoreWallet(_) => self.restore_wallet(),
+            Request::CheckWalletBackup(_) => self.check_wallet_backup(),
+            Request::GetAddress(_) => self.get_address(),
             Request::GetPairwiseId(m) => self.get_pairwise_id(&m.service_id),
             Request::SignDocument(m) => self.sign_document(&m.hash, &m.summary),
             Request::ProveAttribute(m) => {
@@ -520,6 +531,336 @@ impl<H: Hal, R: Rng + CryptoRng> Device<H, R> {
         Ok(Response::FirmwareStatus(FirmwareStatus {
             received: up.received,
             installed_version: self.p.fw_version,
+        }))
+    }
+
+    // ───────────────────────── wallet (ADR-0023) ─────────────────────────
+
+    fn wallet_ready(&self) -> bool {
+        self.p.wallet_master.len() == 64
+    }
+
+    /// Identity steps need a wallet whose backup the user already confirmed on this
+    /// device: the host cannot skip the backup check.
+    fn require_wallet(&self) -> Result<(), Failure> {
+        if !self.wallet_ready() {
+            return Err(fail(
+                ErrorCode::InvalidState,
+                "configure a carteira antes (frase de recuperação)",
+            ));
+        }
+        Ok(())
+    }
+
+    fn master(&self) -> Result<MasterKey, Failure> {
+        MasterKey::from_bytes(&self.p.wallet_master)
+            .ok_or_else(|| fail(ErrorCode::Internal, "carteira ausente"))
+    }
+
+    /// Random `k` distinct positions in `0..n`, ascending.
+    fn pick_positions(&mut self, n: usize, k: usize) -> Vec<usize> {
+        let mut pool: Vec<usize> = (0..n).collect();
+        let mut out = Vec::with_capacity(k);
+        for _ in 0..k.min(n) {
+            let i = (self.rng.next_u32() as usize) % pool.len();
+            out.push(pool.swap_remove(i));
+        }
+        out.sort_unstable();
+        out
+    }
+
+    /// Shows the phrase on the DEVICE screen, six words per page. Words never go to
+    /// the host: only a `ButtonRequest` of kind `SeedWords` does.
+    fn show_phrase(&mut self, phrase: &Phrase) -> Result<(), Failure> {
+        for (page, chunk) in phrase.words().chunks(6).enumerate() {
+            let mut lines: Vec<String> = chunk
+                .iter()
+                .enumerate()
+                .map(|(i, w)| format!("{:>2} {}", page * 6 + i + 1, w))
+                .collect();
+            lines.push(String::from("Anote em papel. Ninguém"));
+            lines.push(String::from("deve ver. Nunca digite"));
+            lines.push(String::from("isto no computador."));
+            let title = format!("FRASE {}/{}", page + 1, WORD_COUNT / 6);
+            self.confirm(ButtonKind::SeedWords, Screen::new(&title, lines))?;
+        }
+        Ok(())
+    }
+
+    /// Asks (on the device) whether to use a BIP-39 passphrase and reads it twice.
+    fn ask_passphrase(&mut self) -> Result<Zeroizing<String>, Failure> {
+        let lines = Vec::from([
+            String::from("Senha extra (25ª palavra)."),
+            String::from("Sem ela a frase abre a"),
+            String::from("carteira. ESQUECER A SENHA"),
+            String::from("= PERDER OS FUNDOS."),
+            String::from("Confirmar = usar senha"),
+            String::from("Recusar = sem senha"),
+        ]);
+        let want = match self.confirm(
+            ButtonKind::WalletPassphrase,
+            Screen::new("USAR PASSPHRASE?", lines),
+        ) {
+            Ok(()) => true,
+            Err(f) if f.code == ErrorCode::UserRejected as i32 => false,
+            Err(f) => return Err(f),
+        };
+        if !want {
+            return Ok(Zeroizing::new(String::new()));
+        }
+        self.hal.show(&Screen::new(
+            "PASSPHRASE",
+            Vec::from([String::from("Digite (ASCII, até 64)")]),
+        ));
+        let first = self
+            .hal
+            .read_secret_text("Passphrase")
+            .ok_or_else(|| fail(ErrorCode::UserRejected, "passphrase cancelada"))?;
+        self.hal.show(&Screen::new(
+            "REPITA A PASSPHRASE",
+            Vec::from([String::from("Digite novamente")]),
+        ));
+        let again = self
+            .hal
+            .read_secret_text("Repita a passphrase")
+            .ok_or_else(|| fail(ErrorCode::UserRejected, "passphrase cancelada"))?;
+        if !constant_time_eq(first.as_bytes(), again.as_bytes()) {
+            return Err(fail(
+                ErrorCode::InvalidArgument,
+                "as passphrases não coincidem",
+            ));
+        }
+        if first.is_empty() {
+            return Ok(Zeroizing::new(String::new()));
+        }
+        Ok(first)
+    }
+
+    fn persist_wallet(&mut self, master: &MasterKey, has_passphrase: bool) -> Result<(), Failure> {
+        let before = (self.p.wallet_master.clone(), self.p.wallet_passphrase);
+        self.p.wallet_master = master.as_bytes().to_vec();
+        self.p.wallet_passphrase = has_passphrase;
+        if let Err(e) = self.save() {
+            self.p.wallet_master.zeroize();
+            self.p.wallet_master = before.0;
+            self.p.wallet_passphrase = before.1;
+            return Err(e);
+        }
+        Ok(())
+    }
+
+    fn wallet_screen(&mut self, title: &str, address: &str) {
+        let mut lines = Vec::from([String::from("Seu endereço:")]);
+        lines.extend(wrap(address, 22));
+        self.hal.show(&Screen::new(title, lines));
+    }
+
+    fn setup_wallet(&mut self) -> Result<Response, Failure> {
+        self.require_unlocked_initialized()?;
+        if self.wallet_ready() {
+            return Err(fail(ErrorCode::InvalidState, "a carteira já foi criada"));
+        }
+        self.confirm(
+            ButtonKind::WalletCreate,
+            Screen::new(
+                "CRIAR CARTEIRA",
+                Vec::from([
+                    String::from("O dispositivo vai mostrar"),
+                    String::from("24 palavras. Quem tiver"),
+                    String::from("a frase controla os"),
+                    String::from("fundos. Separe papel e"),
+                    String::from("um lugar seguro."),
+                ]),
+            ),
+        )?;
+        let mut entropy = Zeroizing::new([0u8; 32]);
+        self.rng.fill_bytes(entropy.as_mut_slice());
+        let phrase = Phrase::from_entropy(&entropy)
+            .map_err(|_| fail(ErrorCode::Internal, "falha ao gerar a frase"))?;
+        let mut passphrase: Option<Zeroizing<String>> = None;
+        let mut attempts = 0u8;
+        loop {
+            attempts += 1;
+            if attempts > 5 {
+                return Err(fail(
+                    ErrorCode::InvalidArgument,
+                    "confirmação da frase falhou várias vezes; recomece",
+                ));
+            }
+            self.show_phrase(&phrase)?;
+            if passphrase.is_none() {
+                passphrase = Some(self.ask_passphrase()?);
+            }
+            // The user must prove the phrase was written down: 3 random positions.
+            let positions = self.pick_positions(WORD_COUNT, 3);
+            self.hal.show(&Screen::new(
+                "CONFIRME A FRASE",
+                Vec::from([
+                    String::from("Digite as palavras"),
+                    String::from("pedidas, da sua cópia."),
+                ]),
+            ));
+            self.hal.notify(&Response::ButtonRequest(ButtonRequest {
+                kind: ButtonKind::WalletConfirm as i32,
+            }));
+            let mut all_ok = true;
+            for pos in positions {
+                let typed = self
+                    .hal
+                    .read_word(pos + 1)
+                    .ok_or_else(|| fail(ErrorCode::UserRejected, "confirmação cancelada"))?;
+                if !phrase.matches(pos, typed.as_str()) {
+                    all_ok = false;
+                    break;
+                }
+            }
+            if all_ok {
+                break;
+            }
+            self.hal.show(&Screen::new(
+                "PALAVRA INCORRETA",
+                Vec::from([
+                    String::from("A frase será mostrada"),
+                    String::from("de novo. Confira sua"),
+                    String::from("anotação."),
+                ]),
+            ));
+        }
+        let pass = passphrase.unwrap_or_else(|| Zeroizing::new(String::new()));
+        let master = phrase
+            .master_key(pass.as_str())
+            .map_err(|_| fail(ErrorCode::InvalidArgument, "passphrase inválida"))?;
+        let address = master
+            .address_string(0)
+            .map_err(|_| fail(ErrorCode::Internal, "endereço"))?;
+        self.persist_wallet(&master, !pass.is_empty())?;
+        self.wallet_screen("CARTEIRA PRONTA", &address);
+        Ok(Response::WalletReady(WalletReady {
+            address,
+            has_passphrase: !pass.is_empty(),
+        }))
+    }
+
+    /// Reads the 24 typed words and parses them (generic error: no word, no position).
+    fn read_phrase(&mut self) -> Result<Phrase, Failure> {
+        let mut words: Vec<Zeroizing<String>> = Vec::with_capacity(WORD_COUNT);
+        for i in 1..=WORD_COUNT {
+            let w = self
+                .hal
+                .read_word(i)
+                .ok_or_else(|| fail(ErrorCode::UserRejected, "digitação cancelada"))?;
+            words.push(w);
+        }
+        let refs: Vec<&str> = words.iter().map(|w| w.as_str()).collect();
+        Phrase::parse(&refs).map_err(|_| {
+            fail(
+                ErrorCode::InvalidArgument,
+                "frase inválida (palavra desconhecida ou checksum errado)",
+            )
+        })
+    }
+
+    fn restore_wallet(&mut self) -> Result<Response, Failure> {
+        self.require_unlocked_initialized()?;
+        if self.wallet_ready() {
+            return Err(fail(
+                ErrorCode::InvalidState,
+                "já existe carteira; apague o dispositivo para restaurar outra",
+            ));
+        }
+        self.confirm(
+            ButtonKind::WalletRestore,
+            Screen::new(
+                "RESTAURAR CARTEIRA",
+                Vec::from([
+                    String::from("Você vai digitar as 24"),
+                    String::from("palavras AQUI, no"),
+                    String::from("dispositivo."),
+                ]),
+            ),
+        )?;
+        let phrase = self.read_phrase()?;
+        let pass = self.ask_passphrase()?;
+        let master = phrase
+            .master_key(pass.as_str())
+            .map_err(|_| fail(ErrorCode::InvalidArgument, "passphrase inválida"))?;
+        let address = master
+            .address_string(0)
+            .map_err(|_| fail(ErrorCode::Internal, "endereço"))?;
+        // A wrong phrase silently yields ANOTHER wallet: the user compares the address.
+        let mut lines = Vec::from([String::from("Endereço da carteira:")]);
+        lines.extend(wrap(&address, 22));
+        lines.push(String::from("Confere com o seu?"));
+        self.confirm(
+            ButtonKind::WalletRestore,
+            Screen::new("CONFIRA O ENDEREÇO", lines),
+        )?;
+        self.persist_wallet(&master, !pass.is_empty())?;
+        self.wallet_screen("CARTEIRA RESTAURADA", &address);
+        Ok(Response::WalletReady(WalletReady {
+            address,
+            has_passphrase: !pass.is_empty(),
+        }))
+    }
+
+    fn check_wallet_backup(&mut self) -> Result<Response, Failure> {
+        self.require_unlocked_initialized()?;
+        self.require_wallet()?;
+        self.confirm(
+            ButtonKind::WalletCheck,
+            Screen::new(
+                "VERIFICAR BACKUP",
+                Vec::from([
+                    String::from("Digite as 24 palavras"),
+                    String::from("da sua cópia, AQUI."),
+                ]),
+            ),
+        )?;
+        let phrase = self.read_phrase()?;
+        let pass = if self.p.wallet_passphrase {
+            self.hal.show(&Screen::new(
+                "PASSPHRASE",
+                Vec::from([String::from("Digite a passphrase")]),
+            ));
+            self.hal
+                .read_secret_text("Passphrase")
+                .ok_or_else(|| fail(ErrorCode::UserRejected, "passphrase cancelada"))?
+        } else {
+            Zeroizing::new(String::new())
+        };
+        let master = phrase
+            .master_key(pass.as_str())
+            .map_err(|_| fail(ErrorCode::InvalidArgument, "passphrase inválida"))?;
+        if !constant_time_eq(master.as_bytes(), &self.p.wallet_master) {
+            self.hal.show(&Screen::new(
+                "BACKUP NÃO CONFERE",
+                Vec::from([
+                    String::from("A frase digitada não é"),
+                    String::from("a desta carteira."),
+                ]),
+            ));
+            return Err(fail(ErrorCode::InvalidArgument, "o backup não confere"));
+        }
+        self.hal.show(&Screen::new(
+            "BACKUP CONFERE",
+            Vec::from([String::from("A frase está correta.")]),
+        ));
+        Ok(Response::WalletBackupOk(WalletBackupOk {}))
+    }
+
+    fn get_address(&mut self) -> Result<Response, Failure> {
+        self.require_unlocked_initialized()?;
+        self.require_wallet()?;
+        let master = self.master()?;
+        let address = master
+            .address_string(0)
+            .map_err(|_| fail(ErrorCode::Internal, "endereço"))?;
+        let public_key = master
+            .public_key(0)
+            .map_err(|_| fail(ErrorCode::Internal, "chave pública"))?;
+        Ok(Response::Address(teko_protocol::Address {
+            address,
+            public_key,
         }))
     }
 
@@ -665,6 +1006,7 @@ impl<H: Hal, R: Rng + CryptoRng> Device<H, R> {
 
     fn get_civic_id(&mut self) -> Result<Response, Failure> {
         self.require_unlocked_initialized()?;
+        self.require_wallet()?;
         let pk = public_key_bytes(&self.identity_key()?);
         let id = civic_id(&pk).map_err(|_| fail(ErrorCode::Internal, "id cívico"))?;
         let mut lines = Vec::from([String::from("Seu ID Cívico:")]);
@@ -1296,6 +1638,7 @@ impl<H: Hal, R: Rng + CryptoRng> Device<H, R> {
 
     fn get_identity_request(&mut self, nonce: &[u8], authority: &str) -> Result<Response, Failure> {
         self.require_unlocked_initialized()?;
+        self.require_wallet()?;
         if self.p.state() != DeviceState::Initialized {
             return Err(fail(
                 ErrorCode::InvalidState,

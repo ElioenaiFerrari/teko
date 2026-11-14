@@ -38,6 +38,8 @@ fn start() -> Rig {
     let factory = issuer.provision_device().unwrap();
     let hal = ScriptedHal::new();
     hal.set_default_pin(Some(PIN));
+    // The scripted user copies the recovery words from the device screen.
+    hal.set_auto_words(true);
     let listener = TcpListener::bind("127.0.0.1:0").unwrap();
     let addr = listener.local_addr().unwrap();
     let (hal2, trust2) = (hal.clone(), trust.clone());
@@ -83,6 +85,8 @@ fn onboard(rig: &Rig, c: &mut DeviceClient<TcpTransport>) {
     c.install_firmware(&rig.trust, &m, &b, &mut |_, _| {})
         .unwrap();
     c.setup_pin().unwrap();
+    let wallet = c.wallet_setup().unwrap();
+    assert!(wallet.address.starts_with("tekow1"));
     let id = c.civic_id().unwrap();
     assert!(id.id.starts_with("teko1"));
     let nonce = Issuer::new_nonce();
@@ -148,6 +152,8 @@ fn full_onboarding_and_daily_use() {
 
     // 4. PIN on the device, keys, 5. issuance
     c.setup_pin().unwrap();
+    let wallet = c.wallet_setup().unwrap();
+    assert!(wallet.address.starts_with("tekow1"));
     assert_eq!(c.features().unwrap().state, "initialized");
     let id = c.civic_id().unwrap();
     let on_device: String = rig
@@ -675,6 +681,8 @@ fn losing_the_device_means_reissue_the_old_credential_is_revoked_and_the_citizen
     // Then she goes in person with a new device.
     c.wipe().unwrap(); // the new/clean device (same emulator here, stands for a new one)
     c.setup_pin().unwrap();
+    let wallet = c.wallet_setup().unwrap();
+    assert!(wallet.address.starts_with("tekow1"));
     let nonce = Issuer::new_nonce();
     let new_req = c.identity_request(&nonce, "Autoridade Cívica").unwrap();
     let subject = Subject {
@@ -809,4 +817,65 @@ fn an_encrypted_election_the_device_encrypts_the_vote_and_the_public_tally_canno
     );
     assert!(p.options.iter().all(|o| o.votes == 0));
     let _ = fs::remove_dir_all(rig.issuer.dir());
+}
+
+#[test]
+fn identity_is_blocked_until_the_wallet_backup_is_confirmed() {
+    let rig = start();
+    let mut c = connect(&rig);
+    let (m, b) = firmware(&rig, 1);
+    c.install_firmware(&rig.trust, &m, &b, &mut |_, _| {})
+        .unwrap();
+    c.setup_pin().unwrap();
+    assert!(!c.initialize().unwrap().wallet_ready);
+    assert_eq!(
+        device_code(c.civic_id().unwrap_err()),
+        ErrorCode::InvalidState
+    );
+    c.wallet_setup().unwrap();
+    assert!(c.initialize().unwrap().wallet_ready);
+    assert!(c.civic_id().is_ok());
+}
+
+#[test]
+fn a_wallet_restores_on_a_new_device_with_the_same_address() {
+    // Device A creates the wallet; only its SCREEN ever showed the words.
+    let a = start();
+    let mut ca = connect(&a);
+    let (m, b) = firmware(&a, 1);
+    ca.install_firmware(&a.trust, &m, &b, &mut |_, _| {})
+        .unwrap();
+    ca.setup_pin().unwrap();
+    let created = ca.wallet_setup().unwrap();
+    let info = ca.wallet_address().unwrap();
+    assert_eq!(info.address, created.address);
+    let words = a.hal.shown_words();
+    assert_eq!(words.len(), 24);
+
+    // Device B is brand new (lost device): restore by typing the words on it.
+    let bdev = start();
+    let mut cb = connect(&bdev);
+    let (m, b) = firmware(&bdev, 1);
+    cb.install_firmware(&bdev.trust, &m, &b, &mut |_, _| {})
+        .unwrap();
+    cb.setup_pin().unwrap();
+    for w in &words {
+        bdev.hal.push_word(Some(w));
+    }
+    let restored = cb.wallet_restore().unwrap();
+    assert_eq!(restored.address, created.address);
+    assert_eq!(cb.wallet_address().unwrap().public_key, info.public_key);
+
+    // "Check backup": retype the phrase on the device.
+    for w in &words {
+        bdev.hal.push_word(Some(w));
+    }
+    cb.wallet_check_backup().unwrap();
+    let mut wrong = words.clone();
+    wrong.swap(3, 7);
+    wrong[0] = "abandon".into();
+    for w in &wrong {
+        bdev.hal.push_word(Some(w));
+    }
+    assert!(cb.wallet_check_backup().is_err());
 }

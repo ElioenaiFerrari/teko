@@ -1,0 +1,22 @@
+[package]
+name = "teko-wallet"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+description = "Wallet seed: BIP-39 24-word mnemonic (device-generated), SLIP-10 nist256p1 derivation, bech32m wallet addresses. Independent of the identity and voter roots."
+
+[dependencies]
+teko-crypto.workspace = true
+bip39 = { version = "2", default-features = false, features = ["zeroize"] }
+zeroize.workspace = true
+p256.workspace = true
+bitcoin_hashes = { version = "0.14", default-features = false }
+
+[dev-dependencies]
+teko-ledger.workspace = true
+proptest.workspace = true
+rand.workspace = true
+
+[lints]
+workspace = true

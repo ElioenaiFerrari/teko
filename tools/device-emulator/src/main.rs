@@ -129,7 +129,11 @@ fn run() -> Result<(), String> {
     #[cfg(feature = "test-buttons")]
     if let Some(pin) = args.auto_pin {
         println!("*** MODO TESTE: botões automáticos (test-buttons) ***");
-        return launch!(device_emulator::AutoHal { inner: emu, pin });
+        return launch!(device_emulator::AutoHal {
+            inner: emu,
+            pin,
+            shown: Default::default(),
+        });
     }
     launch!(emu)
 }

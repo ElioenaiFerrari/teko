@@ -21,6 +21,7 @@ crates/teko-ballot-crypto/  (Fase 2) ElGamal exponencial de limiar P-256, provas
 crates/teko-ledger/        (Fase 2, M2) livro-razão genérico: Tx assinada, módulos, blocos atômicos, raiz de estado (ADR-0020)
 crates/teko-coin/          (Fase 2, M3) moeda de teto fixo: halving, taxa por byte, stake, slash, faucet devnet (ADR-0021)
 crates/teko-assets/        (Fase 2, M4) bens: classes com órgão M-de-N, dono+comprador+órgão, gravames, Swap atômico (ADR-0022)
+crates/teko-wallet/        (Fase 2, M5a) carteira: BIP-39 24 palavras (só na tela do dispositivo), SLIP-10 P-256, endereço tekow1…; independente da identidade (ADR-0023)
 crates/teko-chain/         (Fase 2) rede federada PoA: perfis devnet/testnet (mainnet TRAVADA), blocos M-de-N, réplica verificada
 tools/teko-node/           (Fase 2) validador (gossip, rodízio, troca de turno) + cliente que não confia em nós
 crates/teko-bulletin/      (Fase 2) log Merkle append-only, provas, head assinado, leitor tolerante
@@ -38,7 +39,7 @@ Cada etapa só começa com a anterior com testes passando. Ao fim de cada etapa,
 
 1. **O computador é não confiável.** Nada que a Suite/host faça pode extrair chaves ou alterar o que é assinado. → O host só recebe assinaturas, provas e dados públicos. O que será assinado é derivado **dentro do dispositivo** a partir do que ele mostra na tela.
 2. **Confirmação sensível só no dispositivo** (PIN, conteúdo a assinar, voto). → Nenhuma mensagem do protocolo carrega PIN. A Suite nunca tem campo de entrada de PIN. Assinatura só é produzida após confirmação física.
-3. **Chaves nascem no dispositivo e nunca são exportadas.** → Tipos de segredo não implementam `Serialize`, `Debug` (ou implementam redigido), `Clone` desnecessário; `zeroize` no `Drop`. `teko-protocol` não depende de tipos de segredo.
+3. **Chaves nascem no dispositivo e nunca são exportadas.** (Única exceção, ADR-0023: a frase de recuperação da **carteira** é mostrada ao humano, só na tela do dispositivo, uma vez; a identidade e o voto seguem sem seed.) → Tipos de segredo não implementam `Serialize`, `Debug` (ou implementam redigido), `Clone` desnecessário; `zeroize` no `Drop`. `teko-protocol` não depende de tipos de segredo.
 4. **Firmware só roda se assinado M-de-N** por chaves de instituições independentes; open source; build reproduzível. → Nunca existe caminho de código com chave única de firmware. Downgrade é recusado.
 5. **Separação total identidade ↔ voto.** → O segredo de eleitor não é derivável da identidade nem vice-versa; nenhuma mensagem/estrutura contém ambos; o registro de commitment usa canal separado.
 6. **Atestação sem rastreamento.** → Chaves de lote (muitos dispositivos por chave); a atestação nunca acompanha um voto.
@@ -77,6 +78,7 @@ cargo run -p issuer-cli -- dev-setup   # 1x: chaves de teste, firmware, fábrica
 cargo run -p device-emulator           # terminal 1: tela e botões do dispositivo (PIN aqui!)
 cargo run -p teko-suite                # terminal 2: a Suite (Tauri v2)
 make docs-check                        # confere links, imagens e crates no README
+make fund ADDR=tekow1… AMOUNT=1000    # moedas de TESTE na carteira (devnet local)
 make diagramas                         # regenera os diagramas (docs/diagramas)
 make devnet                            # blockchain de TESTE local: 3 validadores PoA (docs/NETWORKS.md)
 make                                   # lista todos os atalhos (check, repro, release-check, verify-fw...)

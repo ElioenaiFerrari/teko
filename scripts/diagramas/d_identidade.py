@@ -3,16 +3,18 @@ from lib import *
 SEQ_LEG = [(MUTED, "pedido", False), (GREEN, "resposta aceita", False), (MUTED, "retorno", True), (RED, "recusa", False)]
 
 def onboarding():
-    d = D("onboarding", 1000, 0, "Configurar o dispositivo (onboarding)", "Autenticidade, firmware, PIN, ID Cívico e credencial — nesta ordem", "IDENTIDADE")
+    d = D("onboarding", 1000, 0, "Configurar o dispositivo (onboarding)", "Autenticidade, firmware, PIN, carteira, ID Cívico e credencial — nesta ordem", "IDENTIDADE")
     A = [("s", "Suite", "host não confiável", "link", 140), ("d", "Dispositivo", "tela e botões", "onca", 500), ("e", "Emissor", "autoridade", "external", 860)]
     M = [("s", "d", "AttestationChallenge", "default", False), ("d", "s", "cadeia de atestação", "ok", True),
          ("s", "d", "FirmwareUpdate", "default", False), ("d", "s", "FirmwareStatus", "ok", True),
          ("s", "d", "SetupPin", "default", False), ("d", "s", "PinSet", "ok", True),
+         ("s", "d", "SetupWallet", "default", False), ("d", "s", "WalletReady{endereço}", "ok", True),
          ("s", "d", "GetCivicId", "default", False), ("d", "s", "CivicId", "ok", True),
          ("s", "e", "pedido de credencial", "link", False), ("e", "s", "credencial assinada", "link", True),
          ("s", "d", "StoreCredential", "default", False)]
     N = [(0, "s", "Suite confere a cadeia M-de-N", 220), (2, "d", "Tela: instalar vX? hash ab12… (botão)", 260),
-         (4, "d", "PIN digitado 2x NO dispositivo", 230), (6, "d", "Tela mostra o ID completo para conferir", 260)]
+         (4, "d", "PIN digitado 2x NO dispositivo", 230),
+         (6, "d", "24 palavras SÓ na tela; você confirma posições", 280), (8, "d", "Tela mostra o ID completo para conferir", 260)]
     d.sequence(A, M, notas=N, passo=34)
     d.legend(SEQ_LEG)
     return d
@@ -29,7 +31,7 @@ def estados_dispositivo():
     d.label("PIN errado N vezes: apaga tudo e volta a Virgem", (245, 406), RED)
     d.node(40, 162, 220, 76, "Virgem", "sem firmware", "input", "estado")
     d.node(360, 162, 220, 76, "Firmware instalado", "aceita só SetupPin", "plain", "estado")
-    d.node(680, 162, 220, 76, "Inicializado", "chaves nascem aqui", "focal", "estado")
+    d.node(680, 162, 220, 76, "Inicializado", "sem carteira, sem ID Cívico", "focal", "estado")
     d.node(680, 300, 220, 76, "Credenciais emitidas", "ID Cívico + credencial", "onca", "estado")
     d.node(360, 300, 220, 76, "Bloqueado", "espera o PIN", "security", "estado")
     d.node(40, 300, 220, 76, "Desbloqueado", "assina com confirmação", "ok", "estado")
@@ -99,4 +101,39 @@ def registro_cego():
     N = [(0, "a", "Checa elegibilidade e 1 registro por cidadão", 300), (3, "q", "Token válido sem identidade", 220)]
     d.sequence(A, M, notas=N, passo=38)
     d.legend(SEQ_LEG)
+    return d
+
+
+def carteira_criar():
+    d = D("carteira-criar", 1000, 0, "Criar a carteira e confirmar a frase", "As 24 palavras só existem na tela do dispositivo e no seu papel", "CARTEIRA")
+    A = [("s", "Suite", "só espera", "link", 120), ("d", "Dispositivo", "gera e mostra", "onca", 480), ("u", "Você", "papel e caneta", "input", 860)]
+    M = [("s", "d", "SetupWallet", "default", False), ("d", "u", "mostra 24 palavras (6 por página)", "accent", False),
+         ("u", "d", "anota em papel e confirma", "accent", False), ("d", "u", "pede 3 posições sorteadas", "default", False),
+         ("u", "d", "digita as palavras pedidas", "accent", False), ("d", "s", "WalletReady{endereço}", "ok", True)]
+    N = [(0, "d", "Gera a frase com o RNG do próprio dispositivo", 320),
+         (4, "d", "Errou? Mostra a frase de novo. Acertou: salva", 330),
+         (5, "s", "A Suite só recebe o endereço público", 260)]
+    d.sequence(A, M, notas=N, passo=36)
+    d.legend([(MUTED, "pedido", False), (GOLD, "você e o dispositivo (tela e botões)", False), (GREEN, "resposta pública", True)])
+    return d
+
+def carteira_arvore():
+    d = D("carteira-arvore", 1100, 560, "De onde vem a chave da carteira", "A frase não deriva da identidade nem do voto, e vice-versa", "CARTEIRA")
+    d.region(24, 100, 1052, 170, "Carteira: recuperável pela frase de 24 palavras", "onca")
+    d.arrow([(240, 188), (300, 188)], "default"); d.arrow([(520, 188), (580, 188)], "default")
+    d.arrow([(800, 188), (860, 188)], "default")
+    d.node(40, 150, 200, 76, "Entropia própria", "32 bytes do dispositivo", "focal", "nasce aqui")
+    d.node(300, 150, 220, 76, "Frase BIP-39", "24 palavras (+ passphrase)", "onca", "só na tela")
+    d.node(580, 150, 220, 76, "SLIP-10 P-256", "m/7240'/0'/0'/0'/i'", "plain", "teko-wallet")
+    d.node(860, 150, 196, 76, "Endereço tekow1…", "bech32m, público", "ok", "público")
+    d.line_h = None
+    d.region(24, 330, 1052, 170, "Identidade e voto: SEM seed (reemissão presencial)", "optional")
+    d.node(40, 380, 220, 76, "Raiz de identidade", "K_root, nunca sai", "plain", "identidade")
+    d.node(320, 380, 220, 76, "Segredo de eleitor", "s, entropia separada", "boto", "voto")
+    d.text(600, 410, "Nenhuma das duas raízes deriva da frase,", 11, INK, weight=600)
+    d.text(600, 428, "nem a frase deriva delas: vender ou perder", 11, MUTED)
+    d.text(600, 446, "a frase não revela quem você é nem seu voto.", 11, MUTED)
+    d.arrow([(550, 270), (550, 330)], "bad", dashed=True)
+    d.label("sem nenhuma derivação", (550, 300), RED)
+    d.legend([(MUTED, "deriva", False), (RED, "nunca se liga", True)])
     return d

@@ -6,7 +6,7 @@ def camadas_crates():
                ("Rede e clientes", [("teko-chain", "boto"), ("teko-client", "link"), ("teko-transport", "plain")]),
                ("Livro-razão e consenso", [("teko-bft", "focal"), ("teko-ledger", "focal"), ("teko-coin", "focal"), ("teko-assets", "focal")]),
                ("Domínio", [("teko-election", "plain"), ("teko-device-core", "onca"), ("teko-registration", "plain"), ("teko-bulletin", "boto")]),
-               ("Primitivas", [("teko-ballot-crypto", "plain"), ("teko-attestation", "plain")]),
+               ("Primitivas", [("teko-ballot-crypto", "plain"), ("teko-attestation", "plain"), ("teko-wallet", "onca")]),
                ("Fundação", [("teko-crypto", "focal"), ("teko-protocol", "plain")])]
     y = 100
     for nome, chips in camadas:

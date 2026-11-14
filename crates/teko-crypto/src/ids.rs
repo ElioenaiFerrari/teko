@@ -10,6 +10,8 @@ use crate::tags;
 
 pub const CIVIC_HRP: &str = "teko";
 pub const PAIRWISE_HRP: &str = "tekop";
+/// Human-readable part of wallet addresses (coin and assets).
+pub const WALLET_HRP: &str = "tekow";
 const ID_VERSION: u8 = 1;
 const ID_BYTES: usize = 20; // 160 bits
 
@@ -31,6 +33,35 @@ pub fn civic_id(identity_public_key: &[u8]) -> Result<String, CryptoError> {
 pub fn parse_civic_id(s: &str) -> Result<[u8; ID_BYTES], CryptoError> {
     let c = CheckedHrpstring::new::<Bech32m>(s).map_err(|_| CryptoError::InvalidId)?;
     if c.hrp().as_str() != CIVIC_HRP {
+        return Err(CryptoError::InvalidId);
+    }
+    let data: Vec<u8> = c.byte_iter().collect();
+    match data.split_first() {
+        Some((&ID_VERSION, rest)) => rest.try_into().map_err(|_| CryptoError::InvalidId),
+        _ => Err(CryptoError::InvalidId),
+    }
+}
+
+/// Ledger address of a public key: the hash that accounts are keyed by.
+/// (`teko-ledger::address_of` computes the same value; a test keeps them equal.)
+pub fn ledger_address(public_key: &[u8]) -> [u8; 32] {
+    tagged_hash(tags::LEDGER_ADDRESS, &[public_key])
+}
+
+/// Wallet address string = bech32m("tekow", version ‖ 32-byte ledger address).
+/// The checksum detects typing mistakes.
+pub fn wallet_address(address: &[u8; 32]) -> Result<String, CryptoError> {
+    let hrp = Hrp::parse(WALLET_HRP).map_err(|_| CryptoError::InvalidId)?;
+    let mut data = Vec::with_capacity(33);
+    data.push(ID_VERSION);
+    data.extend_from_slice(address);
+    bech32::encode::<Bech32m>(hrp, &data).map_err(|_| CryptoError::InvalidId)
+}
+
+/// Validates checksum, HRP and version of a wallet address string.
+pub fn parse_wallet_address(s: &str) -> Result<[u8; 32], CryptoError> {
+    let c = CheckedHrpstring::new::<Bech32m>(s).map_err(|_| CryptoError::InvalidId)?;
+    if c.hrp().as_str() != WALLET_HRP {
         return Err(CryptoError::InvalidId);
     }
     let data: Vec<u8> = c.byte_iter().collect();

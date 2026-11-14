@@ -18,7 +18,7 @@ use teko_attestation::{
     verify_attestation, verify_blob, verify_manifest,
 };
 use teko_crypto::credential::{self, Presentation};
-use teko_crypto::{civic_id, hex, parse_civic_id};
+use teko_crypto::{civic_id, hex, ledger_address, parse_civic_id, parse_wallet_address};
 use teko_election::{
     BallotBody, ElectionBundle, ElectionManifest, GovernancePolicy, Transition, contest_hash,
     replay, verify_ballot,
@@ -50,6 +50,8 @@ pub struct DeviceStatus {
     pub retries_remaining: u32,
     pub label: String,
     pub has_credential: bool,
+    /// A wallet exists (created with a confirmed backup, or restored).
+    pub wallet_ready: bool,
     pub capabilities: Vec<String>,
 }
 
@@ -71,6 +73,19 @@ pub struct FirmwareInfo {
     pub total_signers: usize,
     pub installed_version: u32,
     pub is_downgrade: bool,
+}
+
+/// Public result of creating/restoring a wallet. The phrase NEVER reaches the host.
+#[derive(Debug, Clone, Serialize)]
+pub struct WalletInfo {
+    pub address: String,
+    pub has_passphrase: bool,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct AddressInfo {
+    pub address: String,
+    pub public_key: String,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -341,6 +356,71 @@ impl<T: Transport> DeviceClient<T> {
         self.expect(Request::Wipe(Wipe {}), |r| match r {
             Response::WipeDone(_) => Ok(()),
             o => Err(o),
+        })
+    }
+
+    // ───────────────────────── wallet (ADR-0023) ─────────────────────────
+
+    fn check_address(address: &str) -> Result<(), ClientError> {
+        parse_wallet_address(address)
+            .map(|_| ())
+            .map_err(|_| ClientError::Verification("endereço da carteira inválido".into()))
+    }
+
+    /// The device creates the wallet: it shows the 24 words ON ITS SCREEN and asks the
+    /// user for word positions. This call only waits for the outcome.
+    pub fn wallet_setup(&mut self) -> Result<WalletInfo, ClientError> {
+        let w = self.expect(Request::SetupWallet(SetupWallet {}), |r| match r {
+            Response::WalletReady(w) => Ok(w),
+            o => Err(o),
+        })?;
+        Self::check_address(&w.address)?;
+        Ok(WalletInfo {
+            address: w.address,
+            has_passphrase: w.has_passphrase,
+        })
+    }
+
+    /// The user types the 24 words ON THE DEVICE.
+    pub fn wallet_restore(&mut self) -> Result<WalletInfo, ClientError> {
+        let w = self.expect(Request::RestoreWallet(RestoreWallet {}), |r| match r {
+            Response::WalletReady(w) => Ok(w),
+            o => Err(o),
+        })?;
+        Self::check_address(&w.address)?;
+        Ok(WalletInfo {
+            address: w.address,
+            has_passphrase: w.has_passphrase,
+        })
+    }
+
+    /// The user retypes the phrase on the device; Ok = it matches this wallet.
+    pub fn wallet_check_backup(&mut self) -> Result<(), ClientError> {
+        self.expect(
+            Request::CheckWalletBackup(CheckWalletBackup {}),
+            |r| match r {
+                Response::WalletBackupOk(_) => Ok(()),
+                o => Err(o),
+            },
+        )
+    }
+
+    /// Address and public key, cross-checked locally (address = hash of the key).
+    pub fn wallet_address(&mut self) -> Result<AddressInfo, ClientError> {
+        let a = self.expect(Request::GetAddress(GetAddress {}), |r| match r {
+            Response::Address(a) => Ok(a),
+            o => Err(o),
+        })?;
+        let raw = parse_wallet_address(&a.address)
+            .map_err(|_| ClientError::Verification("endereço da carteira inválido".into()))?;
+        if raw != ledger_address(&a.public_key) {
+            return Err(ClientError::Verification(
+                "o endereço não corresponde à chave pública".into(),
+            ));
+        }
+        Ok(AddressInfo {
+            address: a.address,
+            public_key: hex::encode(&a.public_key),
         })
     }
 
@@ -821,6 +901,7 @@ fn status_of(f: &Features) -> DeviceStatus {
         retries_remaining: f.retries_remaining,
         label: f.label.clone(),
         has_credential: f.has_credential,
+        wallet_ready: f.wallet_ready,
         capabilities: f.capabilities.clone(),
     }
 }

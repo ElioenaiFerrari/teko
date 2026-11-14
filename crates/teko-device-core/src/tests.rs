@@ -142,6 +142,12 @@ fn onboard(dev: &mut Dev, w: &World, hal: &ScriptedHal) -> Vec<u8> {
     ));
     assert_eq!(dev.state(), DeviceState::Initialized);
 
+    // Wallet step (ADR-0023): the scripted user copies the words shown on the screen.
+    hal.set_auto_words(true);
+    let r = dev.handle(Request::SetupWallet(SetupWallet {}));
+    assert!(matches!(r, Response::WalletReady(_)), "{r:?}");
+    hal.set_auto_words(false);
+
     let pk = match dev.handle(Request::GetCivicId(GetCivicId {})) {
         Response::CivicId(c) => c.pk_identity,
         other => panic!("{other:?}"),
@@ -174,6 +180,22 @@ fn onboard(dev: &mut Dev, w: &World, hal: &ScriptedHal) -> Vec<u8> {
     assert!(matches!(r, Response::CredentialLoaded(_)), "{r:?}");
     assert_eq!(dev.state(), DeviceState::CredentialsIssued);
     pk
+}
+
+/// Firmware + PIN only (state `Initialized`, no wallet yet).
+fn to_initialized(dev: &mut Dev, w: &World, hal: &ScriptedHal) {
+    let blob = vec![7u8; 3000];
+    let m = manifest(w, 1, &blob, &[0, 1]);
+    assert!(matches!(
+        install_fw(dev, &m, &blob),
+        Response::FirmwareStatus(_)
+    ));
+    hal.set_default_pin(Some(PIN));
+    assert!(matches!(
+        dev.handle(Request::SetupPin(SetupPin {})),
+        Response::PinSet(_)
+    ));
+    assert_eq!(dev.state(), DeviceState::Initialized);
 }
 
 fn ready() -> (World, ScriptedHal, Dev, Vec<u8>) {
@@ -702,6 +724,7 @@ fn identity_request_carries_valid_pop_and_attestation() {
     install_fw(&mut dev, &manifest(&w, 1, &blob, &[0, 1]), &blob);
     hal.set_default_pin(Some(PIN));
     dev.handle(Request::SetupPin(SetupPin {}));
+    create_wallet(&mut dev, &hal);
     let nonce = vec![8u8; 32];
     let Response::IdentityRequest(r) =
         dev.handle(Request::GetIdentityRequest(GetIdentityRequest {
@@ -734,6 +757,7 @@ fn credential_for_another_key_or_forged_issuer_is_refused() {
     install_fw(&mut dev, &manifest(&w, 1, &blob, &[0, 1]), &blob);
     hal.set_default_pin(Some(PIN));
     dev.handle(Request::SetupPin(SetupPin {}));
+    create_wallet(&mut dev, &hal);
     let mut rng = StdRng::seed_from_u64(5);
     let other_key = generate_signing_key(&mut rng);
     let rogue_issuer = generate_signing_key(&mut rng);
@@ -1872,4 +1896,331 @@ mod encrypted {
             "more than 16 options"
         );
     }
+}
+
+// ───────────────────────── wallet seed (ADR-0023) ─────────────────────────
+
+fn fresh_initialized() -> (World, ScriptedHal, Dev) {
+    let w = world();
+    let hal = ScriptedHal::new();
+    let mut dev = boot(&w, &hal, 8);
+    to_initialized(&mut dev, &w, &hal);
+    (w, hal, dev)
+}
+
+fn create_wallet(dev: &mut Dev, hal: &ScriptedHal) -> WalletReady {
+    hal.set_auto_words(true);
+    let r = dev.handle(Request::SetupWallet(SetupWallet {}));
+    hal.set_auto_words(false);
+    match r {
+        Response::WalletReady(w) => w,
+        other => panic!("{other:?}"),
+    }
+}
+
+fn feature_wallet(dev: &mut Dev) -> bool {
+    match dev.handle(Request::GetFeatures(GetFeatures {})) {
+        Response::Features(f) => f.wallet_ready,
+        other => panic!("{other:?}"),
+    }
+}
+
+/// Queues the 24 words so the scripted user "types" them on the device.
+fn type_words(hal: &ScriptedHal, words: &[String]) {
+    for w in words {
+        hal.push_word(Some(w));
+    }
+}
+
+#[test]
+fn identity_steps_need_the_wallet_backup_first() {
+    let (_w, _hal, mut dev) = fresh_initialized();
+    assert!(!feature_wallet(&mut dev));
+    let r = dev.handle(Request::GetCivicId(GetCivicId {}));
+    assert_eq!(failure_code(&r), Some(ErrorCode::InvalidState));
+    let r = dev.handle(Request::GetIdentityRequest(GetIdentityRequest {
+        authority_nonce: vec![9; 32],
+        authority_name: "Autoridade".into(),
+    }));
+    assert_eq!(failure_code(&r), Some(ErrorCode::InvalidState));
+}
+
+#[test]
+fn creating_a_wallet_shows_24_words_only_on_the_screen() {
+    let (_w, hal, mut dev) = fresh_initialized();
+    hal.clear_interim();
+    hal.set_auto_words(true);
+    let resp = dev.handle(Request::SetupWallet(SetupWallet {}));
+    hal.set_auto_words(false);
+    let Response::WalletReady(ready) = &resp else {
+        panic!("{resp:?}")
+    };
+    assert!(ready.address.starts_with("tekow1"));
+    assert!(!ready.has_passphrase);
+    assert!(feature_wallet(&mut dev));
+    let words = hal.shown_words();
+    assert_eq!(words.len(), 24);
+    // The phrase went through the DISPLAY, in four pages...
+    let pages = hal
+        .screens()
+        .iter()
+        .filter(|s| s.title.starts_with("FRASE "))
+        .count();
+    assert!(pages >= 4);
+    // ...and NOTHING the host receives (final or interim) contains it.
+    let mut wire: Vec<Vec<u8>> = hal.interim().iter().map(|r| r.encode_payload()).collect();
+    wire.push(resp.encode_payload());
+    let phrase = words.join(" ");
+    for chunk in words.windows(2) {
+        let pair = chunk.join(" ");
+        for m in &wire {
+            assert!(!m.windows(pair.len()).any(|w| w == pair.as_bytes()));
+        }
+    }
+    for m in &wire {
+        assert!(!m.windows(phrase.len()).any(|w| w == phrase.as_bytes()));
+    }
+    // The host only ever saw prompts, never words.
+    assert!(hal.interim().iter().any(|r| matches!(
+        r,
+        Response::ButtonRequest(b) if b.kind == ButtonKind::SeedWords as i32
+    )));
+}
+
+#[test]
+fn a_wrong_word_shows_the_phrase_again_and_nothing_is_saved_meanwhile() {
+    let (_w, hal, mut dev) = fresh_initialized();
+    hal.push_word(Some("zzzzzz"));
+    hal.set_auto_words(true);
+    let r = dev.handle(Request::SetupWallet(SetupWallet {}));
+    assert!(matches!(r, Response::WalletReady(_)), "{r:?}");
+    // 4 pages, a failed quiz, 4 pages again
+    let pages = hal
+        .screens()
+        .iter()
+        .filter(|s| s.title.starts_with("FRASE "))
+        .count();
+    assert_eq!(pages, 8);
+    assert!(hal.screens().iter().any(|s| s.title == "PALAVRA INCORRETA"));
+}
+
+#[test]
+fn giving_up_leaves_the_device_without_a_wallet() {
+    let (_w, hal, mut dev) = fresh_initialized();
+    // user cancels at the quiz
+    hal.push_word(None);
+    let r = dev.handle(Request::SetupWallet(SetupWallet {}));
+    assert_eq!(failure_code(&r), Some(ErrorCode::UserRejected));
+    assert!(!feature_wallet(&mut dev));
+    // user rejects the very first prompt
+    hal.push_decision(Decision::Reject);
+    let r = dev.handle(Request::SetupWallet(SetupWallet {}));
+    assert_eq!(failure_code(&r), Some(ErrorCode::UserRejected));
+    assert!(!feature_wallet(&mut dev));
+    // user rejects while reading the words
+    hal.push_decision(Decision::Confirm);
+    hal.push_decision(Decision::Reject);
+    let r = dev.handle(Request::SetupWallet(SetupWallet {}));
+    assert_eq!(failure_code(&r), Some(ErrorCode::UserRejected));
+    assert!(!feature_wallet(&mut dev));
+    // and it can still be created later
+    let _ = create_wallet(&mut dev, &hal);
+    assert!(feature_wallet(&mut dev));
+}
+
+#[test]
+fn too_many_failed_quizzes_abort_without_saving() {
+    let (_w, hal, mut dev) = fresh_initialized();
+    for _ in 0..6 {
+        hal.push_word(Some("zzzzzz"));
+    }
+    let r = dev.handle(Request::SetupWallet(SetupWallet {}));
+    assert_eq!(failure_code(&r), Some(ErrorCode::InvalidArgument));
+    assert!(!feature_wallet(&mut dev));
+}
+
+#[test]
+fn a_wallet_can_be_created_only_once() {
+    let (_w, hal, mut dev) = fresh_initialized();
+    let _ = create_wallet(&mut dev, &hal);
+    let r = dev.handle(Request::SetupWallet(SetupWallet {}));
+    assert_eq!(failure_code(&r), Some(ErrorCode::InvalidState));
+    let r = dev.handle(Request::RestoreWallet(RestoreWallet {}));
+    assert_eq!(failure_code(&r), Some(ErrorCode::InvalidState));
+}
+
+#[test]
+fn passphrase_is_optional_confirmed_twice_and_changes_the_address() {
+    let (_w, hal, mut dev) = fresh_initialized();
+    // create: Confirm(create), 4 pages Confirm, Confirm(use passphrase)
+    hal.push_secret(Some("senha 1"));
+    hal.push_secret(Some("senha 2"));
+    hal.set_auto_words(true);
+    let r = dev.handle(Request::SetupWallet(SetupWallet {}));
+    assert_eq!(failure_code(&r), Some(ErrorCode::InvalidArgument)); // mismatch
+    assert!(!feature_wallet(&mut dev));
+    hal.push_secret(Some("senha boa"));
+    hal.push_secret(Some("senha boa"));
+    let r = dev.handle(Request::SetupWallet(SetupWallet {}));
+    let Response::WalletReady(w1) = r else {
+        panic!("{r:?}")
+    };
+    assert!(w1.has_passphrase);
+    let phrase = hal.shown_words();
+    // restoring the same words WITHOUT the passphrase gives another wallet
+    let w = world();
+    let hal2 = ScriptedHal::new();
+    let mut dev2 = boot(&w, &hal2, 8);
+    to_initialized(&mut dev2, &w, &hal2);
+    type_words(&hal2, &phrase);
+    hal2.push_decision(Decision::Confirm); // restore prompt
+    hal2.push_decision(Decision::Reject); // no passphrase
+    let Response::WalletReady(w2) = dev2.handle(Request::RestoreWallet(RestoreWallet {})) else {
+        panic!("restore failed")
+    };
+    assert_ne!(w1.address, w2.address);
+    assert!(!w2.has_passphrase);
+    // with the passphrase it is the SAME wallet
+    let hal3 = ScriptedHal::new();
+    let mut dev3 = boot(&w, &hal3, 8);
+    to_initialized(&mut dev3, &w, &hal3);
+    type_words(&hal3, &phrase);
+    hal3.push_secret(Some("senha boa"));
+    hal3.push_secret(Some("senha boa"));
+    let Response::WalletReady(w3) = dev3.handle(Request::RestoreWallet(RestoreWallet {})) else {
+        panic!("restore failed")
+    };
+    assert_eq!(w1.address, w3.address);
+    assert!(w3.has_passphrase);
+}
+
+#[test]
+fn restore_gives_the_same_address_and_rejects_bad_phrases() {
+    let (_w, hal, mut dev) = fresh_initialized();
+    let created = create_wallet(&mut dev, &hal);
+    let phrase = hal.shown_words();
+    let w = world();
+    let mk = || {
+        let h = ScriptedHal::new();
+        let mut d = boot(&w, &h, 8);
+        to_initialized(&mut d, &w, &h);
+        (h, d)
+    };
+    // same words -> same address
+    let (h, mut d) = mk();
+    type_words(&h, &phrase);
+    let Response::WalletReady(r) = d.handle(Request::RestoreWallet(RestoreWallet {})) else {
+        panic!("restore failed")
+    };
+    assert_eq!(r.address, created.address);
+    assert!(feature_wallet(&mut d));
+    // an unknown word
+    let (h, mut d) = mk();
+    let mut bad = phrase.clone();
+    bad[4] = "zzzzzz".into();
+    type_words(&h, &bad);
+    let r = d.handle(Request::RestoreWallet(RestoreWallet {}));
+    assert_eq!(failure_code(&r), Some(ErrorCode::InvalidArgument));
+    assert!(!feature_wallet(&mut d));
+    // a bad checksum: swap two different words
+    let (h, mut d) = mk();
+    let mut bad = phrase.clone();
+    let i = (0..23).find(|i| bad[*i] != bad[*i + 1]).unwrap();
+    bad.swap(i, i + 1);
+    type_words(&h, &bad);
+    let r = d.handle(Request::RestoreWallet(RestoreWallet {}));
+    assert_eq!(failure_code(&r), Some(ErrorCode::InvalidArgument));
+    // the user says the displayed address is NOT theirs: nothing is saved
+    let (h, mut d) = mk();
+    type_words(&h, &phrase);
+    h.push_decision(Decision::Confirm); // restore prompt
+    h.push_decision(Decision::Confirm); // passphrase prompt (empty secret -> none)
+    h.push_decision(Decision::Reject); // "confere com o seu?" -> no
+    let r = d.handle(Request::RestoreWallet(RestoreWallet {}));
+    assert_eq!(failure_code(&r), Some(ErrorCode::UserRejected));
+    assert!(!feature_wallet(&mut d));
+    // errors never echo words or positions
+    if let Response::Failure(f) = d.handle(Request::RestoreWallet(RestoreWallet {})) {
+        for word in &phrase {
+            assert!(!f.message.contains(word.as_str()) || word.len() < 4);
+        }
+    }
+}
+
+#[test]
+fn backup_check_confirms_the_right_phrase_and_refuses_others() {
+    let (_w, hal, mut dev) = fresh_initialized();
+    let _ = create_wallet(&mut dev, &hal);
+    let phrase = hal.shown_words();
+    type_words(&hal, &phrase);
+    assert!(matches!(
+        dev.handle(Request::CheckWalletBackup(CheckWalletBackup {})),
+        Response::WalletBackupOk(_)
+    ));
+    let mut other = phrase.clone();
+    other.swap(0, 1);
+    other[2] = "abandon".into();
+    type_words(&hal, &other);
+    let r = dev.handle(Request::CheckWalletBackup(CheckWalletBackup {}));
+    assert!(matches!(r, Response::Failure(_)));
+    assert!(feature_wallet(&mut dev)); // a failed check changes nothing
+}
+
+#[test]
+fn get_address_needs_the_unlocked_device_and_returns_public_data() {
+    let (_w, hal, mut dev) = fresh_initialized();
+    let created = create_wallet(&mut dev, &hal);
+    let Response::Address(a) = dev.handle(Request::GetAddress(GetAddress {})) else {
+        panic!("no address")
+    };
+    assert_eq!(a.address, created.address);
+    let raw = teko_crypto::parse_wallet_address(&a.address).unwrap();
+    assert_eq!(raw, teko_crypto::ledger_address(&a.public_key));
+    dev.lock();
+    let r = dev.handle(Request::GetAddress(GetAddress {}));
+    assert_eq!(failure_code(&r), Some(ErrorCode::InvalidState));
+}
+
+#[test]
+fn the_wallet_survives_a_restart_and_a_wipe_destroys_it() {
+    let (w, hal, mut dev) = fresh_initialized();
+    let created = create_wallet(&mut dev, &hal);
+    drop(dev);
+    let mut dev = boot(&w, &hal, 8);
+    assert_eq!(dev.state(), DeviceState::Initialized);
+    assert!(feature_wallet(&mut dev));
+    hal.set_default_pin(Some(PIN));
+    assert!(matches!(
+        dev.handle(Request::Unlock(Unlock {})),
+        Response::Unlocked(_)
+    ));
+    let Response::Address(a) = dev.handle(Request::GetAddress(GetAddress {})) else {
+        panic!("no address")
+    };
+    assert_eq!(a.address, created.address);
+    assert!(matches!(
+        dev.handle(Request::Wipe(Wipe {})),
+        Response::WipeDone(_)
+    ));
+    assert!(!feature_wallet(&mut dev));
+    let raw = hal.raw_storage().unwrap();
+    assert!(!raw.windows(64).any(|w| w == a.public_key.as_slice()));
+}
+
+#[test]
+fn the_wallet_key_is_unrelated_to_the_identity_and_voter_secrets() {
+    let (_w, _hal, dev, identity_pk) = ready();
+    let secrets = dev.secrets_for_test();
+    let master = secrets.last().unwrap().clone();
+    assert_eq!(master.len(), 64);
+    for s in &secrets[..secrets.len() - 1] {
+        assert!(
+            s.is_empty()
+                || !master
+                    .windows(s.len().min(32))
+                    .any(|w| w == &s[..s.len().min(32)])
+        );
+    }
+    let m = teko_wallet::MasterKey::from_bytes(&master).unwrap();
+    assert_ne!(m.public_key(0).unwrap(), identity_pk);
 }

@@ -19,6 +19,7 @@ teko-attestation.workspace = true
 teko-protocol.workspace = true
 teko-election.workspace = true
 teko-registration.workspace = true
+teko-coin.workspace = true
 prost.workspace = true
 rand.workspace = true
 thiserror = { workspace = true, features = ["std"] }

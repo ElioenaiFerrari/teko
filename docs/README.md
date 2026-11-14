@@ -22,6 +22,7 @@ Tudo em pt-BR (código e identificadores ficam em inglês). Cada fluxo é um arq
 | 11 | [Consenso BFT](fluxos/11-consenso-bft.md) | Como a rede chega a um acordo? |
 | 12 | [Livro-razão, moeda e bens](fluxos/12-livro-razao-moeda-e-bens.md) | O que vem a seguir? (planejado) |
 | 13 | [Suite desktop](fluxos/13-suite-desktop.md) | Como o app é montado? |
+| 14 | [Carteira e frase de recuperação](fluxos/14-carteira-e-seed.md) | Como recupero meu dinheiro se perder o dispositivo? |
 
 ## Referência técnica
 [ARCHITECTURE](ARCHITECTURE.md) · [THREAT-MODEL](THREAT-MODEL.md) · [KEY-HIERARCHY](KEY-HIERARCHY.md) · [DEVICE-PROTOCOL](DEVICE-PROTOCOL.md) · [ONBOARDING-FLOW](ONBOARDING-FLOW.md) · [RECOVERY](RECOVERY.md) · [NETWORKS](NETWORKS.md) · [PHASE-2-VOTING](PHASE-2-VOTING.md) · [RELEASE](RELEASE.md) · [TEST-MATRIX](TEST-MATRIX.md) · [GLOSSARY](GLOSSARY.md) · [ADRs](adr/README.md)

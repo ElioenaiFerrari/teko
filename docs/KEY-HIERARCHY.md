@@ -27,13 +27,25 @@ Primitivas propostas: `SHA3-256` para hashes etiquetados; `KMAC256` (ou HKDF-SHA
 
 ## 3. Raiz
 
-Semente interna `K_root` (32 bytes) gerada por `Rng` na inicialização. Armazenada apenas em `SecureStorage`, `zeroize` ao sair de escopo. **Nunca exportada.** Existência de backup depende do ADR-0003 (recomendação: sem backup / sem seed).
+Semente interna `K_root` (32 bytes) gerada por `Rng` na inicialização. Armazenada apenas em `SecureStorage`, `zeroize` ao sair de escopo. **Nunca exportada.** **Sem backup/seed** (ADR-0003): a identidade se recupera por reemissão presencial.
 
 ```
 K_root ──KMAC(tag=identity)──▶ sk_identity ──▶ pk_identity
        ──KMAC(tag=pairwise)──▶ k_pairwise
 s (segredo de eleitor) ◀── entropia SEPARADA (recomendação), não deriva de K_root
 ```
+
+### 3.1 Raiz da carteira (ADR-0023): ramo **independente**
+
+A carteira (moeda e bens) tem a sua própria raiz, com **entropia separada** de `K_root` e de `s`, e é a **única** com frase de recuperação:
+
+```
+entropia_w (32 B, RNG do dispositivo) ──BIP-39──▶ 24 palavras (só na tela)
+   ──PBKDF2-HMAC-SHA512 (+ passphrase opcional)──▶ semente de 64 B
+   ──SLIP-10 "Nist256p1 seed"──▶ chave mestra ──m/7240'/0'/0'/0'/i'──▶ sk_wallet[i] ──▶ endereço tekow1…
+```
+
+Persiste só a **chave mestra derivada** (64 B) e um indicador de passphrase. **Não há nenhuma derivação entre este ramo e `K_root`/`s`**: vender ou perder a frase não revela identidade nem voto. Teste: `the_wallet_key_is_unrelated_to_the_identity_and_voter_secrets`.
 
 ## 4. Chave de identidade
 

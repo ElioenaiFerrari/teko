@@ -1,6 +1,6 @@
 # Teko — atalhos. Rode `make` (ou `make help`) para ver tudo.
 .DEFAULT_GOAL := help
-.PHONY: help setup emulator suite reset demo issuer-help preview fmt lint test check build clean-dev verify-fw release-check repro docs-check diagramas coin-demo assets-demo devnet close devnet-dkg devnet-stop devnet-status devnet-reset devnet-blocks testnet-help election publish simulate simulate-live tally reset-board
+.PHONY: help setup emulator suite reset demo issuer-help preview fmt lint test check build clean-dev verify-fw release-check repro fund docs-check diagramas coin-demo assets-demo devnet close devnet-dkg devnet-stop devnet-status devnet-reset devnet-blocks testnet-help election publish simulate simulate-live tally reset-board
 
 CARGO ?= cargo
 PIN   ?= 482913
@@ -82,6 +82,9 @@ reset: ## Volta o dispositivo a "virgem" e esquece cidadãos/registros/revogaç�
 
 demo: ## Emulador com botões AUTOMÁTICOS (só teste/demo, não protege nada). PIN=482913
 	$(CARGO) run -q -p device-emulator --features test-buttons -- --auto-pin $(PIN)
+
+fund: ## TESTE (devnet): aloca moedas de teste a uma carteira. Uso: make fund ADDR=tekow1… AMOUNT=1000
+	$(CARGO) run -q -p issuer-cli -- economy-fund --address $(ADDR) --amount $(or $(AMOUNT),1000)
 
 issuer-help: ## Ajuda da autoridade simulada (issuer-cli)
 	$(CARGO) run -q -p issuer-cli -- --help

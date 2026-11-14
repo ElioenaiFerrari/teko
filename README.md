@@ -19,6 +19,7 @@ O computador (Suite) **nunca** vê chaves nem PIN. O dispositivo cifra e assina 
 | `teko-protocol` | mensagens, framing e versões do protocolo Suite ↔ dispositivo |
 | `teko-crypto` | derivação, hashes etiquetados, ID Cívico (bech32m), assinaturas, credenciais |
 | `teko-device-core` | máquina de estados, PIN e armazenamento do dispositivo (`no_std`) |
+| `teko-wallet` | carteira: frase BIP-39 de 24 palavras (gerada no dispositivo), derivação SLIP-10 P-256 e endereço `tekow1…`; independente da identidade |
 | `teko-attestation` | manifestos de firmware, M-de-N e cadeias de atestação |
 | `teko-election` | manifesto da eleição, ciclo de vida dos pleitos, apuração |
 | `teko-registration` | registro anônimo por assinatura cega (RFC 9474) |
@@ -50,12 +51,13 @@ make devnet-dkg     # cerimônia de chave entre os validadores (cédulas cifrada
 make election       # cria a eleição de exemplo (7 pleitos)
 make emulator       # terminal 1: tela e botões do dispositivo (PIN aqui). Reinicie após make election
 make publish        # publica a eleição no quadro
-make suite          # terminal 2: onboarding e votar (2 confirmações no emulador)
+make suite          # terminal 2: onboarding (PIN, carteira com frase de 24 palavras, ID Cívico) e votar
 make simulate N=200 # opcional: eleitores SINTÉTICOS (sempre rotulados)
 make devnet-status  # estado da rede     |  make devnet-blocks  # blocos
 make tally          # apuração no terminal
 make close          # encerra a votação; depois a Suite mostra os gráficos
 make devnet-stop    # para os validadores
+make fund ADDR=tekow1… AMOUNT=1000   # moedas de TESTE para a sua carteira (aparecem em "Carteira" na Suite)
 make coin-demo      # demonstração da moeda em memória: teto, halving, taxa, stake e slash
 make assets-demo    # demonstração dos bens: registro com quórum, gravame, venda contra pagamento
 ```
@@ -64,8 +66,8 @@ Demo sem teclado (**nunca** em produção): `cargo run -p device-emulator --feat
 
 ## Estado atual
 - **Fase 1** (dispositivo, Suite, emissor): completa.
-- **Fase 2** (votação): eleição com vários pleitos e jurisdições, registro anônimo, **cédulas cifradas** até o fechamento, rede PoA federada, reemissão sem seed, resultados em gráficos.
-- **Em construção** (programa do livro-razão): consenso BFT (`teko-bft`) e núcleo do livro (`teko-ledger`) **moeda** (`teko-coin`) e **bens** (`teko-assets`) prontos como biblioteca; carteira/patrimônio no dispositivo e na Suite (M5) e os votos sobre o BFT (M6) ainda só **planejados**.
+- **Fase 2** (votação): eleição com vários pleitos e jurisdições, registro anônimo, **cédulas cifradas** até o fechamento, rede PoA federada, reemissão sem seed (identidade), resultados em gráficos e **carteira com frase de recuperação de 24 palavras** (criada e confirmada no dispositivo, estilo Trezor; ADR-0023).
+- **Em construção** (programa do livro-razão): consenso BFT (`teko-bft`) e núcleo do livro (`teko-ledger`) **moeda** (`teko-coin`) e **bens** (`teko-assets`) prontos como biblioteca; a **carteira** já tem endereço e frase de recuperação (M5a); assinar transações, enviar/receber e patrimônio na Suite (M5b) e os votos sobre o BFT (M6) ainda só **planejados**.
 - **Fora de escopo**: hardware real, validade jurídica (ICP-Brasil), prova ZK de elegibilidade, explorador público (só placeholder).
 
 ## Documentação

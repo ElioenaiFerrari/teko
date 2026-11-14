@@ -53,6 +53,18 @@ Estado: `Virgem → FirmwareInstalado`. Se já há firmware atual, o passo é pu
 Regras: PIN de comprimento definido (pergunta 1 do THREAT-MODEL); as duas digitações devem coincidir, senão o dispositivo recomeça; PIN trivial (`123456`, repetido) é recusado **pelo dispositivo**. Erros: `UserRejected`, `Timeout`.
 Aviso ao usuário: **perder o PIN = reemissão presencial**; **N erros = apagamento**.
 
+## Passo 4b — Carteira e frase de recuperação (ADR-0023)
+
+| Suite mostra | Dispositivo mostra | Protocolo |
+|---|---|---|
+| "Sua carteira e a frase de recuperação" com **Criar nova carteira** ou **Restaurar com minha frase** | — | `SetupWallet` ou `RestoreWallet` → `ButtonRequest` … |
+| "Anote as palavras no dispositivo" | 24 palavras em 4 páginas (6 por página) [Confirmar a cada página] | `ButtonRequest(SeedWords)` (**sem palavras**) |
+| (opcional) "Decida no dispositivo" | "Usar passphrase?" (digita 2x) | `ButtonRequest(WalletPassphrase)` |
+| "Confirme a sua anotação" | "Digite as palavras nº 4, 11 e 19" (sorteadas) | `ButtonRequest(WalletConfirm)` |
+| "Carteira pronta: `tekow1…`" | Endereço | `WalletReady{address}` |
+
+Errou uma palavra: o dispositivo mostra a frase de novo e sorteia outras posições. Sem carteira pronta, o dispositivo recusa o passo seguinte (`GetCivicId`). Detalhes: [fluxo 14](fluxos/14-carteira-e-seed.md).
+
 ## Passo 5 — Geração de chaves e conferência do ID Cívico
 
 | Suite mostra | Dispositivo mostra | Protocolo |

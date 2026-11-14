@@ -103,11 +103,39 @@ impl Buttons for TerminalHal {
             );
             read_line().is_some_and(|l| matches!(l.to_lowercase().as_str(), "" | "y" | "s" | "sim"))
         };
+        if kind == ButtonKind::SeedWords && self.interactive {
+            // Do not leave the recovery phrase in the terminal scrollback.
+            print!("\x1b[2J\x1b[3J\x1b[H");
+            let _ = io::stdout().flush();
+        }
         if accepted {
             Decision::Confirm
         } else {
             Decision::Reject
         }
+    }
+
+    fn read_word(&mut self, position: usize) -> Option<Zeroizing<String>> {
+        let label = format!("  Palavra nº {position} (Enter vazio = cancelar): ");
+        let w = if self.interactive {
+            rpassword::prompt_password(&label).ok()
+        } else {
+            println!("{label}");
+            read_line()
+        };
+        w.filter(|w| !w.trim().is_empty()).map(Zeroizing::new)
+    }
+
+    fn read_secret_text(&mut self, prompt: &str) -> Option<Zeroizing<String>> {
+        let label = format!("  {prompt} (Enter vazio = sem senha/cancelar): ");
+        let t = if self.interactive {
+            rpassword::prompt_password(&label).ok()
+        } else {
+            println!("{label}");
+            read_line()
+        };
+        // An empty answer means "no passphrase": the device treats it as such.
+        Some(Zeroizing::new(t.unwrap_or_default()))
     }
 
     fn read_pin(&mut self, prompt: &str) -> Option<Zeroizing<Vec<u8>>> {
@@ -199,6 +227,12 @@ impl Buttons for EmuHal {
     fn read_pin(&mut self, prompt: &str) -> Option<Zeroizing<Vec<u8>>> {
         self.term.read_pin(prompt)
     }
+    fn read_word(&mut self, position: usize) -> Option<Zeroizing<String>> {
+        self.term.read_word(position)
+    }
+    fn read_secret_text(&mut self, prompt: &str) -> Option<Zeroizing<String>> {
+        self.term.read_secret_text(prompt)
+    }
 }
 impl SecureStorage for EmuHal {
     fn load(&mut self) -> Option<Vec<u8>> {
@@ -225,11 +259,23 @@ impl HostLink for EmuHal {
 pub struct AutoHal {
     pub inner: EmuHal,
     pub pin: String,
+    /// Words of the phrase pages shown on the screen (the auto "user" copies them).
+    pub shown: std::collections::BTreeMap<usize, String>,
 }
 
 #[cfg(feature = "test-buttons")]
 impl Display for AutoHal {
     fn show(&mut self, screen: &Screen) {
+        if screen.title.starts_with("FRASE ") {
+            for line in &screen.lines {
+                let mut it = line.split_whitespace();
+                if let (Some(n), Some(w), None) = (it.next(), it.next(), it.next())
+                    && let Ok(n) = n.parse::<usize>()
+                {
+                    self.shown.insert(n, w.to_string());
+                }
+            }
+        }
         self.inner.show(screen);
     }
 }
@@ -242,6 +288,14 @@ impl Buttons for AutoHal {
     fn read_pin(&mut self, _prompt: &str) -> Option<Zeroizing<Vec<u8>>> {
         println!("  [auto] PIN digitado");
         Some(Zeroizing::new(self.pin.clone().into_bytes()))
+    }
+    fn read_word(&mut self, position: usize) -> Option<Zeroizing<String>> {
+        println!("  [auto] palavra nº {position} digitada");
+        self.shown.get(&position).cloned().map(Zeroizing::new)
+    }
+    fn read_secret_text(&mut self, _prompt: &str) -> Option<Zeroizing<String>> {
+        println!("  [auto] sem passphrase");
+        Some(Zeroizing::new(String::new()))
     }
 }
 #[cfg(feature = "test-buttons")]

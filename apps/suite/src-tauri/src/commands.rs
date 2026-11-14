@@ -81,6 +81,12 @@ fn prompt_name(kind: ButtonKind) -> &'static str {
         ButtonKind::Wipe => "wipe",
         ButtonKind::IssueIdentity => "issue_identity",
         ButtonKind::LoadCredential => "load_credential",
+        ButtonKind::WalletCreate => "wallet_create",
+        ButtonKind::SeedWords => "seed_words",
+        ButtonKind::WalletConfirm => "wallet_confirm",
+        ButtonKind::WalletRestore => "wallet_restore",
+        ButtonKind::WalletCheck => "wallet_check",
+        ButtonKind::WalletPassphrase => "wallet_passphrase",
         ButtonKind::Unspecified => "unknown",
     }
 }
@@ -367,6 +373,97 @@ pub async fn setup_pin(app: AppHandle, suite: State<'_, Suite>) -> Result<(), Ui
 #[tauri::command]
 pub async fn unlock(app: AppHandle, suite: State<'_, Suite>) -> Result<UnlockOutcome, UiError> {
     with_device(app, suite.inner().clone(), |c| c.unlock()).await
+}
+
+/// The device creates the wallet and shows the 24 words ON ITS SCREEN; the Suite only
+/// waits (it never receives the words).
+#[tauri::command]
+pub async fn wallet_setup(
+    app: AppHandle,
+    suite: State<'_, Suite>,
+) -> Result<teko_client::WalletInfo, UiError> {
+    with_device(app, suite.inner().clone(), |c| c.wallet_setup()).await
+}
+
+/// The user types the 24 words ON THE DEVICE.
+#[tauri::command]
+pub async fn wallet_restore(
+    app: AppHandle,
+    suite: State<'_, Suite>,
+) -> Result<teko_client::WalletInfo, UiError> {
+    with_device(app, suite.inner().clone(), |c| c.wallet_restore()).await
+}
+
+#[tauri::command]
+pub async fn wallet_check_backup(app: AppHandle, suite: State<'_, Suite>) -> Result<(), UiError> {
+    with_device(app, suite.inner().clone(), |c| c.wallet_check_backup()).await
+}
+
+/// What the wallet screen shows as balance.
+#[derive(serde::Serialize)]
+pub struct BalanceInfo {
+    available: bool,
+    amount: u64,
+    note: Option<String>,
+    reason: Option<String>,
+}
+
+/// Balance of a wallet address. DEVELOPMENT ONLY: it comes from the devnet allocations
+/// file (`dev/economy.txt`, made by `issuer-cli economy-fund`); the economy ledger is
+/// not on the network yet (M6), so production builds report it as unavailable.
+#[tauri::command]
+pub async fn wallet_balance(address: String) -> Result<BalanceInfo, UiError> {
+    Ok(balance_impl(&address))
+}
+
+#[cfg(feature = "dev-simulation")]
+fn balance_impl(address: &str) -> BalanceInfo {
+    let path = resolve_dev_dir().join(teko_coin::devnet::ECONOMY_FILE);
+    match teko_coin::devnet::balance_of(&path, address) {
+        Ok(Some(amount)) => BalanceInfo {
+            available: true,
+            amount,
+            note: Some(
+                "Alocação de TESTE da devnet local (dev/economy.txt). Para ganhar moedas de teste: make fund ADDR=<seu endereço> AMOUNT=1000.".into(),
+            ),
+            reason: None,
+        },
+        Ok(None) => BalanceInfo {
+            available: false,
+            amount: 0,
+            note: None,
+            reason: Some(
+                "Nenhuma moeda de teste ainda. Rode: make fund ADDR=<seu endereço> AMOUNT=1000".into(),
+            ),
+        },
+        Err(e) => BalanceInfo {
+            available: false,
+            amount: 0,
+            note: None,
+            reason: Some(e),
+        },
+    }
+}
+
+#[cfg(not(feature = "dev-simulation"))]
+fn balance_impl(_address: &str) -> BalanceInfo {
+    BalanceInfo {
+        available: false,
+        amount: 0,
+        note: None,
+        reason: Some(
+            "O livro de economia ainda não está na rede: o saldo aparecerá quando ele estiver."
+                .into(),
+        ),
+    }
+}
+
+#[tauri::command]
+pub async fn wallet_address(
+    app: AppHandle,
+    suite: State<'_, Suite>,
+) -> Result<teko_client::AddressInfo, UiError> {
+    with_device(app, suite.inner().clone(), |c| c.wallet_address()).await
 }
 
 #[tauri::command]

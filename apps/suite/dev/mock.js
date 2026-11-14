@@ -11,15 +11,17 @@
   const FP = 'a1b2c3d4e5f60718';
   const dev = {
     connected: q !== 'none',
-    state: q === 'virgin' ? 'virgin' : q === 'ready' || q === 'locked' ? 'credentials_issued' : 'virgin',
+    state: q === 'virgin' ? 'virgin' : q === 'wallet' ? 'initialized' : q === 'ready' || q === 'locked' ? 'credentials_issued' : 'virgin',
     locked: q === 'locked',
     fw: q === 'virgin' || q === 'none' ? 0 : 1,
     election: false,
+    wallet: q === 'ready' || q === 'locked',
     retries: Number(new URLSearchParams(location.search).get('retries') || 8),
   };
+  const WADDR = 'tekow1qpzry9x8gf2tvdw0s3jn54khce6mua7lqpzry9x8gf2tvdw0s3jn54khce6muaw9z3k';
   const status = () => ({
     connected: dev.connected, busy: false, addr: '127.0.0.1:7878', trust_ok: true, error: null,
-    status: dev.connected ? { fw_version: dev.fw, state: dev.state, locked: dev.locked, retries_remaining: dev.retries, label: 'Teko Emulator', has_credential: dev.state === 'credentials_issued', capabilities: [] } : null,
+    status: dev.connected ? { fw_version: dev.fw, state: dev.state, locked: dev.locked, retries_remaining: dev.retries, label: 'Teko Emulator', has_credential: dev.state === 'credentials_issued', wallet_ready: dev.wallet, capabilities: [] } : null,
   });
   const prompt = async (kind, ms = 900) => { emit('device-prompt', kind); await wait(ms); };
   const offer = (v) => ({ version: v, size: 49152, fingerprint: v === 1 ? 'a1b2 c3d4 e5f6 0718' : '9f8e 7d6c 5b4a 3921', valid_signers: 2, threshold: 2, total_signers: 3, installed_version: dev.fw, is_downgrade: v < dev.fw, verdict: v < dev.fw ? 'Versão anterior à instalada: recusado (anti-downgrade)' : v === dev.fw ? 'Já instalado' : dev.fw ? 'Atualização disponível' : 'Pronto para instalar', installable: v > dev.fw });
@@ -55,6 +57,11 @@
     firmware_catalog: async () => [offer(1), offer(2)],
     install_firmware: async ({ version }) => { await prompt('firmware_install'); for (let i = 1; i <= 5; i++) { emit('fw-progress', [i * 10, 50]); await wait(150); } dev.fw = version; if (dev.state === 'virgin') dev.state = 'firmware_installed'; return version; },
     setup_pin: async () => { await prompt('pin_entry', 1200); dev.state = 'initialized'; },
+    wallet_setup: async () => { await prompt('wallet_create', 900); for (let i = 0; i < 4; i++) await prompt('seed_words', 700); await prompt('wallet_confirm', 1500); dev.wallet = true; return { address: WADDR, has_passphrase: false }; },
+    wallet_restore: async () => { await prompt('wallet_restore', 1800); dev.wallet = true; return { address: WADDR, has_passphrase: false }; },
+    wallet_check_backup: async () => { await prompt('wallet_check', 1800); },
+    wallet_address: async () => ({ address: WADDR, public_key: '02' + 'cd'.repeat(32) }),
+    wallet_balance: async () => ({ available: true, amount: 4000, note: 'Alocação de gênese de TESTE da devnet (mock).' }),
     unlock: async () => { await prompt('pin_entry', 1000); dev.locked = false; return { result: 'unlocked' }; },
     civic_id: async () => { if (dev.state === 'initialized') await prompt('confirm_civic_id'); return { id: ID, public_key: '02' + 'ab'.repeat(32) }; },
     dev_mode: async () => true,

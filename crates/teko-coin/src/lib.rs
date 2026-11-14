@@ -14,6 +14,7 @@
 //! NOT AUDITED. Which validators exist at mainnet start is an OPEN DECISION (ADR-0021).
 #![cfg_attr(test, allow(clippy::unwrap_used, clippy::expect_used, clippy::panic))]
 
+pub mod devnet;
 mod module;
 mod query;
 

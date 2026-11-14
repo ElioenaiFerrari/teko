@@ -15,6 +15,7 @@ teko-crypto.workspace = true
 teko-attestation.workspace = true
 teko-election.workspace = true
 teko-ballot-crypto.workspace = true
+teko-wallet.workspace = true
 prost.workspace = true
 zeroize.workspace = true
 subtle.workspace = true

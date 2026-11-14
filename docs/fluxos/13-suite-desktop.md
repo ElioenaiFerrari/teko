@@ -16,7 +16,7 @@ Interface, comandos Tauri, `teko-client`, dispositivo, quadro e rede.
 
 ## Passo a passo
 1. `make emulator` (terminal 1): o PIN é digitado **aqui**.
-2. `make suite` (terminal 2): onboarding guiado, identidade, assinar, votar e **Resultados**.
+2. `make suite` (terminal 2): onboarding guiado (inclui a **Carteira** e a frase de recuperação), identidade, **Carteira** (endereço e saldo de teste), assinar, votar e **Resultados**. Para ter saldo de teste: `make fund ADDR=<seu endereço> AMOUNT=1000`.
 3. Sem emulador ligado a Suite abre no Explorador público.
 4. Pré-visualização só visual: `make preview` (usa backend falso fora do pacote).
 

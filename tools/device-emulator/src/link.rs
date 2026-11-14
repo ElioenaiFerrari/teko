@@ -46,6 +46,14 @@ impl<H: Buttons> Buttons for Linked<H> {
     fn read_pin(&mut self, prompt: &str) -> Option<Zeroizing<Vec<u8>>> {
         self.inner.read_pin(prompt)
     }
+
+    fn read_word(&mut self, position: usize) -> Option<Zeroizing<String>> {
+        self.inner.read_word(position)
+    }
+
+    fn read_secret_text(&mut self, prompt: &str) -> Option<Zeroizing<String>> {
+        self.inner.read_secret_text(prompt)
+    }
 }
 
 impl<H: SecureStorage> SecureStorage for Linked<H> {

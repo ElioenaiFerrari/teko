@@ -206,7 +206,25 @@ Legenda: **P** = `proptest` (muitos casos), **U** = unitário, **E** = ponta a p
 | Gênese e payload inválidos recusados | assets: `bad_genesis_classes_and_payloads_are_refused` |
 | Todo bem tem exatamente um dono, o índice de donos é consistente e a oferta de moeda se conserva sob transferências e trocas aleatórias | assets (proptest): `ownership_and_supply_invariants` |
 
+## Carteira e frase de recuperação (`teko-wallet` + dispositivo, ADR-0023)
+
+| Invariante | Teste |
+|---|---|
+| BIP-39 e SLIP-10 `nist256p1` conferem com os **vetores oficiais**; entropia → palavras → entropia; checksum pega palavra trocada | wallet: `bip39_official_vectors`, `slip10_nist256p1_vector_1`, `phrase_validation`, proptests `entropy_to_words_to_entropy_roundtrip`, `replacing_one_word_is_caught_or_changes_the_wallet` |
+| A passphrase muda a carteira e é validada (ASCII, ≤ 64) | wallet: `passphrase_changes_the_wallet_and_is_validated`; device: `passphrase_is_optional_confirmed_twice_and_changes_the_address` |
+| O endereço bech32m detecta erro de digitação e é o mesmo do livro-razão | wallet (proptest): `wallet_addresses_detect_single_typos`; `addresses_are_distinct_per_index_and_match_the_ledger` |
+| **A carteira é independente de identidade e voto** | wallet: `the_wallet_is_independent_of_the_identity_derivation`; device: `the_wallet_key_is_unrelated_to_the_identity_and_voter_secrets` |
+| **As palavras só passam pela tela**: nenhuma resposta ou mensagem intermediária as contém | device: `creating_a_wallet_shows_24_words_only_on_the_screen`; proptest `no_response_exposes_secrets` agora inclui a chave mestra da carteira |
+| Confirmação por 3 posições: palavra errada reinicia a exibição; cancelar ou errar demais não salva nada | device: `a_wrong_word_shows_the_phrase_again_and_nothing_is_saved_meanwhile`, `giving_up_leaves_the_device_without_a_wallet`, `too_many_failed_quizzes_abort_without_saving` |
+| **Sem carteira pronta não há ID Cívico nem emissão** (a Suite não pula o backup) | device: `identity_steps_need_the_wallet_backup_first`; e2e: `identity_is_blocked_until_the_wallet_backup_is_confirmed` |
+| Restaurar a mesma frase dá o **mesmo endereço**; frase com palavra desconhecida ou checksum errado é recusada; "não confere o endereço" não salva | device: `restore_gives_the_same_address_and_rejects_bad_phrases`; e2e: `a_wallet_restores_on_a_new_device_with_the_same_address` |
+| "Verificar backup" confirma a frase certa e recusa outras sem mudar nada | device: `backup_check_confirms_the_right_phrase_and_refuses_others` |
+| `GetAddress` só com o dispositivo desbloqueado; a carteira sobrevive ao reinício e o `Wipe` a destrói | device: `get_address_needs_the_unlocked_device_and_returns_public_data`, `the_wallet_survives_a_restart_and_a_wipe_destroys_it` |
+| Saldo de teste da devnet (arquivo de alocações) | coin: `devnet::tests::allocations_roundtrip_and_balance`, `bad_input_is_refused` |
+
 ## O que **não** está coberto por teste automático (honestidade)
+
+- **Carteira:** a tela de digitação das palavras no terminal do emulador (`TerminalHal`) e a limpeza da tela só foram exercitadas à mão; a etapa e a tela Carteira da Suite (JS) só com o mock no navegador. Sem teste de tempo constante da comparação de palavras (o dispositivo compara com varredura completa, mas a frase não é um segredo de login). Sem auditoria da derivação.
 
 - **Cifra/provas:** sem vetores de teste de terceiros nem auditoria (implementação própria). Sem teste de tempo constante; sem fuzzing dos decodificadores. Sem teste de carga com milhares de cédulas por bloco.
 - **Cerimônia real:** só 3 processos em loopback, sem canal autenticado/cifrado nem tratamento de reclamações; sem teste com validador malicioso na rede (só no nível da biblioteca).

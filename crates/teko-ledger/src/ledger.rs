@@ -3,6 +3,9 @@ use std::collections::BTreeMap;
 use crate::state::State;
 use crate::tx::{Address, Hash, Tx, TxError};
 
+/// Maximum nesting of `Ctx::call_as` (modules calling modules).
+const MAX_CALL_DEPTH: u8 = 3;
+
 /// Upper bound of transactions in one block (bounds execution time).
 pub const MAX_TXS_PER_BLOCK: usize = 10_000;
 
@@ -107,6 +110,8 @@ pub struct Ctx<'a, 'b> {
     /// SEC1 public key of the signer (empty in `begin_block`).
     pub sender_key: &'a [u8],
     events: Vec<Event>,
+    modules: &'a BTreeMap<u32, Box<dyn Module>>,
+    depth: u8,
 }
 
 impl Ctx<'_, '_> {
@@ -127,6 +132,42 @@ impl Ctx<'_, '_> {
     /// Read-only access to another module's namespace.
     pub fn read_module(&self, module: u32, key: &[u8]) -> Option<Vec<u8>> {
         self.overlay.get(&ns_key(module, key))
+    }
+
+    /// Calls another module's `execute` inside the same transaction, acting as
+    /// `sender` (atomic with the caller: any failure fails the whole transaction).
+    ///
+    /// SECURITY: this lets a module act on behalf of an address, so the CALLER MUST
+    /// have verified that `sender` authorised the action (for example by checking
+    /// its signature). Modules are consensus code chosen by the chain operators.
+    pub fn call_as(
+        &mut self,
+        module: u32,
+        sender: Address,
+        payload: &[u8],
+    ) -> Result<(), ModuleError> {
+        if self.depth >= MAX_CALL_DEPTH {
+            return Err(ModuleError::new("module call depth exceeded"));
+        }
+        let target = self
+            .modules
+            .get(&module)
+            .ok_or_else(|| ModuleError::new("unknown module"))?;
+        let mut child = Ctx {
+            overlay: &mut *self.overlay,
+            module,
+            height: self.height,
+            chain_id: self.chain_id,
+            proposer: self.proposer,
+            sender,
+            sender_key: &[],
+            events: Vec::new(),
+            modules: self.modules,
+            depth: self.depth + 1,
+        };
+        target.execute(&mut child, payload)?;
+        self.events.append(&mut child.events);
+        Ok(())
     }
 
     pub fn emit(&mut self, topic: &str, data: Vec<u8>) {
@@ -284,6 +325,8 @@ impl Ledger {
                 sender: tx.address(),
                 sender_key: &tx.sender,
                 events: Vec::new(),
+                modules: &self.modules,
+                depth: 0,
             };
             let min = fm.min_fee(&ctx, tx.to_bytes().len());
             if tx.fee < min {
@@ -336,6 +379,8 @@ impl Ledger {
                 sender,
                 sender_key: &tx.sender,
                 events: Vec::new(),
+                modules: &self.modules,
+                depth: 0,
             };
             let min = fm.min_fee(&ctx, tx.to_bytes().len());
             if tx.fee < min {
@@ -354,6 +399,8 @@ impl Ledger {
             sender,
             sender_key: &tx.sender,
             events: Vec::new(),
+            modules: &self.modules,
+            depth: 0,
         };
         module
             .execute(&mut ctx, &tx.payload)
@@ -382,6 +429,8 @@ impl Ledger {
                 sender: *proposer,
                 sender_key: &[],
                 events: Vec::new(),
+                modules: &self.modules,
+                depth: 0,
             };
             m.begin_block(&mut ctx)
                 .map_err(|e| LedgerError::BeginBlock(e.0))?;

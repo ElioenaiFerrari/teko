@@ -4,7 +4,7 @@ def camadas_crates():
     d = D("camadas-crates", 1100, 790, "Camadas dos crates", "Cada camada só depende das de baixo; detalhes no mapa de crates do README", "VISÃO GERAL")
     camadas = [("Binários e apps", [("device-emulator", "onca"), ("issuer-cli", "plain"), ("election-admin-cli", "plain"), ("teko-node", "boto"), ("teko-suite", "link")]),
                ("Rede e clientes", [("teko-chain", "boto"), ("teko-client", "link"), ("teko-transport", "plain")]),
-               ("Livro-razão e consenso", [("teko-bft", "focal"), ("teko-ledger", "focal"), ("teko-coin", "focal")]),
+               ("Livro-razão e consenso", [("teko-bft", "focal"), ("teko-ledger", "focal"), ("teko-coin", "focal"), ("teko-assets", "focal")]),
                ("Domínio", [("teko-election", "plain"), ("teko-device-core", "onca"), ("teko-registration", "plain"), ("teko-bulletin", "boto")]),
                ("Primitivas", [("teko-ballot-crypto", "plain"), ("teko-attestation", "plain")]),
                ("Fundação", [("teko-crypto", "focal"), ("teko-protocol", "plain")])]
@@ -92,23 +92,25 @@ def bft_certificado():
     return d
 
 def livro_dominios():
-    d = D("livro-dominios", 1100, 600, "Dois livros, os mesmos validadores", "Votos (pronto) e economia (moeda pronta; bens planejados), com os mesmos validadores", "LIVRO-RAZÃO")
+    d = D("livro-dominios", 1100, 600, "Dois livros, os mesmos validadores", "Votos e economia (moeda e bens) prontos como biblioteca; a rede de validadores compartilhada vem no M6", "LIVRO-RAZÃO")
     d.arrow([(500, 196), (500, 230), (410, 230), (410, 290)], "boto")
-    d.arrow([(600, 196), (600, 230), (670, 230), (670, 290)], "default", dashed=True)
+    d.arrow([(600, 196), (600, 230), (670, 230), (670, 290)], "default")
     d.arrow([(240, 328), (300, 328)], "link")
-    d.arrow([(860, 328), (780, 328)], "default", dashed=True)
-    d.arrow([(620, 366), (620, 450)], "default", dashed=True); d.arrow([(720, 366), (780, 366), (780, 450)], "default", dashed=True) if False else None
+    d.arrow([(860, 328), (780, 328)], "ok")
+    d.arrow([(620, 366), (620, 450)], "default")
+    d.arrow([(740, 366), (740, 408), (950, 408), (950, 450)], "default")
     d.node(430, 120, 240, 76, "Validadores", "stake + histórico", "focal", "compartilhados")
     d.node(300, 290, 220, 76, "Livro de votos", "implementado", "boto")
-    d.node(560, 290, 220, 76, "Livro de economia", "moeda + bens", "optional", "planejado")
+    d.node(560, 290, 220, 76, "Livro de economia", "moeda + bens", "ok", "biblioteca")
     d.node(40, 290, 200, 76, "Emissor", "elegibilidade", "external")
-    d.node(860, 290, 200, 76, "Órgão registrador", "M-de-N", "optional", "planejado")
+    d.node(860, 290, 200, 76, "Órgão registrador", "quórum M-de-N", "ok", "implementado")
     d.node(560, 450, 220, 76, "Moeda", "teko-coin · teto fixo", "ok", "implementado")
-    d.legend([(BOTO, "implementado", False), (MUTED, "planejado", True), (LINK, "elegibilidade", False)])
+    d.node(840, 450, 220, 76, "Bens", "teko-assets · gravames", "ok", "implementado")
+    d.legend([(BOTO, "livro de votos", False), (MUTED, "livro de economia", False), (LINK, "elegibilidade", False), (GREEN, "aprovação do órgão", False)])
     return d
 
 def venda_contra_pagamento():
-    d = D("venda-contra-pagamento", 1100, 0, "Venda de bem contra pagamento", "Planejado: troca atômica — ou tudo acontece, ou nada", "PLANEJADO")
+    d = D("venda-contra-pagamento", 1100, 0, "Venda de bem contra pagamento", "Troca atômica: ou tudo acontece, ou nada (módulo de bens + moeda)", "BENS")
     A = [("v", "Vendedor", "dispositivo", "onca", 110), ("c", "Comprador", "dispositivo", "onca", 380), ("o", "Órgão", "M-de-N", "plain", 650), ("l", "Livro de economia", "Swap atômico", "focal", 940)]
     M = [("v", "l", "propõe: bem X por moeda Y", "default", False), ("c", "l", "aceita e assina", "default", False),
          ("o", "l", "aprova a transferência", "default", False), ("l", "v", "recebe a moeda", "ok", True), ("l", "c", "recebe o bem", "ok", True)]

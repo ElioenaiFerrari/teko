@@ -46,3 +46,5 @@ pub const LEDGER_TX_ID: &str = "teko/v2/ledger-tx-id";
 pub const LEDGER_ADDRESS: &str = "teko/v2/ledger-address";
 pub const LEDGER_STATE_LEAF: &str = "teko/v2/ledger-state-leaf";
 pub const COIN_SLASH: &str = "teko/v2/coin-slash";
+pub const ASSET_INTENT: &str = "teko/v2/asset-intent";
+pub const ASSET_APPROVAL: &str = "teko/v2/asset-approval";

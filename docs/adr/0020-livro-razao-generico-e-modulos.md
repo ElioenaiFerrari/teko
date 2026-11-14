@@ -11,6 +11,7 @@ O quadro de votos é um log Merkle de entradas. Para moeda e bens precisamos de 
 - **Segurança de repetição**: o `nonce` deve ser igual ao número de transações já executadas pelo endereço; `chain_id` amarra a rede (uma transação da devnet não vale na testnet).
 - **Módulos plugáveis** (`Module`): decidem o que o `payload` significa. Cada módulo **escreve só no próprio espaço de nomes** e **lê** os dos outros (a moeda lerá saldos para os bens, por exemplo). Devem ser **determinísticos**.
 - **Blocos atômicos**: se uma transação falha, o bloco inteiro é recusado e nada muda. O proponente usa `select_valid` para montar blocos só com transações válidas.
+- **Chamada entre módulos** (`Ctx::call_as`, M4): um módulo chama outro na mesma transação, em nome de um endereço que ele já autenticou (usado pela troca bem × moeda). Atômico; profundidade limitada a 3. Ver [ADR-0022](0022-bens-registro-com-orgao-e-troca-atomica.md).
 - **Gênese** só antes do primeiro bloco (`genesis_put`).
 - **Taxas (M3)**: a `Tx` tem o campo `fee` (assinado). O núcleo consulta o *módulo de taxas* (`with_fee_module`) para o mínimo (`min_fee`) e a cobrança (`charge_fee`), antes de executar o módulo da transação. Além disso, `begin_block` roda por bloco (recompensas), e o proponente do bloco é passado a `apply_block`/`select_valid`.
 - **Fora do núcleo**: preço da taxa, stake, penalidades e emissão de moeda. Ficam nos módulos ([ADR-0021](0021-moeda-teto-fixo-stake-e-taxas.md)).

@@ -1,6 +1,6 @@
 # Teko — atalhos. Rode `make` (ou `make help`) para ver tudo.
 .DEFAULT_GOAL := help
-.PHONY: help setup emulator suite reset demo issuer-help preview fmt lint test check build clean-dev verify-fw release-check repro docs-check diagramas devnet close devnet-dkg devnet-stop devnet-status devnet-reset devnet-blocks testnet-help election publish simulate simulate-live tally reset-board
+.PHONY: help setup emulator suite reset demo issuer-help preview fmt lint test check build clean-dev verify-fw release-check repro docs-check diagramas coin-demo assets-demo devnet close devnet-dkg devnet-stop devnet-status devnet-reset devnet-blocks testnet-help election publish simulate simulate-live tally reset-board
 
 CARGO ?= cargo
 PIN   ?= 482913
@@ -106,6 +106,12 @@ check: ## Tudo que deve passar antes de commitar: formato + clippy + testes + do
 
 docs-check: ## Confere a documentação: links, imagens, texto alternativo, crates no README, títulos em pt-BR
 	./scripts/docs-check.sh
+
+coin-demo: ## Demonstração da moeda (teto, halving, taxa, stake, slash) rodando alguns blocos em memória
+	$(CARGO) run -q -p teko-coin --example demo
+
+assets-demo: ## Demonstração dos bens (registro com quórum do órgão, gravame, venda contra pagamento atômica)
+	$(CARGO) run -q -p teko-assets --example demo
 
 diagramas: ## Regenera os diagramas (docs/diagramas/*.svg|html|png) a partir de scripts/diagramas (precisa do Brave)
 	python3 scripts/diagramas/gerar.py

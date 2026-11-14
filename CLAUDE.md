@@ -20,6 +20,7 @@ crates/teko-registration/  (Fase 2) assinatura cega RFC 9474 (registro anônimo 
 crates/teko-ballot-crypto/  (Fase 2) ElGamal exponencial de limiar P-256, provas 0/1 e soma, DKG Feldman (sem auditoria)
 crates/teko-ledger/        (Fase 2, M2) livro-razão genérico: Tx assinada, módulos, blocos atômicos, raiz de estado (ADR-0020)
 crates/teko-coin/          (Fase 2, M3) moeda de teto fixo: halving, taxa por byte, stake, slash, faucet devnet (ADR-0021)
+crates/teko-assets/        (Fase 2, M4) bens: classes com órgão M-de-N, dono+comprador+órgão, gravames, Swap atômico (ADR-0022)
 crates/teko-chain/         (Fase 2) rede federada PoA: perfis devnet/testnet (mainnet TRAVADA), blocos M-de-N, réplica verificada
 tools/teko-node/           (Fase 2) validador (gossip, rodízio, troca de turno) + cliente que não confia em nós
 crates/teko-bulletin/      (Fase 2) log Merkle append-only, provas, head assinado, leitor tolerante

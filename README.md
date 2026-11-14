@@ -28,6 +28,7 @@ O computador (Suite) **nunca** vê chaves nem PIN. O dispositivo cifra e assina 
 | `teko-bft` | consenso BFT estilo Tendermint ponderado por stake (ainda fora do nó) |
 | `teko-ledger` | livro-razão genérico: transações assinadas, módulos, blocos atômicos e raiz de estado (base da moeda e dos bens) |
 | `teko-coin` | moeda de teto fixo: recompensa com *halving*, taxa por byte, stake, penalidade por equivocação e faucet de teste (só devnet) |
+| `teko-assets` | bens: classes governadas por órgão M-de-N, transferência com dono + comprador + órgão, gravames e venda contra pagamento atômica |
 | `teko-transport` | trait de transporte e implementação local |
 | `teko-client` | cliente da Suite: onboarding, assinatura, eleição |
 | `device-emulator` | "tela e botões" do dispositivo, em processo separado |
@@ -55,6 +56,8 @@ make devnet-status  # estado da rede     |  make devnet-blocks  # blocos
 make tally          # apuração no terminal
 make close          # encerra a votação; depois a Suite mostra os gráficos
 make devnet-stop    # para os validadores
+make coin-demo      # demonstração da moeda em memória: teto, halving, taxa, stake e slash
+make assets-demo    # demonstração dos bens: registro com quórum, gravame, venda contra pagamento
 ```
 
 Demo sem teclado (**nunca** em produção): `cargo run -p device-emulator --features test-buttons -- --auto-pin 482913`.
@@ -62,7 +65,7 @@ Demo sem teclado (**nunca** em produção): `cargo run -p device-emulator --feat
 ## Estado atual
 - **Fase 1** (dispositivo, Suite, emissor): completa.
 - **Fase 2** (votação): eleição com vários pleitos e jurisdições, registro anônimo, **cédulas cifradas** até o fechamento, rede PoA federada, reemissão sem seed, resultados em gráficos.
-- **Em construção** (programa do livro-razão): consenso BFT (`teko-bft`) e núcleo do livro (`teko-ledger`) e **moeda** (`teko-coin`) prontos; **bens**, carteira na Suite e votos sobre o BFT (M4 a M6) ainda só **planejados**.
+- **Em construção** (programa do livro-razão): consenso BFT (`teko-bft`) e núcleo do livro (`teko-ledger`) **moeda** (`teko-coin`) e **bens** (`teko-assets`) prontos como biblioteca; carteira/patrimônio no dispositivo e na Suite (M5) e os votos sobre o BFT (M6) ainda só **planejados**.
 - **Fora de escopo**: hardware real, validade jurídica (ICP-Brasil), prova ZK de elegibilidade, explorador público (só placeholder).
 
 ## Documentação

@@ -2,7 +2,7 @@
 
 ← [Índice da documentação](../README.md)
 
-> **Parcialmente planejado.** Já existem o consenso BFT ([fluxo 11](11-consenso-bft.md)), o **núcleo do livro** (`teko-ledger`, M2) e a **moeda** (`teko-coin`, M3), descritos abaixo. Bens, a carteira na Suite e os votos sobre o BFT são só **planejados** e podem mudar.
+> **Parcialmente planejado.** Já existem o consenso BFT ([fluxo 11](11-consenso-bft.md)), o **núcleo do livro** (`teko-ledger`, M2), a **moeda** (`teko-coin`, M3) e os **bens** (`teko-assets`, M4), descritos abaixo. A carteira no dispositivo e na Suite (M5) e os votos sobre o BFT (M6) são só **planejados** e podem mudar.
 
 ## Resumo
 Dois livros separados, com os **mesmos validadores**: o de **votos** (implementado) e o de **economia** (moeda e bens). Separar evita que regras de dinheiro e de propriedade contaminem a privacidade do voto.
@@ -34,10 +34,20 @@ Validadores (stake + histórico), emissor (elegibilidade de eleitores), órgão 
 - **Penalidade:** a evidência de equivocação do BFT queima uma parte do stake, uma vez por ofensa.
 - **Conservação:** criado − queimado = saldos + stake + em desvinculação (`audit`), testado com proptest. Decisão e **ponto pendente** (quem valida no início da rede): [ADR-0021](../adr/0021-moeda-teto-fixo-stake-e-taxas.md).
 
+**Para ver funcionando:** `make coin-demo` roda alguns blocos em memória e imprime saldos, stake, recompensa, taxa, penalidade e a conservação da oferta. Ainda não há moeda na devnet nem na Suite (M5 e M6).
+
+## Os bens (implementados)
+- **Classes** (imóvel, veículo...) nascem na gênese e são governadas por um **órgão registrador** com quórum M-de-N.
+- **Registro** do bem: só com o quórum do órgão.
+- **Transferência:** exige **três consentimentos** (dono, comprador e quórum do órgão). O consentimento é uma assinatura sobre uma intenção que inclui rede, partes, preço e a **versão** do bem; por isso não pode ser repetido depois de qualquer mudança.
+- **Gravames** (penhora etc.) só o órgão coloca e retira, e bloqueiam a venda.
+- **Venda contra pagamento:** o bem e a moeda trocam de mãos na mesma transação, ou nada acontece (diagrama abaixo).
+- **Para ver funcionando:** `make assets-demo`. Decisão e limites (inclusive o **problema do oráculo**): [ADR-0022](../adr/0022-bens-registro-com-orgao-e-troca-atomica.md).
+
 ## Passo a passo (previsto)
 1. **M2** `teko-ledger` (**feito**): envelope de transação, módulos, blocos atômicos e raiz de estado (veja "O núcleo do livro").
 2. **M3** `teko-coin` (**feito**): veja "A moeda".
-3. **M4** `teko-assets`: classes de bens com órgão M-de-N; transferência exige dono + comprador + órgão; gravames; troca atômica (*Swap*).
+3. **M4** `teko-assets` (**feito**): veja "Os bens".
 4. **M5** dispositivo ganha `GetAddress` e `SignTransaction`; a Suite, telas de carteira e patrimônio.
 5. **M6** o livro de votos passa a rodar sobre o BFT.
 
@@ -48,10 +58,10 @@ Toda assinatura no dispositivo; regras de bens pelo órgão; validadores refazem
 Problema do oráculo (o registro digital não prova o mundo físico), concentração de stake, aposta de que a moeda tenha valor.
 
 ## Onde está no código
-Núcleo: `crates/teko-ledger` (`tx.rs`, `state.rs`, `ledger.rs`). Moeda: `crates/teko-coin` (`module.rs`, `query.rs`). Consenso: `crates/teko-bft`. Bens ainda não existem.
+Núcleo: `crates/teko-ledger` (`tx.rs`, `state.rs`, `ledger.rs`). Moeda: `crates/teko-coin`. Bens: `crates/teko-assets` (`module.rs`, `types.rs`). Consenso: `crates/teko-bft`.
 
 ## Testes que cobrem
-Núcleo: `crates/teko-ledger/tests/ledger.rs`. Moeda: `crates/teko-coin/tests/coin.rs` (inclui proptest de conservação da oferta). Bens: nenhum ainda.
+Núcleo: `crates/teko-ledger/tests/ledger.rs`. Moeda: `crates/teko-coin/tests/coin.rs` (inclui proptest de conservação da oferta). Bens: `crates/teko-assets/tests/assets.rs` (inclui proptest de donos e oferta).
 
 ## Limites honestos
 Sem valor real, sem validade jurídica e sem integração com registros oficiais (por exemplo, cartórios). Início da rede (quem valida no começo) está **pendente de decisão** (ADR-0021).

@@ -192,6 +192,20 @@ Legenda: **P** = `proptest` (muitos casos), **U** = unitário, **E** = ponta a p
 | **Conservação da oferta** com qualquer sequência de operações (criado − queimado = saldos + stake + desvinculação ≤ teto) | coin (proptest): `supply_is_conserved_and_capped` |
 | Réplicas com a moeda chegam à mesma raiz; payload malformado recusado | coin: `replicas_with_the_coin_agree_on_the_state_root`, `malformed_payloads_are_refused` |
 
+## Bens (`teko-assets`, ADR-0022)
+
+| Invariante | Teste |
+|---|---|
+| Registro só com o quórum do órgão (1 de 2 não basta; a mesma chave duas vezes conta uma; quem não é do órgão não completa) | assets: `registration_needs_the_registrar_quorum`, `unknown_class_is_refused` |
+| Transferência exige dono + comprador + quórum; assinatura de estranho não vale como a do dono; um *relayer* pode enviar | assets: `transfer_needs_owner_buyer_and_registrar` |
+| **Sem repetição:** aprovações antigas morrem quando o bem muda de versão; aprovações de outra rede não valem | assets: `consents_cannot_be_replayed_after_a_change` |
+| Consentimento de `Transfer` não serve para `Swap`; o preço assinado é o preço pago | assets: `a_transfer_consent_cannot_be_used_as_a_swap`, `swap_is_atomic_delivery_versus_payment` |
+| Gravame bloqueia a venda; só o órgão coloca e retira | assets: `liens_block_transfers_until_released` |
+| **Troca atômica:** sem saldo, nada se move; com saldo, bem e moeda andam juntos e a oferta se conserva | assets: `swap_is_atomic_delivery_versus_payment` |
+| O órgão só é trocado pelo quórum atual; os antigos deixam de valer | assets: `registrars_can_be_rotated_only_by_the_current_quorum` |
+| Gênese e payload inválidos recusados | assets: `bad_genesis_classes_and_payloads_are_refused` |
+| Todo bem tem exatamente um dono, o índice de donos é consistente e a oferta de moeda se conserva sob transferências e trocas aleatórias | assets (proptest): `ownership_and_supply_invariants` |
+
 ## O que **não** está coberto por teste automático (honestidade)
 
 - **Cifra/provas:** sem vetores de teste de terceiros nem auditoria (implementação própria). Sem teste de tempo constante; sem fuzzing dos decodificadores. Sem teste de carga com milhares de cédulas por bloco.

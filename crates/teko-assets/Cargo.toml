@@ -1,0 +1,20 @@
+[package]
+name = "teko-assets"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+description = "Property/asset module for teko-ledger: classes governed by an M-of-N registrar, owner+buyer+registrar transfers, liens and atomic delivery-versus-payment swaps"
+
+[dependencies]
+teko-crypto.workspace = true
+teko-ledger.workspace = true
+teko-coin.workspace = true
+prost.workspace = true
+
+[dev-dependencies]
+proptest.workspace = true
+rand.workspace = true
+
+[lints]
+workspace = true

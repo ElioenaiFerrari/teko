@@ -4019,6 +4019,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "teko-assets"
+version = "0.1.0"
+dependencies = [
+ "proptest",
+ "prost",
+ "rand",
+ "teko-coin",
+ "teko-crypto",
+ "teko-ledger",
+]
+
+[[package]]
 name = "teko-attestation"
 version = "0.1.0"
 dependencies = [

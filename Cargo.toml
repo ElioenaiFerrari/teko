@@ -9,6 +9,7 @@ members = [
   "crates/teko-registration",
   "crates/teko-chain",
   "crates/teko-ballot-crypto",
+  "crates/teko-bft",
   "crates/teko-device-core",
   "crates/teko-transport",
   "crates/teko-client",
@@ -46,6 +47,7 @@ teko-bulletin = { path = "crates/teko-bulletin" }
 teko-registration = { path = "crates/teko-registration" }
 teko-chain = { path = "crates/teko-chain" }
 teko-ballot-crypto = { path = "crates/teko-ballot-crypto" }
+teko-bft = { path = "crates/teko-bft" }
 teko-transport = { path = "crates/teko-transport" }
 teko-client = { path = "crates/teko-client" }
 device-emulator = { path = "tools/device-emulator" }

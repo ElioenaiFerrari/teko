@@ -4044,6 +4044,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "teko-bft"
+version = "0.1.0"
+dependencies = [
+ "proptest",
+ "prost",
+ "rand",
+ "teko-crypto",
+]
+
+[[package]]
 name = "teko-bulletin"
 version = "0.1.0"
 dependencies = [

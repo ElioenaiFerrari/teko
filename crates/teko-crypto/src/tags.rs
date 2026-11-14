@@ -38,3 +38,6 @@ pub const BALLOT_SUM_PROOF: &str = "teko/v2/ballot-sum-proof";
 pub const DECRYPT_PROOF: &str = "teko/v2/decrypt-proof";
 pub const DKG_POP: &str = "teko/v2/dkg-pop";
 pub const BALLOT_CT: &str = "teko/v2/ballot-ciphertext";
+pub const BFT_VOTE: &str = "teko/v2/bft-vote";
+pub const BFT_PROPOSAL: &str = "teko/v2/bft-proposal";
+pub const BFT_BLOCK: &str = "teko/v2/bft-block";

@@ -1,0 +1,5 @@
+/target
+/dev/*
+!/dev/.gitkeep
+node_modules
+apps/suite/src-tauri/gen

@@ -1,0 +1,42 @@
+# CI do Teko. Escrito mas AINDA NÃO EXECUTADO (o repositório não tem remoto/commits).
+# Antes de confiar: fixe as actions por SHA (hoje por tag) e rode uma vez para ajustar.
+name: CI
+on: [push, pull_request]
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  core:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: rustup show   # lê rust-toolchain.toml
+      - run: cargo fmt --all --check
+      - run: cargo clippy --workspace --exclude teko-suite --all-targets --locked -- -D warnings
+      - run: cargo test --workspace --exclude teko-suite --locked
+      - run: ./scripts/release-check.sh     # build normal sem botões automáticos
+      - run: ./scripts/repro-build.sh       # build reproduzível (2 diretórios)
+
+  no-std:
+    # Prova que o núcleo compila para um alvo embarcado real (sem std).
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: rustup target add thumbv7em-none-eabihf
+      - run: >
+          cargo build --locked --target thumbv7em-none-eabihf
+          -p teko-protocol -p teko-crypto -p teko-attestation -p teko-device-core
+
+  suite:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: cargo clippy -p teko-suite --all-targets --locked -- -D warnings
+      - run: cargo build -p teko-suite --locked
+
+  deny:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: EmbarkStudios/cargo-deny-action@v2

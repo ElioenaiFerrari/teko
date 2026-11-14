@@ -2,7 +2,7 @@ use std::fs;
 use std::sync::{Arc, Mutex, MutexGuard, TryLockError};
 use std::time::Duration;
 
-use election_admin::{Admin, feed_new};
+use election_admin::{Admin, feed_new, new_tallier};
 use issuer_cli::{ISSUER_NAME, Issuer, Subject};
 use prost::Message;
 use serde::Serialize;
@@ -15,7 +15,7 @@ use teko_client::{
     inspect_firmware, resolve_dev_dir, verify_signed_document,
 };
 use teko_crypto::hex;
-use teko_election::{Phase, ResultsVisibility, SubmittedBallot, Tallier};
+use teko_election::{Phase, ResultsVisibility, SubmittedBallot, SubmittedRegistration, Tallier};
 use teko_protocol::{ButtonKind, Predicate, PredicateKind};
 use teko_transport::{TcpTransport, TransportError, connect_tcp};
 
@@ -72,6 +72,7 @@ fn prompt_name(kind: ButtonKind) -> &'static str {
         ButtonKind::ExportCommitment => "export_commitment",
         ButtonKind::LoadElection => "load_election",
         ButtonKind::VoterKey => "voter_key",
+        ButtonKind::Register => "register",
         ButtonKind::SignBallot => "sign_ballot",
         ButtonKind::Wipe => "wipe",
         ButtonKind::IssueIdentity => "issue_identity",
@@ -594,11 +595,15 @@ pub async fn election_vote(
 ) -> Result<VoteReceipt, UiError> {
     let trust = load_trust()?;
     let bytes = read_bundle()?;
-    let ballot = with_device(app, suite.inner().clone(), move |c| {
+    let (ballot, reg_note) = with_device(app, suite.inner().clone(), move |c| {
         if !c.has_election() {
             c.use_election_bundle(&trust, &bytes)?;
         }
-        c.sign_ballot(&election_id, &contest_id, option_index)
+        let reg_note = register_anonymously(c, &election_id, &contest_id)?;
+        Ok((
+            c.sign_ballot(&election_id, &contest_id, option_index)?,
+            reg_note,
+        ))
     })
     .await?;
     let submitted = submit_to_board(&ballot);
@@ -606,8 +611,59 @@ pub async fn election_vote(
         ballot,
         submitted: submitted.is_ok(),
         board_index: submitted.as_ref().ok().copied(),
-        note: submitted.err(),
+        note: submitted.err().or(reg_note),
     })
+}
+
+/// ANONYMOUS REGISTRATION (ADR-0008) for contests that require it: the DEVICE
+/// builds the blinded message (and asks the user on its own screen), the
+/// authority checks who the citizen is and blind-signs, the device unblinds, and
+/// `(voter_key, token)` goes to the board on its own. The authority never sees
+/// the voter key and the board never sees the identity.
+///
+/// Returns a warning when the token could not be published (the vote would not
+/// count); a refusal by the device or the authority is an error.
+fn register_anonymously(
+    c: &mut Client,
+    election_id: &str,
+    contest_id: &str,
+) -> Result<Option<String>, ClientError> {
+    let required = c
+        .election()?
+        .contests
+        .iter()
+        .find(|x| x.contest_id == contest_id)
+        .is_some_and(|x| x.registration_required);
+    if !required {
+        return Ok(None);
+    }
+    let req = c.begin_registration(election_id, contest_id)?;
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |d| d.as_secs());
+    let sig = Issuer::open(resolve_dev_dir())
+        .sign_registration(election_id, contest_id, &req, now)
+        .map_err(|e| ClientError::Unexpected(e.to_string()))?;
+    let token = c.finish_registration(election_id, contest_id, &sig)?;
+    let published = Admin::open(resolve_dev_dir())
+        .map_err(|e| e.to_string())
+        .and_then(|admin| {
+            if !admin.board_path().exists() {
+                return Err("o quadro ainda não foi publicado".to_string());
+            }
+            admin
+                .submit_registration(&SubmittedRegistration {
+                    election_id: election_id.to_string(),
+                    contest_id: contest_id.to_string(),
+                    voter_key: token.voter_key,
+                    token: token.token,
+                })
+                .map(|_| ())
+                .map_err(|e| e.to_string())
+        });
+    Ok(published
+        .err()
+        .map(|e| format!("Registro anônimo não publicado ({e}): a cédula não será contada.")))
 }
 
 fn submit_to_board(b: &SignedBallot) -> Result<u64, String> {
@@ -653,6 +709,9 @@ pub struct ContestView {
     /// `None` = hidden by the results policy.
     accepted: Option<u64>,
     rejected: u64,
+    /// Whether the contest requires anonymous registration, and how many keys did.
+    registration_required: bool,
+    registered: u64,
     distribution_visible: bool,
     top: Vec<OptionView>,
     others_votes: u64,
@@ -740,13 +799,29 @@ pub async fn results_snapshot(suite: State<'_, Suite>) -> Result<ResultsReply, U
         if guard.as_ref().is_some_and(|t| t.consumed() > board.len()) {
             *guard = None;
         }
-        let tallier = guard.get_or_insert_with(|| Tallier::new(admin.policy().clone()));
+        let tallier = guard.get_or_insert_with(|| new_tallier(admin.policy()));
         feed_new(tallier, &board);
         let t = tallier.snapshot();
+        let manifest = tallier.manifest().cloned();
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_or(0, |d| d.as_secs());
         let contests = t
             .contests
             .iter()
             .map(|c| {
+                // After the last allowed moment the vote is locked and the result
+                // is shown without waiting for anyone to publish the closing step.
+                let mut closed = c.clone();
+                let due = manifest
+                    .as_ref()
+                    .and_then(|m| m.contest(&c.contest_id))
+                    .and_then(|x| x.schedule.as_ref())
+                    .is_some_and(|s| now >= s.voting_closes);
+                if due && closed.phase == Phase::VotingOpen {
+                    closed.phase = Phase::VotingClosed;
+                }
+                let c = &closed;
                 let view = c.public_view(t.visibility);
                 let ranked = c.ranked(10);
                 let show = view.distribution;
@@ -764,6 +839,8 @@ pub async fn results_snapshot(suite: State<'_, Suite>) -> Result<ResultsReply, U
                     phase: phase_name(c.phase),
                     accepted: view.accepted,
                     rejected: c.rejected.total(),
+                    registration_required: c.registration_required,
+                    registered: c.registered,
                     distribution_visible: show,
                     top: if show {
                         ranked

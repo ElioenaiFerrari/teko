@@ -27,10 +27,10 @@
   const NOW = Math.floor(Date.now() / 1000), DAY = 86400;
   const voted = {};
   const contests = () => [
-    { contest_id: 'presidente', title: 'Presidente da República', phase: 'voting_open', phase_code: 3, scope: 'national', scope_code: '', option_names: ['Candidata Onça-Pintada', 'Candidato Boto-Cor-de-Rosa', 'Candidata Arara-Azul'], eligible: true, voting_opens: NOW - DAY, voting_closes: NOW + 3 * DAY },
-    { contest_id: 'governador-sp', title: 'Governador de São Paulo', phase: 'registration_open', phase_code: 2, scope: 'state', scope_code: 'SP', option_names: ['Candidato Guará', 'Candidata Vitória-Régia'], eligible: true, voting_opens: NOW + DAY, voting_closes: NOW + 5 * DAY },
-    { contest_id: 'governador-rj', title: 'Governador do Rio de Janeiro', phase: 'voting_open', phase_code: 3, scope: 'state', scope_code: 'RJ', option_names: ['Candidato Mico-Leão-Dourado', 'Candidata Capivara'], eligible: false, voting_opens: NOW - DAY, voting_closes: NOW + 2 * DAY },
-    { contest_id: 'prefeito-3550308', title: 'Prefeito de São Paulo', phase: 'candidates_published', phase_code: 1, scope: 'municipality', scope_code: '3550308', option_names: ['Candidata Jaguatirica', 'Candidato Tucano'], eligible: true, voting_opens: NOW + 3 * DAY, voting_closes: NOW + 4 * DAY },
+    { contest_id: 'presidente', title: 'Presidente da República', phase: 'voting_open', phase_code: 3, scope: 'national', scope_code: '', option_names: ['Candidata Onça-Pintada', 'Candidato Boto-Cor-de-Rosa', 'Candidata Arara-Azul'], eligible: true, registration_required: true, voting_opens: NOW - DAY, voting_closes: NOW + 3 * DAY },
+    { contest_id: 'governador-sp', title: 'Governador de São Paulo', phase: 'registration_open', phase_code: 2, scope: 'state', scope_code: 'SP', option_names: ['Candidato Guará', 'Candidata Vitória-Régia'], eligible: true, registration_required: true, voting_opens: NOW + DAY, voting_closes: NOW + 5 * DAY },
+    { contest_id: 'governador-rj', title: 'Governador do Rio de Janeiro', phase: 'voting_open', phase_code: 3, scope: 'state', scope_code: 'RJ', option_names: ['Candidato Mico-Leão-Dourado', 'Candidata Capivara'], eligible: false, registration_required: true, voting_opens: NOW - DAY, voting_closes: NOW + 2 * DAY },
+    { contest_id: 'prefeito-3550308', title: 'Prefeito de São Paulo', phase: 'candidates_published', phase_code: 1, scope: 'municipality', scope_code: '3550308', option_names: ['Candidata Jaguatirica', 'Candidato Tucano'], eligible: true, registration_required: true, voting_opens: NOW + 3 * DAY, voting_closes: NOW + 4 * DAY },
   ].map((c) => ({ ...c, voted: !!voted[c.contest_id] }));
   const electionSummary = () => ({ election_id: 'eleicoes-exemplo-2026', title: 'Eleições de exemplo 2026 (protótipo)', revision: 1, seq: 6, contests: contests() });
 
@@ -71,6 +71,7 @@
       const c = contests().find((x) => x.contest_id === contestId);
       if (!c.eligible) throw { code: 'NotEligible', message: 'fora do seu domicílio', retry_after_ms: 0, remaining: 0 };
       if (c.phase !== 'voting_open') throw { code: 'WrongPhase', message: 'votação fechada', retry_after_ms: 0, remaining: 0 };
+      if (c.registration_required) await prompt('register', 1200);
       await prompt('sign_ballot', 1500); voted[contestId] = true;
       const rc = live[contestId]; if (rc) rc.votes[optionIndex] += 1;
       return { ballot: { election_id: 'eleicoes-exemplo-2026', contest_id: contestId, contest_title: c.title, option_index: optionIndex, option_name: c.option_names[optionIndex], voter_key: '03' + 'cd'.repeat(32), signature: 'ef'.repeat(64) }, submitted: true, board_index: 4242, note: null };
@@ -83,7 +84,7 @@
         const total = c.votes.reduce((a, b) => a + b, 0);
         const ranked = c.names.map((n, i) => ({ index: i, name: n, number: String(c.first + i), votes: c.votes[i] })).sort((a, b) => b.votes - a.votes || a.index - b.index);
         const top = ranked.slice(0, 10), rest = ranked.slice(10);
-        return { contest_id: c.id, title: c.title, office: c.office, scope: c.scope, scope_code: c.code, phase: c.phase, accepted: total, rejected: 0, distribution_visible: c.phase === 'voting_open', top: c.phase === 'voting_open' ? top : [], others_votes: rest.reduce((a, b) => a + b.votes, 0), others_count: rest.length };
+        return { contest_id: c.id, title: c.title, office: c.office, scope: c.scope, scope_code: c.code, phase: c.phase, accepted: total, registered: total, registration_required: true, rejected: 0, distribution_visible: c.phase === 'voting_open', top: c.phase === 'voting_open' ? top : [], others_votes: rest.reduce((a, b) => a + b.votes, 0), others_count: rest.length };
       });
       return { available: true, reason: null, election_id: 'eleicoes-exemplo-2026', title: 'Eleições de exemplo (protótipo, dados fictícios)', revision: 1, visibility: 'live', simulated: true, head_size: 12 + headExtra, head_root: 'ab12cd34ef56' + '00'.repeat(26), ignored_governance: 0, contests: cs };
     },

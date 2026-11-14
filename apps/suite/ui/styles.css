@@ -385,3 +385,14 @@ input[type="checkbox"] { width: 20px; height: 20px; accent-color: var(--primary)
   *, *::before, *::after { animation: none !important; transition: none !important; }
   .pulse::after { display: none; }
 }
+
+/* Seleção com busca (combobox): digite para filtrar, setas/Enter/Esc ou clique. */
+.combo { position: relative; }
+.combo .input { padding-right: 38px; }
+.combo::after { content: ""; position: absolute; right: 14px; top: 19px; width: 8px; height: 8px; border-right: 2px solid var(--muted); border-bottom: 2px solid var(--muted); transform: rotate(45deg); pointer-events: none; }
+.combo__list { position: absolute; z-index: 30; left: 0; right: 0; top: calc(100% + 4px); max-height: 260px; overflow: auto; margin: 0; padding: 4px; list-style: none; background: var(--surface); border: 1px solid var(--border); border-radius: 12px; box-shadow: 0 12px 32px rgba(0,0,0,.28); }
+.combo__list[hidden] { display: none; }
+.combo__opt { padding: 9px 10px; border-radius: 8px; cursor: pointer; display: flex; justify-content: space-between; gap: 10px; }
+.combo__opt small { color: var(--muted); }
+.combo__opt[aria-selected="true"], .combo__opt:hover { background: var(--surface-2); }
+.combo__empty { padding: 10px; color: var(--muted); }

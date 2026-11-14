@@ -39,6 +39,69 @@
   const ico = (n, c = '') => `<svg class="i ${c}" viewBox="0 0 24 24" aria-hidden="true">${P[n] || ''}</svg>`;
 
   // ───────────────────────── util ─────────────────────────
+  // ───────────────────────── seleção com busca ─────────────────────────
+  const G = window.TEKO_GEO || { ufs: [], municipios: {}, paises: [] };
+  const geoCountries = () => G.paises.map(([v, n]) => ({ value: v, label: n, hint: v }));
+  const geoStates = () => G.ufs.map(([v, n]) => ({ value: v, label: n, hint: v }));
+  const geoCities = (uf) => (G.municipios[uf] || []).map(([v, n]) => ({ value: String(v), label: n, hint: uf }));
+  const fold = (s) => String(s).normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase();
+  const comboData = {};   // id -> opções; só a escolha feita NA LISTA vale (nada de texto livre)
+  function combo(id, items, value, placeholder) {
+    comboData[id] = items;
+    const cur = items.find((i) => i.value === value);
+    return `<div class="combo" data-combo="${id}" data-value="${esc(cur ? cur.value : '')}">
+      <input class="input" id="${id}" role="combobox" aria-expanded="false" aria-controls="${id}-list" aria-autocomplete="list" autocomplete="off" spellcheck="false" placeholder="${esc(placeholder)}" value="${esc(cur ? cur.label : '')}">
+      <ul class="combo__list" id="${id}-list" role="listbox" hidden></ul></div>`;
+  }
+  const comboValue = (id) => { const w = document.querySelector(`[data-combo="${id}"]`); return w ? w.dataset.value : ''; };
+  function comboOpen(w, query) {
+    const id = w.dataset.combo, list = $('.combo__list', w), input = $('input', w);
+    const q = fold(query || '');
+    const hits = (comboData[id] || []).filter((i) => !q || fold(i.label).includes(q) || fold(i.hint).startsWith(q)).slice(0, 60);
+    list.innerHTML = hits.length
+      ? hits.map((i, k) => `<li class="combo__opt" role="option" data-v="${esc(i.value)}" aria-selected="${k === 0}"><span>${esc(i.label)}</span><small>${esc(i.hint)}</small></li>`).join('')
+      : '<li class="combo__empty">Nada encontrado</li>';
+    list.hidden = false; input.setAttribute('aria-expanded', 'true');
+  }
+  function comboClose(w) { $('.combo__list', w).hidden = true; $('input', w).setAttribute('aria-expanded', 'false'); }
+  function comboPick(w, value) {
+    const id = w.dataset.combo, item = (comboData[id] || []).find((i) => i.value === value);
+    if (!item) return;
+    w.dataset.value = item.value; $('input', w).value = item.label; comboClose(w);
+    if (id === 'f-uf') {   // o município depende do estado
+      const m = document.querySelector('[data-combo="f-mun"]');
+      if (m) { comboData['f-mun'] = geoCities(item.value); m.dataset.value = ''; $('input', m).value = ''; $('input', m).focus(); comboOpen(m, ''); }
+    }
+  }
+  document.addEventListener('input', (e) => { const w = e.target.closest && e.target.closest('.combo'); if (w) { w.dataset.value = ''; comboOpen(w, e.target.value); } });
+  document.addEventListener('focusin', (e) => { const w = e.target.closest && e.target.closest('.combo'); if (w && e.target.tagName === 'INPUT') { e.target.select(); comboOpen(w, ''); } });
+  document.addEventListener('mousedown', (e) => {
+    const opt = e.target.closest && e.target.closest('.combo__opt');
+    if (opt) { e.preventDefault(); comboPick(opt.closest('.combo'), opt.dataset.v); return; }
+    document.querySelectorAll('.combo').forEach((w) => { if (!w.contains(e.target)) comboClose(w); });
+  });
+  document.addEventListener('focusout', (e) => {
+    const w = e.target.closest && e.target.closest('.combo'); if (!w) return;
+    setTimeout(() => {   // saiu do campo sem escolher: volta à última escolha válida
+      if (w.contains(document.activeElement)) return;
+      comboClose(w);
+      const item = (comboData[w.dataset.combo] || []).find((i) => i.value === w.dataset.value);
+      $('input', w).value = item ? item.label : '';
+    }, 0);
+  });
+  document.addEventListener('keydown', (e) => {
+    const w = e.target.closest && e.target.closest('.combo'); if (!w) return;
+    const list = $('.combo__list', w), opts = [...list.querySelectorAll('.combo__opt')];
+    const at = opts.findIndex((o) => o.getAttribute('aria-selected') === 'true');
+    if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+      e.preventDefault(); if (list.hidden) comboOpen(w, ''); else if (opts.length) {
+        const n = (at + (e.key === 'ArrowDown' ? 1 : -1) + opts.length) % opts.length;
+        opts.forEach((o, k) => o.setAttribute('aria-selected', k === n)); opts[n].scrollIntoView({ block: 'nearest' });
+      }
+    } else if (e.key === 'Enter') { if (!list.hidden && opts[at]) { e.preventDefault(); comboPick(w, opts[at].dataset.v); } }
+    else if (e.key === 'Escape') { comboClose(w); }
+  });
+
   const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
   const $ = (sel, root = document) => root.querySelector(sel);
   const groups = (hex, n = 4) => (hex.match(new RegExp(`.{1,${n}}`, 'g')) || []).map((g) => `<span>${esc(g)}</span>`).join('');
@@ -144,6 +207,7 @@
     load_credential: ['Confirme a instalação da credencial', 'Confira o emissor e os dados mostrados no dispositivo.'],
     sign_ballot: ['Confirme o voto no dispositivo', 'Confira o cargo, a jurisdição e o NOME do candidato que o dispositivo mostra. Só confirme se for o seu voto.'],
     load_election: ['Confirme a eleição no dispositivo', 'O dispositivo verificou as assinaturas das instituições. Confira o título e os pleitos.'],
+    register: ['Confirme o registro anônimo no dispositivo', 'A autoridade confere QUEM você é, mas assina às cegas: ela não vê a sua chave de eleitor. Depois o dispositivo pedirá a confirmação do voto.'],
     voter_key: ['Confirme no dispositivo', 'Será exportada a chave PÚBLICA de eleitor deste pleito.'],
     export_commitment: ['Confirme no dispositivo', 'Exportar o compromisso de eleitor.'],
     wipe: ['Confirme o apagamento no dispositivo', 'No dispositivo, digite APAGAR para confirmar. Isso é irreversível.'],
@@ -460,9 +524,9 @@
       <div class="fields">
         <div class="field"><label for="f-name">Nome completo</label><input class="input" id="f-name" value="Maria da Silva" autocomplete="off"></div>
         <div class="field"><label for="f-birth">Data de nascimento</label><input class="input" id="f-birth" type="date" value="1990-05-17"></div>
-        <div class="field"><label for="f-nat">Nacionalidade</label><input class="input" id="f-nat" value="BR" maxlength="2" autocomplete="off"><span class="hint">2 letras (ex.: BR)</span></div>
-        <div class="field"><label for="f-uf">Domicílio eleitoral: UF</label><input class="input" id="f-uf" value="SP" maxlength="2" autocomplete="off"><span class="hint">Define em quais pleitos você vota (governador)</span></div>
-        <div class="field"><label for="f-mun">Domicílio eleitoral: município (IBGE)</label><input class="input" id="f-mun" value="3550308" maxlength="7" autocomplete="off" inputmode="numeric"><span class="hint">7 dígitos; 3550308 = São Paulo (prefeito)</span></div>
+        <div class="field"><label for="f-nat">Nacionalidade</label>${combo('f-nat', geoCountries(), 'BR', 'Digite para buscar o país')}</div>
+        <div class="field"><label for="f-uf">Domicílio eleitoral: estado</label>${combo('f-uf', geoStates(), 'SP', 'Digite para buscar o estado')}<span class="hint">Define em quais pleitos você vota (governador)</span></div>
+        <div class="field"><label for="f-mun">Domicílio eleitoral: município</label>${combo('f-mun', geoCities('SP'), '3550308', 'Escolha o estado e busque o município')}<span class="hint">Define o pleito de prefeito</span></div>
       </div>
       <p class="muted">Quem atesta o domicílio no mundo real é o cadastro eleitoral; aqui o <code>issuer-cli</code> simula esse papel.</p>
       <div class="row"><button class="btn" data-act="issue">${ico('badge')}Emitir credencial</button></div>
@@ -614,7 +678,7 @@
 
   function contestCard(c) {
     const [phaseLabel, phaseKind] = PHASES[c.phase] || [c.phase, ''];
-    const canVote = c.phase === 'voting_open' && c.eligible && !c.voted;
+    const canVote = c.phase === 'voting_open' && c.eligible && !c.voted && Date.now() / 1000 < c.voting_closes;
     const ballot = S.ballots[c.contest_id];
     const why = !c.eligible ? 'Fora do seu domicílio eleitoral: o dispositivo recusa.'
       : c.voted ? 'Este dispositivo já votou neste pleito.'
@@ -625,14 +689,15 @@
     return `<article class="card" ${c.eligible ? '' : 'style="opacity:.82"'}>
       <div class="card__head"><div class="card__ico card__ico--${c.scope === 'national' ? 'arara' : c.scope === 'state' ? 'onca' : 'boto'}">${ico(c.scope === 'national' ? 'globe' : 'ballot')}</div>
         <div><h2>${esc(c.title)}</h2>
-        <div class="row" style="gap:6px;margin-top:6px">${chip(scopeLabel(c), 'info')}${chip(phaseLabel, phaseKind)}${c.eligible ? chip(c.scope === 'national' ? 'Todos votam' : 'Seu domicílio', 'ok', 'check') : chip('Fora do seu domicílio', 'bad', 'lock')}${c.voted ? chip('Você já votou', 'ok', 'badge') : ''}</div></div></div>
+        <div class="row" style="gap:6px;margin-top:6px">${chip(scopeLabel(c), 'info')}${chip(phaseLabel, phaseKind)}${c.eligible ? chip(c.scope === 'national' ? 'Todos votam' : 'Seu domicílio', 'ok', 'check') : chip('Fora do seu domicílio', 'bad', 'lock')}${c.voted ? chip('Você já votou', 'ok', 'badge') : ''}${c.registration_required ? chip('Registro anônimo', 'info', 'shield') : ''}</div></div></div>
       <p class="muted">Votação: ${esc(fmtDate(c.voting_opens))} até ${esc(fmtDate(c.voting_closes))}</p>
       <div class="options" role="radiogroup" aria-label="Candidatos: ${esc(c.title)}">${opts}</div>
       ${why ? `<p class="muted">${esc(why)}</p>` : ''}
+      ${canVote && c.registration_required ? '<p class="muted">Este pleito exige registro anônimo: o dispositivo pedirá <strong>duas confirmações</strong> (registro e voto).</p>' : ''}
       ${canVote ? `<div class="row"><button class="btn btn--gold" data-act="vote" data-contest="${esc(c.contest_id)}">${ico('ballot')}Votar neste pleito</button></div>` : ''}
       ${ballot ? callout('info', 'shield', 'Cédula assinada pelo dispositivo (protótipo)', `<p>Voto em <strong>${esc(ballot.option_name)}</strong>. Assinatura <span class="mono">${esc(short(ballot.signature, 10, 8))}</span> conferida pela Suite.
         ${ballot.submitted ? `Enviada ao quadro local (posição #${ballot.board_index}): <a href="#" data-act="gotoresults">veja nos resultados ao vivo</a>.` : esc(ballot.note || 'Não foi enviada ao quadro.')}
-        Sem registro anônimo nem prova de elegibilidade: protótipo.</p>`) : ''}
+        ${c.registration_required ? 'Registro anônimo (assinatura cega) conferido; ainda sem prova ZK nem anulador: protótipo.' : 'Sem registro anônimo nem prova de elegibilidade: protótipo.'}</p>`) : ''}
     </article>`;
   }
 
@@ -757,7 +822,7 @@
     const chips = `${chip(scope, 'info')}${chip(phaseLabel, phaseKind)}`;
     const chipsEl = $('[data-slot=chips]', art); if (chipsEl.dataset.v !== chips) { chipsEl.dataset.v = chips; chipsEl.innerHTML = chips; }
     const totalEl = $('[data-slot=total]', art);
-    const total = c.accepted === null ? 'Total oculto até o fechamento' : `${nf.format(c.accepted)} cédulas aceitas${c.rejected ? ` · ${nf.format(c.rejected)} rejeitadas` : ''}`;
+    const total = c.accepted === null ? 'Total oculto até o fechamento' : `${nf.format(c.accepted)} cédulas aceitas${c.registration_required ? ` · ${nf.format(c.registered)} registrados` : ''}${c.rejected ? ` · ${nf.format(c.rejected)} rejeitadas` : ''}`;
     if (totalEl.textContent !== total) totalEl.textContent = total;
     const body = $('[data-slot=body]', art);
     if (!c.distribution_visible) {
@@ -857,8 +922,9 @@
       S.lastKey = ''; render();
     },
     async issue() {
-      const name = $('#f-name').value, birth = $('#f-birth').value, nat = $('#f-nat').value;
-      const state = $('#f-uf').value.trim().toUpperCase(), municipality = $('#f-mun').value.trim();
+      const name = $('#f-name').value, birth = $('#f-birth').value, nat = comboValue('f-nat');
+      const state = comboValue('f-uf'), municipality = comboValue('f-mun');
+      if (!state || !municipality || !nat) { toast('Escolha nacionalidade, estado e município na lista.'); return; }
       await guarded(async () => {
         await call('issue_credential', { name, birthDate: birth, nationality: nat, state, municipality });
         toast('Credencial emitida e instalada no dispositivo.', 'ok');

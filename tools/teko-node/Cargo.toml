@@ -1,0 +1,30 @@
+[package]
+name = "teko-node"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+description = "Teko validator node (federated PoA devnet/testnet) and verified client"
+
+[lib]
+name = "teko_node"
+path = "src/lib.rs"
+
+[[bin]]
+name = "teko-node"
+path = "src/main.rs"
+
+[dependencies]
+teko-chain.workspace = true
+teko-bulletin.workspace = true
+teko-crypto.workspace = true
+teko-attestation.workspace = true
+prost = { workspace = true, features = ["std"] }
+rand.workspace = true
+thiserror = { workspace = true, features = ["std"] }
+
+[dev-dependencies]
+proptest.workspace = true
+
+[lints]
+workspace = true

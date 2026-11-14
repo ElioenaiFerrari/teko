@@ -7,12 +7,14 @@ members = [
   "crates/teko-election",
   "crates/teko-bulletin",
   "crates/teko-registration",
+  "crates/teko-chain",
   "crates/teko-device-core",
   "crates/teko-transport",
   "crates/teko-client",
   "tools/device-emulator",
   "tools/issuer-cli",
   "tools/election-admin-cli",
+  "tools/teko-node",
   "apps/suite/src-tauri",
 ]
 
@@ -41,10 +43,12 @@ teko-attestation = { path = "crates/teko-attestation" }
 teko-election = { path = "crates/teko-election" }
 teko-bulletin = { path = "crates/teko-bulletin" }
 teko-registration = { path = "crates/teko-registration" }
+teko-chain = { path = "crates/teko-chain" }
 teko-transport = { path = "crates/teko-transport" }
 teko-client = { path = "crates/teko-client" }
 device-emulator = { path = "tools/device-emulator" }
 issuer-cli = { path = "tools/issuer-cli" }
+teko-node = { path = "tools/teko-node" }
 election-admin = { package = "election-admin-cli", path = "tools/election-admin-cli" }
 
 [workspace.lints.clippy]

@@ -41,6 +41,7 @@ fn world() -> World {
         revoked_batches: Vec::new(),
         gov_signers: gov.iter().map(public_key_bytes).collect(),
         gov_threshold: 2,
+        chain_id: String::new(),
     };
     let factory = FactoryData {
         batch_key: batch.to_bytes().to_vec(),
@@ -918,6 +919,7 @@ fn election_manifest(w: &World) -> ElectionManifest {
         ],
         ballot_kind: BALLOT_KIND_PUBLIC.into(),
         results_visibility: ResultsVisibility::Live as i32,
+        chain_id: String::new(),
         registry_key: vec![],
         revision: 1,
         signatures: vec![],
@@ -1692,6 +1694,40 @@ fn an_unreadable_stored_election_never_blocks_loading_a_good_one() {
         Response::Unlocked(_)
     ));
     let m = election_manifest(&w);
+    let ts = history(&m, &w);
+    assert!(matches!(
+        dev.handle(load_req(&m, &ts)),
+        Response::ElectionLoaded(_)
+    ));
+}
+
+#[test]
+fn a_device_bound_to_a_network_refuses_elections_of_any_other_network() {
+    let mut w = world();
+    w.trust.chain_id = "teko-devnet-1".into();
+    let hal = ScriptedHal::new();
+    let mut dev = boot(&w, &hal, 8);
+    onboard(&mut dev, &w, &hal);
+    let sign = |m: &mut ElectionManifest| {
+        m.signatures = [0usize, 1]
+            .iter()
+            .map(|i| sign_election(&w.gov[*i], m))
+            .collect();
+    };
+    for other in ["", "teko-testnet-1"] {
+        let mut m = election_manifest(&w);
+        m.chain_id = other.into();
+        sign(&mut m);
+        let ts = history(&m, &w);
+        assert_eq!(
+            failure_code(&dev.handle(load_req(&m, &ts))),
+            Some(ErrorCode::InvalidArgument),
+            "chain_id {other:?}"
+        );
+    }
+    let mut m = election_manifest(&w);
+    m.chain_id = "teko-devnet-1".into();
+    sign(&mut m);
     let ts = history(&m, &w);
     assert!(matches!(
         dev.handle(load_req(&m, &ts)),

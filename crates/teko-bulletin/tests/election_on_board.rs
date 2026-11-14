@@ -73,6 +73,7 @@ fn world() -> World {
         ],
         ballot_kind: BALLOT_KIND_PUBLIC.into(),
         results_visibility: ResultsVisibility::Live as i32,
+        chain_id: String::new(),
         registry_key: vec![],
         revision: 1,
         signatures: vec![],

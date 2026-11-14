@@ -1,6 +1,6 @@
 # Teko — atalhos. Rode `make` (ou `make help`) para ver tudo.
 .DEFAULT_GOAL := help
-.PHONY: help setup emulator suite reset demo issuer-help preview fmt lint test check build clean-dev verify-fw release-check repro election publish simulate simulate-live tally reset-board
+.PHONY: help setup emulator suite reset demo issuer-help preview fmt lint test check build clean-dev verify-fw release-check repro devnet devnet-stop devnet-status devnet-reset devnet-blocks testnet-help election publish simulate simulate-live tally reset-board
 
 CARGO ?= cargo
 PIN   ?= 482913
@@ -21,6 +21,34 @@ emulator: ## Liga o dispositivo emulado (PIN e confirmações são digitados NES
 
 suite: ## Abre a Teko Suite (janela desktop)
 	$(CARGO) run -q -p teko-suite
+
+NET ?= dev/net
+NODE = target/debug/teko-node
+
+devnet: ## Sobe a blockchain de TESTE local: 3 validadores PoA (2 de 3 assinam), só loopback
+	$(CARGO) build -q -p teko-node
+	@test -f $(NET)/network.txt || $(NODE) init --dir $(NET) --network devnet
+	@$(NODE) stop --dir $(NET) >/dev/null 2>&1; \
+	for i in 0 1 2; do $(NODE) run --dir $(NET) --index $$i >$(NET)/node-$$i/node.log 2>&1 & done; \
+	sleep 1; $(NODE) status --dir $(NET)
+	@echo; echo "Próximo: make election (liga a eleição à rede) → reinicie o emulador → make publish → abra a Suite"
+
+devnet-stop: ## Para os 3 validadores (os blocos ficam em dev/net/node-*/blocks.log)
+	@$(NODE) stop --dir $(NET)
+
+devnet-status: ## Altura, entradas, mempool e pares de cada validador
+	@$(NODE) status --dir $(NET)
+
+devnet-blocks: ## Lista os blocos, verificados aqui (assinaturas, encadeamento e raiz Merkle)
+	@$(NODE) blocks --dir $(NET)
+
+devnet-reset: ## Apaga a cadeia de teste (só os blocos; mantém as chaves). Pare antes: make devnet-stop
+	@$(NODE) reset --dir $(NET)
+
+testnet-help: ## Como montar uma testnet em várias máquinas (a mainnet está TRAVADA)
+	@echo "Testnet: teko-node init --network testnet --dir <pasta>; distribua node-<i>/validator.key a cada instituição;"
+	@echo "edite peers.txt com os endereços reais. Por padrão o nó só escuta em loopback (de propósito)."
+	@echo "Mainnet: travada nesta fase (docs/NETWORKS.md)."
 
 election: ## Recria a eleição de exemplo (7 pleitos, datas novas). Apaga o quadro e o marcador de simulação
 	$(CARGO) run -q -p issuer-cli -- dev-election

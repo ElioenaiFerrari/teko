@@ -162,6 +162,7 @@ impl Issuer {
             revoked_batches: Vec::new(),
             gov_signers: gov,
             gov_threshold: GOV_THRESHOLD,
+            chain_id: String::new(),
         };
         fs::write(self.dir.join("trust.txt"), trust.to_text())?;
         Ok(trust)
@@ -308,6 +309,24 @@ impl Issuer {
                 }),
             })
         };
+        // If a local test network exists (`dev/net/network.txt`), the election is bound
+        // to its chain_id and the device trust file is updated to accept only that
+        // network (restart the emulator to pick it up).
+        let net_chain_id = fs::read_to_string(self.dir.join("net").join("network.txt"))
+            .ok()
+            .and_then(|t| {
+                t.lines().find_map(|l| {
+                    l.trim()
+                        .strip_prefix("chain_id=")
+                        .map(|v| v.trim().to_string())
+                })
+            })
+            .unwrap_or_default();
+        if !net_chain_id.is_empty() {
+            let mut trust = self.trust()?;
+            trust.chain_id = net_chain_id.clone();
+            fs::write(self.dir.join("trust.txt"), trust.to_text())?;
+        }
         let (y, m, d) = civil_from_days((now / 86_400) as i64);
         let contests: Vec<Contest> = vec![
             contest(
@@ -432,6 +451,7 @@ impl Issuer {
             revision: 1,
             signatures: Vec::new(),
             results_visibility: ResultsVisibility::AfterClose as i32,
+            chain_id: net_chain_id.clone(),
         };
         manifest.signatures = [0usize, 1]
             .iter()

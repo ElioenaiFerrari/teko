@@ -114,8 +114,34 @@ Legenda: **P** = `proptest` (muitos casos), **U** = unitário, **E** = ponta a p
 | Quadro: só chaves registradas contam; token de um pleito não vale no outro; simulador registra de verdade (fluxo cego completo) | admin: `only_registered_keys_count_and_a_token_is_bound_to_its_contest`, `simulated_voters_...` |
 | **Ponta a ponta com dispositivo real:** a autoridade vê o cidadão e um valor cego (nunca a chave de eleitor; o livro dela não a contém), recusa pedido adulterado e pedido ligado a outro pleito, e o voto registrado é contado | e2e: `election_flow_president_for_all_governor_and_mayor_by_domicile` |
 
+## Fase 2: fechamento no prazo e explorador
+
+| Garantia | Teste |
+|---|---|
+| No prazo a governança (simulada, 2 de 3) fecha o pleito; antes não fecha nada; é idempotente; cédula anexada depois é recusada pela apuração pública e o fechamento não é contado como governança ignorada | admin: `at_the_deadline_governance_closes_the_contest_and_the_log_locks_the_vote` |
+| O dispositivo recusa votar/registrar após `voting_closes`, sem pedir confirmação | device-core: `the_device_itself_refuses_to_vote_after_the_last_allowed_moment` |
+
+## Fase 2, etapa 6: rede federada PoA
+
+| Garantia | Teste |
+|---|---|
+| Blocos encadeiam e a réplica reconstrói exatamente o mesmo log Merkle, verificando tudo | chain: `blocks_chain_and_rebuild_exactly_the_same_merkle_log` |
+| Bloco exige M validadores distintos, incluindo o proponente; duplicata e estranho não contam; nada é commitado se falhar | chain: `a_block_needs_m_distinct_validators_including_the_proposer` |
+| Qualquer campo adulterado (chain_id, altura, prev_hash, proponente, entradas, raiz, tamanho, timestamp, tipo) é recusado | chain: `every_tampered_field_is_refused` |
+| Validador nunca assina bloco inválido nem sendo de fora; bloco de outra rede é inútil; mainnet travada; perfil validado | chain: `a_validator_never_signs...`, `a_block_from_another_network_is_useless_here`, profile: `mainnet_is_locked_everywhere`, `text_roundtrip_and_validation` |
+| 3 nós convergem à mesma altura e raiz; cada réplica verifica sozinha; duplicatas descartadas na rede toda | node: `three_nodes_produce_blocks_and_every_replica_verifies_to_the_same_log` |
+| Com 1 validador fora do ar a rede continua (inclusive no turno dele, via troca de turno) | node: `the_network_keeps_working_with_one_validator_down_including_its_turn` |
+| Nó reiniciado reverifica seu log e recupera o atraso | node: `a_restarted_node_replays_its_log_and_catches_up` |
+| Bloco conflitante com quórum na mesma altura é detectado como equívoco e não altera a cadeia | node: `conflicting_blocks_with_a_quorum_are_detected_as_equivocation` |
+| Nó só escuta em loopback e só com a chave do seu índice | node: `a_node_refuses_to_listen_outside_loopback_and_a_wrong_key` |
+| Dispositivo ligado a uma rede recusa eleição de outra; apuração ligada ignora manifesto de outra | device-core: `a_device_bound_to_a_network_refuses_elections_of_any_other_network`; election: `a_tallier_bound_to_a_network_ignores_manifests_of_another` |
+| **Eleição inteira na rede:** publicar, registrar, votar e simular via blocos; apuração reconstruída da réplica verificada; ao parar os nós volta ao arquivo | admin: `an_election_runs_on_the_network_and_the_tally_is_rebuilt_from_verified_blocks` |
+
 ## O que **não** está coberto por teste automático (honestidade)
 
+- **Rede em várias máquinas / testnet real, partições de rede e latência:** só loopback, 3 nós em threads. Sem teste de carga nem fuzzing do protocolo de rede.
+- **Painel de rede na Suite (JS):** só exercitado com o mock no navegador.
+- **Explorador público (Rust + JS):** a conferência de inclusão e o explorador só foram exercitados com o mock no navegador; a prova Merkle em si é testada em `teko-bulletin`. A "conferência" na Suite recalcula contra a raiz do MESMO arquivo: confirma consistência interna, não protege contra um operador que mostre logs diferentes (V19).
 - **Anonimato real do registro:** a propriedade de cegamento vem da matemática do RFC (vetor oficial) e o teste confere que o livro e o pedido não contêm a chave; **não há teste estatístico nem de canal/tempo**. No protótipo, autoridade e quadro rodam no mesmo processo.
 - **Implementação RFC 9474 própria sem auditoria independente.**
 

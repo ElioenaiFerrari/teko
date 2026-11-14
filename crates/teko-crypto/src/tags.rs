@@ -29,3 +29,6 @@ pub const BALLOT: &str = "teko/v2/ballot";
 pub const REGISTRATION: &str = "teko/v2/registration";
 pub const REGISTRATION_REQUEST: &str = "teko/v2/registration-request";
 pub const REGISTRATION_BLIND: &str = "teko/v2/registration-blind";
+pub const BLOCK: &str = "teko/v2/block";
+pub const BLOCK_ENTRIES: &str = "teko/v2/block-entries";
+pub const CHAIN_GENESIS: &str = "teko/v2/chain-genesis";

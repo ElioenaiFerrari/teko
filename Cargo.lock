@@ -928,8 +928,10 @@ dependencies = [
  "prost",
  "teko-attestation",
  "teko-bulletin",
+ "teko-chain",
  "teko-crypto",
  "teko-election",
+ "teko-node",
  "teko-registration",
  "thiserror 2.0.21",
 ]
@@ -4039,6 +4041,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "teko-chain"
+version = "0.1.0"
+dependencies = [
+ "proptest",
+ "prost",
+ "rand",
+ "teko-attestation",
+ "teko-bulletin",
+ "teko-crypto",
+ "teko-election",
+ "thiserror 2.0.21",
+]
+
+[[package]]
 name = "teko-client"
 version = "0.1.0"
 dependencies = [
@@ -4100,6 +4116,20 @@ dependencies = [
  "prost",
  "rand",
  "teko-attestation",
+ "teko-crypto",
+ "thiserror 2.0.21",
+]
+
+[[package]]
+name = "teko-node"
+version = "0.1.0"
+dependencies = [
+ "proptest",
+ "prost",
+ "rand",
+ "teko-attestation",
+ "teko-bulletin",
+ "teko-chain",
  "teko-crypto",
  "thiserror 2.0.21",
 ]

@@ -148,6 +148,10 @@ pub struct ElectionManifest {
     pub signatures: Vec<SignerSignature>,
     #[prost(enumeration = "ResultsVisibility", tag = "9")]
     pub results_visibility: i32,
+    /// Network this election lives on (empty = unbound, dev only). Part of the
+    /// signed manifest, so it cannot be moved to another network.
+    #[prost(string, tag = "10")]
+    pub chain_id: String,
 }
 
 impl ElectionManifest {
@@ -240,6 +244,9 @@ pub fn validate_manifest(m: &ElectionManifest) -> Result<(), ElectionError> {
     if m.revision == 0 {
         return Err(bad("revision starts at 1"));
     }
+    if m.chain_id.len() > 64 || !m.chain_id.is_ascii() {
+        return Err(bad("chain_id must be at most 64 ASCII chars"));
+    }
     if m.results_visibility() == ResultsVisibility::Unspecified {
         return Err(bad("results_visibility must be declared"));
     }
@@ -320,6 +327,9 @@ pub fn validate_revision(
     }
     if prev.ballot_kind != next.ballot_kind {
         return Err(bad("ballot_kind cannot change"));
+    }
+    if prev.chain_id != next.chain_id {
+        return Err(bad("chain_id cannot change"));
     }
     if prev.results_visibility != next.results_visibility {
         return Err(bad("results_visibility cannot change"));
@@ -444,6 +454,7 @@ pub(crate) mod fixtures {
             revision: 1,
             signatures: Vec::new(),
             results_visibility: ResultsVisibility::Live as i32,
+            chain_id: String::new(),
         }
     }
 

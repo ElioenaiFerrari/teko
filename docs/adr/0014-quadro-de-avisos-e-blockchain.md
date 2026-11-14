@@ -1,6 +1,6 @@
 # ADR-0014 — Quadro de avisos (blockchain) da votação
 
-**Status:** Proposto · **Decisão: PENDENTE (dono do produto)** · Fase 2 (ver `docs/PHASE-2-VOTING.md` §5)
+**Status:** Aceito **provisoriamente** (2026-11-14): log Merkle atrás de `BulletinBoard` **e** rede federada PoA de teste (`teko-chain`, `teko-node`). Detalhes em [NETWORKS.md](../NETWORKS.md). Confirmação do dono do produto pendente (#16).
 
 ## Contexto
 Precisamos de um registro **append-only e verificável** para manifestos, raízes da árvore de eleitores, cédulas, nullifiers, provas e resultado.
@@ -18,3 +18,6 @@ Começar pelo **log Merkle** (`teko-bulletin`, Rust) com provas de inclusão e c
 
 ## Perguntas
 Quem opera o quadro? Como evitar censura/queda na janela de votação? Quantos *witnesses*/espelhos independentes?
+
+## Decisão provisória (etapa 6)
+Rede **federada PoA**: validadores = instituições do M-de-N, M de N assinaturas por bloco, proponente em rodízio com troca de turno, perfis `devnet`/`testnet` e `mainnet` travada, `chain_id` no manifesto assinado e no bloco. Cédulas ainda públicas. EVM permissionada e cadeia própria (Substrate/Cosmos) ficam como alternativas futuras: o `BulletinBoard` e o `chain_id` isolam a escolha. Respostas parciais às perguntas acima: operam o quadro os validadores (não um operador único); queda de um validador não para a rede (view change); witnesses = os próprios validadores e qualquer réplica que verifique.

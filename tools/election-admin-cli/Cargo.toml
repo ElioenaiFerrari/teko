@@ -19,6 +19,8 @@ teko-attestation.workspace = true
 teko-election.workspace = true
 teko-bulletin.workspace = true
 teko-registration.workspace = true
+teko-chain.workspace = true
+teko-node.workspace = true
 issuer-cli.workspace = true
 prost.workspace = true
 thiserror = { workspace = true, features = ["std"] }

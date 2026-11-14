@@ -1,0 +1,125 @@
+//! Network files on disk (one folder for the whole local network):
+//! ```text
+//! <dir>/network.txt          public profile (chain_id, validators, threshold)
+//! <dir>/peers.txt            `index=ip:port` per validator
+//! <dir>/node-<i>/validator.key   SECRET (hex), mode 0600, test keys only
+//! ```
+
+use std::fs;
+use std::io::Write;
+use std::net::SocketAddr;
+use std::path::{Path, PathBuf};
+
+use rand::rand_core::UnwrapErr;
+use teko_chain::{NetworkKind, NetworkProfile};
+use teko_crypto::{SigningKey, generate_signing_key, hex, public_key_bytes};
+
+use crate::error::NodeError;
+
+pub struct NetFiles {
+    pub profile: NetworkProfile,
+    pub peers: Vec<SocketAddr>,
+}
+
+fn write_private(path: &Path, content: &str) -> std::io::Result<()> {
+    let mut o = fs::OpenOptions::new();
+    o.write(true).create(true).truncate(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        o.mode(0o600);
+    }
+    o.open(path)?.write_all(content.as_bytes())
+}
+
+/// Creates a local network of `nodes` validators with fresh TEST keys.
+/// Refuses to overwrite an existing network unless `force`.
+pub fn init_network(
+    dir: &Path,
+    kind: NetworkKind,
+    nodes: usize,
+    base_port: u16,
+    force: bool,
+) -> Result<NetFiles, NodeError> {
+    if dir.join("network.txt").exists() && !force {
+        return Err(NodeError::Refused(format!(
+            "{} already has a network (use --force)",
+            dir.display()
+        )));
+    }
+    fs::create_dir_all(dir)?;
+    let mut rng = UnwrapErr(rand::rngs::SysRng);
+    let keys: Vec<SigningKey> = (0..nodes).map(|_| generate_signing_key(&mut rng)).collect();
+    let pubs: Vec<Vec<u8>> = keys.iter().map(public_key_bytes).collect();
+    // M-of-N: a strict majority.
+    let profile = NetworkProfile::new(kind, pubs, nodes / 2 + 1)?;
+    let mut peers = Vec::new();
+    let mut peers_txt = String::from("# index=address (loopback: this machine only)\n");
+    for (i, k) in keys.iter().enumerate() {
+        let nd = dir.join(format!("node-{i}"));
+        fs::create_dir_all(&nd)?;
+        write_private(&nd.join("validator.key"), &hex::encode(&k.to_bytes()))?;
+        let addr: SocketAddr = format!("127.0.0.1:{}", base_port + i as u16)
+            .parse()
+            .map_err(|_| NodeError::Protocol("bad address".into()))?;
+        peers_txt.push_str(&format!("{i}={addr}\n"));
+        peers.push(addr);
+    }
+    fs::write(dir.join("network.txt"), profile.to_text())?;
+    fs::write(dir.join("peers.txt"), peers_txt)?;
+    Ok(NetFiles { profile, peers })
+}
+
+pub fn load_network(dir: &Path) -> Result<NetFiles, NodeError> {
+    let text = fs::read_to_string(dir.join("network.txt")).map_err(|_| {
+        NodeError::Refused(format!(
+            "no network in {} (run `teko-node init`)",
+            dir.display()
+        ))
+    })?;
+    let profile = NetworkProfile::parse(&text)?;
+    let peers_text = fs::read_to_string(dir.join("peers.txt"))?;
+    let mut peers: Vec<(usize, SocketAddr)> = Vec::new();
+    for line in peers_text.lines() {
+        let line = line.trim();
+        if line.is_empty() || line.starts_with('#') {
+            continue;
+        }
+        let (i, a) = line
+            .split_once('=')
+            .ok_or_else(|| NodeError::Protocol("bad peers.txt".into()))?;
+        peers.push((
+            i.trim()
+                .parse()
+                .map_err(|_| NodeError::Protocol("bad peers.txt".into()))?,
+            a.trim()
+                .parse()
+                .map_err(|_| NodeError::Protocol("bad peers.txt".into()))?,
+        ));
+    }
+    peers.sort_by_key(|p| p.0);
+    if peers.len() != profile.validators.len() {
+        return Err(NodeError::Protocol(
+            "peers.txt does not match the validators".into(),
+        ));
+    }
+    Ok(NetFiles {
+        profile,
+        peers: peers.into_iter().map(|p| p.1).collect(),
+    })
+}
+
+pub fn node_dir(dir: &Path, index: usize) -> PathBuf {
+    dir.join(format!("node-{index}"))
+}
+
+pub(crate) fn load_key(path: &Path) -> Result<SigningKey, NodeError> {
+    let text = fs::read_to_string(path)
+        .map_err(|_| NodeError::Refused(format!("missing {}", path.display())))?;
+    let bytes = hex::decode(text.trim()).map_err(|_| NodeError::Protocol("bad key file".into()))?;
+    SigningKey::from_slice(&bytes).map_err(|_| NodeError::Protocol("bad key file".into()))
+}
+
+pub fn load_validator_key(dir: &Path, index: usize) -> Result<SigningKey, NodeError> {
+    load_key(&node_dir(dir, index).join("validator.key"))
+}

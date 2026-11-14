@@ -4,12 +4,15 @@
 //! anonymous registration, so any well-formed key is accepted and the counts are
 //! NOT trustworthy against fraud (ADR-0008/0018).
 
+mod backend;
+
 use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
 use std::thread::sleep;
 use std::time::{Duration, Instant};
 
+pub use backend::{AnyBoard, NetBackend, NetBoard};
 use prost::Message;
 use teko_attestation::TrustPolicy;
 use teko_bulletin::{BoardError, BulletinBoard, Entry, EntryKind, FileBoard, Receipt};
@@ -38,6 +41,8 @@ pub enum AdminError {
     Trust(String),
     #[error("não encontrei election.bundle (rode `make setup`)")]
     NoBundle,
+    #[error("rede: {0}")]
+    Net(String),
     #[error("simulação: {0}")]
     Simulation(String),
     #[error("pacote de eleição malformado")]
@@ -104,6 +109,10 @@ pub fn tally_board(policy: &GovernancePolicy, board: &impl BulletinBoard) -> Ele
 pub struct Admin {
     dir: PathBuf,
     policy: GovernancePolicy,
+    /// Network of this election (from trust.txt); empty = unbound (dev).
+    chain_id: String,
+    /// A running local test network, if any (else the board is a local file).
+    net: Option<NetBackend>,
 }
 
 #[derive(Debug, Default, Clone, Copy)]
@@ -168,7 +177,23 @@ impl Admin {
         let trust = TrustPolicy::parse(&text).map_err(|e| AdminError::Trust(e.to_string()))?;
         let policy = GovernancePolicy::new(trust.gov_signers, trust.gov_threshold)
             .map_err(|_| AdminError::NoGovernance)?;
-        Ok(Self { dir, policy })
+        let net = NetBackend::detect(&dir);
+        Ok(Self {
+            dir,
+            policy,
+            chain_id: trust.chain_id,
+            net,
+        })
+    }
+
+    /// A tallier bound to this election's network.
+    pub fn new_tallier(&self) -> Tallier {
+        let t = new_tallier(&self.policy);
+        if self.chain_id.is_empty() {
+            t
+        } else {
+            t.with_chain_id(self.chain_id.clone())
+        }
     }
 
     pub fn dir(&self) -> &Path {
@@ -177,6 +202,43 @@ impl Admin {
 
     pub fn policy(&self) -> &GovernancePolicy {
         &self.policy
+    }
+
+    /// The test network in use, if any.
+    pub fn network(&self) -> Option<&NetBackend> {
+        self.net.as_ref()
+    }
+
+    /// Whether a board exists to read (the network always does once nodes run).
+    pub fn has_board(&self) -> bool {
+        self.net.is_some() || self.board_path().exists()
+    }
+
+    /// The board to READ: a local file, or a replica of the network verified here.
+    pub fn read_board(&self) -> Result<AnyBoard, AdminError> {
+        match &self.net {
+            Some(n) => n
+                .read()
+                .map(AnyBoard::Net)
+                .map_err(|e| AdminError::Net(e.to_string())),
+            None => Ok(AnyBoard::File(
+                FileBoard::open_tolerant(self.board_path())?.0,
+            )),
+        }
+    }
+
+    /// Appends entries (file: one strict write; network: queued for the next block).
+    fn append_entries(&self, entries: Vec<Entry>) -> Result<(), AdminError> {
+        match &self.net {
+            Some(n) => n
+                .submit(&entries)
+                .map(|_| ())
+                .map_err(|e| AdminError::Net(e.to_string())),
+            None => {
+                self.open_for_write()?.append_many(entries)?;
+                Ok(())
+            }
+        }
     }
 
     pub fn board_path(&self) -> PathBuf {
@@ -188,6 +250,9 @@ impl Admin {
     }
 
     pub fn reset_board(&self) {
+        if self.net.is_some() {
+            return; // a blockchain is append-only: reset it with `make devnet-reset`
+        }
         for f in [BOARD_FILE, SIM_MARKER] {
             let _ = fs::remove_file(self.dir.join(f));
         }
@@ -214,7 +279,7 @@ impl Admin {
     pub fn publish(&self) -> Result<PublishReport, AdminError> {
         let bytes = fs::read(self.dir.join("election.bundle")).map_err(|_| AdminError::NoBundle)?;
         let bundle = ElectionBundle::decode(bytes.as_slice()).map_err(|_| AdminError::BadBundle)?;
-        let mut board = self.open_for_write()?;
+        let board = self.read_board()?;
         let existing: Vec<(EntryKind, Vec<u8>)> = (0..board.len())
             .filter_map(|i| board.entry(i).map(|e| (e.kind, e.payload.clone())))
             .collect();
@@ -234,8 +299,9 @@ impl Admin {
             }
         }
         let appended = new.len() as u64;
+        drop(board);
         if !new.is_empty() {
-            board.append_many(new)?;
+            self.append_entries(new)?;
         }
         Ok(PublishReport {
             appended,
@@ -250,37 +316,48 @@ impl Admin {
         let n = issuer_cli::Issuer::open(&self.dir)
             .close_due(now)
             .map_err(|e| AdminError::Simulation(e.to_string()))?;
-        if self.board_path().exists() {
+        if self.has_board() {
             self.publish()?;
         }
         Ok(n)
     }
 
+    /// One entry; on the network it waits for the block that carries it, so the
+    /// returned receipt says where it really landed.
+    fn append_one(&self, e: Entry) -> Result<Receipt, AdminError> {
+        match &self.net {
+            Some(n) => n
+                .submit_and_wait(&e)
+                .map_err(|x| AdminError::Net(x.to_string())),
+            None => Ok(self.open_for_write()?.append(e)?),
+        }
+    }
+
     /// Appends one ballot (what the Suite does after the device signs).
     pub fn submit_ballot(&self, ballot: &SubmittedBallot) -> Result<Receipt, AdminError> {
-        let mut board = self.open_for_write()?;
-        Ok(board.append(Entry::new(EntryKind::BALLOT, ballot.encode_to_vec()))?)
+        self.append_one(Entry::new(EntryKind::BALLOT, ballot.encode_to_vec()))
     }
 
     /// Appends one registration: `(voter_key, token)` and NOTHING from the
     /// authority exchange (ADR-0008: separate channel, no link to the identity).
     pub fn submit_registration(&self, r: &SubmittedRegistration) -> Result<Receipt, AdminError> {
-        let mut board = self.open_for_write()?;
-        Ok(board.append(Entry::new(EntryKind::REGISTRATION, r.encode_to_vec()))?)
+        self.append_one(Entry::new(EntryKind::REGISTRATION, r.encode_to_vec()))
     }
 
     /// Full tally of the current board (tolerates a writer mid-append).
     pub fn tally(&self) -> Result<ElectionTally, AdminError> {
-        let (board, _) = FileBoard::open_tolerant(self.board_path())?;
+        let board = self.read_board()?;
         if board.is_empty() {
             return Err(AdminError::NotPublished);
         }
-        Ok(tally_board(&self.policy, &board))
+        let mut t = self.new_tallier();
+        feed_new(&mut t, &board);
+        Ok(t.snapshot())
     }
 
     fn sim_contests(&self, seed: u64) -> Result<(String, Vec<SimContest>), AdminError> {
-        let (board, _) = FileBoard::open_tolerant(self.board_path())?;
-        let mut t = new_tallier(&self.policy);
+        let board = self.read_board()?;
+        let mut t = self.new_tallier();
         feed_new(&mut t, &board);
         let manifest = t.manifest().cloned().ok_or(AdminError::NotPublished)?;
         let snap = t.snapshot();
@@ -433,7 +510,7 @@ impl Admin {
             .filter(|e| e.kind == EntryKind::BALLOT)
             .count() as u64;
         if !entries.is_empty() {
-            self.open_for_write()?.append_many(entries)?;
+            self.append_entries(entries)?;
         }
         fs::write(
             self.dir.join(SIM_MARKER),
@@ -486,7 +563,7 @@ impl Admin {
                 .filter(|e| e.kind == EntryKind::BALLOT)
                 .count() as u64;
             if !entries.is_empty() {
-                self.open_for_write()?.append_many(entries)?;
+                self.append_entries(entries)?;
             }
             fs::write(self.dir.join(SIM_MARKER), counter.to_string())?;
             on_tick(sent);

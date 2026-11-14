@@ -216,6 +216,8 @@ pub struct Tallier {
     seen: BTreeSet<(String, Vec<u8>)>,
     registered: BTreeSet<(String, Vec<u8>)>,
     verifier: Option<Box<dyn RegistrationVerifier>>,
+    /// When set, manifests of any other network are ignored (and counted).
+    chain_id: Option<String>,
     ignored: u64,
     orphans: u64,
     count: u64,
@@ -232,11 +234,18 @@ impl Tallier {
             seen: BTreeSet::new(),
             registered: BTreeSet::new(),
             verifier: None,
+            chain_id: None,
             ignored: 0,
             orphans: 0,
             count: 0,
             unattributed: RejectCounts::default(),
         }
+    }
+
+    /// Accept manifests of this network only.
+    pub fn with_chain_id(mut self, id: String) -> Self {
+        self.chain_id = Some(id);
+        self
     }
 
     /// Installs the registration-token checker. WITHOUT one, contests that
@@ -308,6 +317,7 @@ impl Tallier {
             return;
         };
         let ok = verify_manifest(&self.policy, &m).is_ok()
+            && self.chain_id.as_ref().is_none_or(|c| *c == m.chain_id)
             && match &self.manifest {
                 None => m.revision == 1,
                 Some(prev) => validate_revision(prev, &m).is_ok(),
@@ -747,6 +757,38 @@ mod tests {
         let c = run(&pol, &log).contest(GOVERNOR_SP).cloned().unwrap();
         assert!(!c.registration_required);
         assert_eq!((c.accepted, c.rejected.unregistered), (1, 0));
+    }
+
+    #[test]
+    fn a_tallier_bound_to_a_network_ignores_manifests_of_another() {
+        let k = keys(3, 21);
+        let pol = policy(&k, 2);
+        let mut m = manifest();
+        m.chain_id = "teko-testnet-1".into();
+        m.signatures = [0usize, 1]
+            .iter()
+            .map(|i| sign_manifest(&k[*i], &m))
+            .collect();
+        let log: Log = vec![(LogKind::Manifest, m.encode_to_vec())];
+        let feed = |t: &mut Tallier| {
+            for (kind, p) in &log {
+                t.feed(LogEntry {
+                    kind: *kind,
+                    payload: p,
+                });
+            }
+            t.snapshot()
+        };
+        let mine = feed(&mut Tallier::new(pol.clone()).with_chain_id("teko-devnet-1".into()));
+        assert_eq!((mine.contests.len(), mine.ignored_governance), (0, 1));
+        let ok = feed(&mut Tallier::new(pol.clone()).with_chain_id("teko-testnet-1".into()));
+        assert_eq!((ok.contests.len(), ok.ignored_governance), (3, 0));
+        let unbound = feed(&mut Tallier::new(pol));
+        assert_eq!(
+            unbound.contests.len(),
+            3,
+            "unbound tallier (dev) accepts any"
+        );
     }
 
     #[test]

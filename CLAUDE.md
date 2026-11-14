@@ -17,6 +17,8 @@ crates/teko-crypto/        2. derivação, tagged hashes, ID Cívico (bech32m), 
 crates/teko-device-core/   3. máquina de estados, PIN, armazenamento (no_std-friendly)
 crates/teko-election/      (Fase 2) manifesto de eleição M-de-N + ciclo de vida (no_std)
 crates/teko-registration/  (Fase 2) assinatura cega RFC 9474 (registro anônimo de eleitor, ADR-0008)
+crates/teko-chain/         (Fase 2) rede federada PoA: perfis devnet/testnet (mainnet TRAVADA), blocos M-de-N, réplica verificada
+tools/teko-node/           (Fase 2) validador (gossip, rodízio, troca de turno) + cliente que não confia em nós
 crates/teko-bulletin/      (Fase 2) log Merkle append-only, provas, head assinado, leitor tolerante
 tools/election-admin-cli/  (Fase 2) publicar no quadro, simular votos (rotulados), apurar
 tools/device-emulator/     4. "tela" e "botões" simulados, processo separado
@@ -63,6 +65,7 @@ cargo test --workspace
 cargo run -p issuer-cli -- dev-setup   # 1x: chaves de teste, firmware, fábrica (pasta dev/, ignorada pelo git)
 cargo run -p device-emulator           # terminal 1: tela e botões do dispositivo (PIN aqui!)
 cargo run -p teko-suite                # terminal 2: a Suite (Tauri v2)
+make devnet                            # blockchain de TESTE local: 3 validadores PoA (docs/NETWORKS.md)
 make                                   # lista todos os atalhos (check, repro, release-check, verify-fw...)
 # demo sem teclado (NUNCA em produção): cargo run -p device-emulator --features test-buttons -- --auto-pin 482913
 ```
@@ -76,7 +79,7 @@ make                                   # lista todos os atalhos (check, repro, r
 
 ## Próxima fase
 
-**Fase 2 (votação e governança eleitoral): especificação em [docs/PHASE-2-VOTING.md](docs/PHASE-2-VOTING.md), aguardando revisão. Etapas 1-5 implementadas (`teko-election` com vários pleitos/jurisdições e apuração incremental, `teko-bulletin`, dispositivo + Suite votando por pleito, quadro local, resultados ao vivo por cargo/estado, **registro anônimo por assinatura cega RFC 9474** em `teko-registration` com chave RSA por pleito, ADR-0008 aceito provisoriamente; a cédula entra no quadro **local** do protótipo, ainda sem prova ZK nem nullifier); o resto depende das decisões do §10.** Decisões pendentes listadas em §10 de lá. Achado importante: o stub `GetVoterCommitment` da Fase 1 será substituído por credencial de eleitor baseada em par de chaves.
+**Fase 2 (votação e governança eleitoral): especificação em [docs/PHASE-2-VOTING.md](docs/PHASE-2-VOTING.md), aguardando revisão. Etapas 1-6 implementadas (a 6 = rede de teste federada PoA, ver [docs/NETWORKS.md](docs/NETWORKS.md); `make devnet`) (`teko-election` com vários pleitos/jurisdições e apuração incremental, `teko-bulletin`, dispositivo + Suite votando por pleito, quadro local, resultados ao vivo por cargo/estado, **registro anônimo por assinatura cega RFC 9474** em `teko-registration` com chave RSA por pleito, ADR-0008 aceito provisoriamente; a cédula entra no quadro **local** do protótipo, ainda sem prova ZK nem nullifier); o resto depende das decisões do §10.** Decisões pendentes listadas em §10 de lá. Achado importante: o stub `GetVoterCommitment` da Fase 1 será substituído por credencial de eleitor baseada em par de chaves.
 
 ## Fora de escopo nesta fase
 

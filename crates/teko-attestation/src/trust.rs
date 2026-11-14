@@ -26,6 +26,8 @@ pub struct TrustPolicy {
     /// Institutions that govern ELECTIONS (Phase 2). Empty = elections disabled.
     pub gov_signers: Vec<Vec<u8>>,
     pub gov_threshold: usize,
+    /// Network this device accepts elections for (`chain_id=`). Empty = any (dev).
+    pub chain_id: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Error)]
@@ -60,6 +62,12 @@ impl TrustPolicy {
                     .fw_signers
                     .push(hex::decode(v).map_err(|_| TrustError::Invalid("bad fw_signer"))?),
                 "revoked_batch" => p.revoked_batches.push(String::from(v)),
+                "chain_id" => {
+                    if v.is_empty() || v.len() > 64 || !v.is_ascii() {
+                        return Err(TrustError::Invalid("bad chain_id"));
+                    }
+                    p.chain_id = String::from(v);
+                }
                 "gov_threshold" => {
                     p.gov_threshold = v
                         .parse()
@@ -104,6 +112,9 @@ impl TrustPolicy {
                 let _ = writeln!(s, "gov_signer={}", hex::encode(k));
             }
         }
+        if !self.chain_id.is_empty() {
+            let _ = writeln!(s, "chain_id={}", self.chain_id);
+        }
         s
     }
 
@@ -125,6 +136,7 @@ mod tests {
             revoked_batches: alloc::vec![String::from("batch-x")],
             gov_signers: alloc::vec![alloc::vec![5; 33], alloc::vec![6; 33]],
             gov_threshold: 2,
+            chain_id: String::from("teko-devnet-1"),
         };
         assert_eq!(TrustPolicy::parse(&p.to_text()).unwrap(), p);
     }

@@ -822,6 +822,10 @@ impl<H: Hal, R: Rng + CryptoRng> Device<H, R> {
         let policy = self.governance()?;
         let manifest = ElectionManifest::decode(manifest_bytes)
             .map_err(|_| fail(ErrorCode::InvalidArgument, "manifesto malformado"))?;
+        // A device bound to a network refuses elections of any other network.
+        if !self.trust.chain_id.is_empty() && manifest.chain_id != self.trust.chain_id {
+            return Err(fail(ErrorCode::InvalidArgument, "eleição de outra rede"));
+        }
         let mut transitions = Vec::with_capacity(transition_bytes.len());
         for t in transition_bytes {
             transitions.push(

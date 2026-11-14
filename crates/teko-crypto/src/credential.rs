@@ -234,6 +234,80 @@ pub fn verify_presentation(
     Ok(out)
 }
 
+/// Credentials the authority has REVOKED (lost, stolen or replaced device), signed
+/// by the authority root so anyone can check it offline. The list holds only
+/// random credential ids: nothing that names a person.
+///
+/// Same idea as the W3C Bitstring Status List / IETF Token Status List used by
+/// the EU wallet: the verifier downloads the WHOLE list, so the authority does not
+/// learn which credential is being checked. Limits: the list shows every
+/// revocation, and a verifier with an old copy still accepts a revoked credential
+/// until it refreshes (`seq` lets it notice it is behind).
+#[derive(Clone, PartialEq, Message)]
+pub struct RevocationList {
+    /// Grows by one at every change; a verifier never accepts a LOWER number than it has seen.
+    #[prost(uint64, tag = "1")]
+    pub seq: u64,
+    /// Sorted, without duplicates.
+    #[prost(bytes = "vec", repeated, tag = "2")]
+    pub revoked: Vec<Vec<u8>>,
+    #[prost(bytes = "vec", tag = "3")]
+    pub signature: Vec<u8>,
+}
+
+fn revocation_message(seq: u64, revoked: &[Vec<u8>]) -> Vec<u8> {
+    let mut parts: Vec<&[u8]> = Vec::with_capacity(revoked.len());
+    for r in revoked {
+        parts.push(r);
+    }
+    let seq = seq.to_be_bytes();
+    let mut all: Vec<&[u8]> = Vec::with_capacity(parts.len() + 1);
+    all.push(&seq);
+    all.extend(parts);
+    tagged_hash(tags::REVOCATION_LIST, &all).to_vec()
+}
+
+/// Signs the list. Ids are sorted and de-duplicated so the signed bytes are canonical.
+pub fn sign_revocation_list(
+    root: &SigningKey,
+    seq: u64,
+    mut revoked: Vec<Vec<u8>>,
+) -> RevocationList {
+    revoked.sort();
+    revoked.dedup();
+    let signature = sign_tagged(
+        root,
+        tags::REVOCATION_LIST,
+        &revocation_message(seq, &revoked),
+    );
+    RevocationList {
+        seq,
+        revoked,
+        signature,
+    }
+}
+
+pub fn verify_revocation_list(issuer_pk: &[u8], l: &RevocationList) -> Result<(), CryptoError> {
+    let sorted = l.revoked.windows(2).all(|w| w[0] < w[1]);
+    if !sorted {
+        return Err(CryptoError::MalformedCredential);
+    }
+    verify_tagged(
+        issuer_pk,
+        tags::REVOCATION_LIST,
+        &revocation_message(l.seq, &l.revoked),
+        &l.signature,
+    )
+}
+
+impl RevocationList {
+    pub fn is_revoked(&self, credential_id: &[u8]) -> bool {
+        self.revoked
+            .binary_search_by(|r| r.as_slice().cmp(credential_id))
+            .is_ok()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -328,6 +402,45 @@ mod tests {
         assert_eq!(
             verify_presentation(&ipk, &p, b"n", 101),
             Err(CryptoError::Expired)
+        );
+    }
+
+    #[test]
+    fn revocation_list_is_canonical_signed_and_tamper_evident() {
+        let mut rng = rand::rngs::StdRng::seed_from_u64(7);
+        let root = generate_signing_key(&mut rng);
+        let pk = public_key_bytes(&root);
+        let l = sign_revocation_list(&root, 3, vec![vec![9; 16], vec![1; 16], vec![9; 16]]);
+        assert_eq!(
+            l.revoked,
+            vec![vec![1; 16], vec![9; 16]],
+            "sorted, no duplicates"
+        );
+        assert!(verify_revocation_list(&pk, &l).is_ok());
+        assert!(l.is_revoked(&[9; 16]) && !l.is_revoked(&[2; 16]));
+        // every field is covered
+        let mut t = l.clone();
+        t.seq += 1;
+        assert!(verify_revocation_list(&pk, &t).is_err(), "seq");
+        let mut t = l.clone();
+        t.revoked.pop();
+        assert!(
+            verify_revocation_list(&pk, &t).is_err(),
+            "dropping a revocation"
+        );
+        let mut t = l.clone();
+        t.revoked.push(vec![200; 16]);
+        assert!(verify_revocation_list(&pk, &t).is_err(), "adding one");
+        let mut t = l.clone();
+        t.revoked.reverse();
+        assert!(
+            verify_revocation_list(&pk, &t).is_err(),
+            "non-canonical order"
+        );
+        let other = public_key_bytes(&generate_signing_key(&mut rng));
+        assert!(
+            verify_revocation_list(&other, &l).is_err(),
+            "another authority"
         );
     }
 }

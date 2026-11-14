@@ -111,6 +111,16 @@ pub struct Issuer {
     dir: PathBuf,
 }
 
+/// One credential of one citizen, as the authority recorded it.
+#[derive(Clone, Debug)]
+struct CitizenRec {
+    citizen_ref: String,
+    credential_id: String,
+    civic_id: String,
+    digest: String,
+    revoked: bool,
+}
+
 impl Issuer {
     pub fn open(dir: impl Into<PathBuf>) -> Self {
         Self { dir: dir.into() }
@@ -613,7 +623,22 @@ impl Issuer {
 
         // Once per (citizen, contest). The ledger holds WHO registered, and a hash of
         // the blinded message: nothing that could be matched to a voter key.
-        let who = civic_id(&request.pk_identity).unwrap_or_default();
+        // Keyed by the CITIZEN, not by the device key: a reissued citizen is still the
+        // same one, so a new device cannot register a second time.
+        let cred_hex = hex::encode(&cred.credential_id);
+        if let Some(list) = self.revocation_list()?
+            && list.is_revoked(&cred.credential_id)
+        {
+            return Err(no("credencial revogada: peça a reemissão presencial"));
+        }
+        let who = self
+            .citizens()?
+            .into_iter()
+            .find(|c| c.credential_id == cred_hex)
+            .map_or_else(
+                || civic_id(&request.pk_identity).unwrap_or_default(),
+                |c| c.citizen_ref,
+            );
         let blinded = hex::encode(&tagged_hash(
             "teko/v2/registration-ledger",
             &[&request.blind_message],
@@ -623,7 +648,9 @@ impl Issuer {
         let prefix = format!("{contest_id} {who} ");
         if let Some(line) = existing.lines().find(|l| l.starts_with(&prefix)) {
             if line[prefix.len()..].trim() != blinded {
-                return Err(no("este cidadão já se registrou neste pleito"));
+                return Err(no(
+                    "você já se registrou neste pleito (talvez com um dispositivo anterior): o registro antigo continua valendo",
+                ));
             }
         } else {
             let mut f = fs::OpenOptions::new()
@@ -715,8 +742,11 @@ impl Issuer {
         self.issue_credential_at(nonce, request, subject, now_secs())
     }
 
-    /// Verifies the device (genuine + owns the key) then issues the credential
-    /// bound to the device's identity key.
+    /// FIRST issuance for a person: verifies the device (genuine + owns the key)
+    /// and issues the credential bound to its identity key. A person who already
+    /// has a record is refused: they must use the in-person REISSUE (which revokes
+    /// the old credential), otherwise one person could hold two identities and
+    /// register twice.
     pub fn issue_credential_at(
         &self,
         nonce: &[u8],
@@ -724,6 +754,198 @@ impl Issuer {
         subject: &Subject,
         now: u64,
     ) -> Result<IssuedCredential, IssuerError> {
+        self.check_request(nonce, request)?;
+        let digest = self.person_digest(subject)?;
+        if self.citizens()?.iter().any(|c| c.digest == digest) {
+            return Err(IssuerError::InvalidRequest(
+                "esta pessoa já tem cadastro: use a REEMISSÃO presencial (a credencial anterior será revogada)".into(),
+            ));
+        }
+        self.mint(request, subject, now, None, &digest)
+    }
+
+    /// In-person REISSUE after a lost, stolen or replaced device (no seed exists,
+    /// ADR-0003). The authority re-verifies the person (the data must match what it
+    /// recorded at the first issuance), REVOKES every active credential of that
+    /// citizen, and issues a new one for the new device, linked to the SAME citizen
+    /// so "once per citizen and contest" keeps holding. Nothing here ever sees a
+    /// voter key.
+    pub fn reissue_credential_at(
+        &self,
+        nonce: &[u8],
+        request: &IdentityRequest,
+        subject: &Subject,
+        old_civic_id: &str,
+        reason: &str,
+        now: u64,
+    ) -> Result<IssuedCredential, IssuerError> {
+        // Everything is checked BEFORE anything is revoked.
+        self.check_request(nonce, request)?;
+        let digest = self.person_digest(subject)?;
+        let bad = |m: &str| IssuerError::InvalidRequest(m.to_string());
+        let all = self.citizens()?;
+        let old = all
+            .iter()
+            .rev()
+            .find(|c| c.civic_id == old_civic_id)
+            .ok_or_else(|| bad("ID cívico anterior desconhecido"))?;
+        if old.digest != digest {
+            return Err(bad(
+                "os dados da pessoa não conferem com o cadastro original",
+            ));
+        }
+        if civic_id(&request.pk_identity).unwrap_or_default() == old.civic_id {
+            return Err(bad("o dispositivo novo tem a mesma chave do anterior"));
+        }
+        let citizen_ref = old.citizen_ref.clone();
+        self.revoke_citizen(&citizen_ref, reason, now)?;
+        self.mint(request, subject, now, Some(citizen_ref), &digest)
+    }
+
+    /// Immediate block of a stolen/lost device, with no new device yet. The person
+    /// can still be reissued later.
+    pub fn revoke_civic_id(
+        &self,
+        civic_id: &str,
+        reason: &str,
+        now: u64,
+    ) -> Result<usize, IssuerError> {
+        let all = self.citizens()?;
+        let c = all
+            .iter()
+            .rev()
+            .find(|c| c.civic_id == civic_id)
+            .ok_or_else(|| IssuerError::InvalidRequest("ID cívico desconhecido".into()))?;
+        self.revoke_citizen(&c.citizen_ref.clone(), reason, now)
+    }
+
+    /// The signed revocation list (None until the first revocation).
+    pub fn revocation_list(&self) -> Result<Option<credential::RevocationList>, IssuerError> {
+        match fs::read(self.dir.join("revocations.signed")) {
+            Ok(b) => credential::RevocationList::decode(b.as_slice())
+                .map(Some)
+                .map_err(|_| IssuerError::Corrupt("revocations.signed".into())),
+            Err(_) => Ok(None),
+        }
+    }
+
+    /// DEV ONLY: forgets every citizen, registration and revocation (use with
+    /// `make reset`, when the test device is wiped to start over).
+    pub fn dev_forget_citizens(&self) {
+        for f in [
+            "citizens.log",
+            "registrations.log",
+            "revocations.signed",
+            "issued.log",
+        ] {
+            let _ = fs::remove_file(self.dir.join(f));
+        }
+    }
+
+    fn secret(&self) -> Result<Vec<u8>, IssuerError> {
+        Ok(load_key(&self.dir.join("root.key"))?.to_bytes().to_vec())
+    }
+
+    /// Stable fingerprint of WHO the person is (name, birth, nationality), keyed by an
+    /// authority secret so the log reveals nothing by itself.
+    fn person_digest(&self, s: &Subject) -> Result<String, IssuerError> {
+        let secret = self.secret()?;
+        let name = s.name.trim().to_lowercase();
+        Ok(hex::encode(&tagged_hash(
+            "teko/v2/citizen-data",
+            &[
+                secret.as_slice(),
+                name.as_bytes(),
+                s.birth_date.trim().as_bytes(),
+                s.nationality.trim().to_uppercase().as_bytes(),
+            ],
+        )))
+    }
+
+    fn citizens(&self) -> Result<Vec<CitizenRec>, IssuerError> {
+        let text = fs::read_to_string(self.dir.join("citizens.log")).unwrap_or_default();
+        let mut out: Vec<CitizenRec> = Vec::new();
+        for line in text.lines() {
+            let f: Vec<&str> = line.split_whitespace().collect();
+            match f.as_slice() {
+                ["issued", citizen_ref, credential_id, civic, digest, _ts] => {
+                    out.push(CitizenRec {
+                        citizen_ref: (*citizen_ref).into(),
+                        credential_id: (*credential_id).into(),
+                        civic_id: (*civic).into(),
+                        digest: (*digest).into(),
+                        revoked: false,
+                    })
+                }
+                ["revoked", credential_id, _reason, _ts] => {
+                    for c in out.iter_mut().filter(|c| c.credential_id == *credential_id) {
+                        c.revoked = true;
+                    }
+                }
+                _ => {}
+            }
+        }
+        Ok(out)
+    }
+
+    fn append_event(&self, line: &str) -> Result<(), IssuerError> {
+        let mut f = fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(self.dir.join("citizens.log"))?;
+        writeln!(f, "{line}")?;
+        Ok(())
+    }
+
+    /// Revokes every ACTIVE credential of the citizen and re-signs the list.
+    fn revoke_citizen(
+        &self,
+        citizen_ref: &str,
+        reason: &str,
+        now: u64,
+    ) -> Result<usize, IssuerError> {
+        let reason: String = reason
+            .chars()
+            .filter(|c| c.is_ascii_alphanumeric() || *c == '-' || *c == '_')
+            .take(24)
+            .collect();
+        let reason = if reason.is_empty() {
+            "unspecified".to_string()
+        } else {
+            reason
+        };
+        let active: Vec<CitizenRec> = self
+            .citizens()?
+            .into_iter()
+            .filter(|c| c.citizen_ref == citizen_ref && !c.revoked)
+            .collect();
+        for c in &active {
+            self.append_event(&format!("revoked {} {reason} {now}", c.credential_id))?;
+        }
+        self.write_revocation_list()?;
+        Ok(active.len())
+    }
+
+    fn write_revocation_list(&self) -> Result<(), IssuerError> {
+        let root = load_key(&self.dir.join("root.key"))?;
+        let text = fs::read_to_string(self.dir.join("citizens.log")).unwrap_or_default();
+        let mut ids = Vec::new();
+        let mut seq = 0u64;
+        for line in text.lines() {
+            let f: Vec<&str> = line.split_whitespace().collect();
+            if let ["revoked", id, ..] = f.as_slice() {
+                seq += 1;
+                if let Ok(b) = hex::decode(id) {
+                    ids.push(b);
+                }
+            }
+        }
+        let list = credential::sign_revocation_list(&root, seq, ids);
+        fs::write(self.dir.join("revocations.signed"), list.encode_to_vec())?;
+        Ok(())
+    }
+
+    fn check_request(&self, nonce: &[u8], request: &IdentityRequest) -> Result<(), IssuerError> {
         let trust = self.trust()?;
         let bad = |m: &str| IssuerError::InvalidRequest(m.to_string());
         let msg = issue_request_message(nonce, &request.pk_identity);
@@ -743,7 +965,19 @@ impl Issuer {
             &request.attestation_signature,
         )
         .map_err(|_| bad("assinatura de atestação inválida"))?;
+        Ok(())
+    }
 
+    /// Signs the credential and records the citizen. `link`: the citizen this
+    /// credential continues (reissue), or a brand-new citizen.
+    fn mint(
+        &self,
+        request: &IdentityRequest,
+        subject: &Subject,
+        now: u64,
+        link: Option<String>,
+        digest: &str,
+    ) -> Result<IssuedCredential, IssuerError> {
         let attributes = build_attributes(subject, now)?;
         let root = load_key(&self.dir.join("root.key"))?;
         let mut credential_id = [0u8; 16];
@@ -758,11 +992,21 @@ impl Issuer {
             &attributes,
             &mut UnwrapErr(SysRng),
         );
-        // Authority-side registry of issuance (identity side only; never touches voting).
+        // Authority-side record (identity side only; never touches voting).
+        let cid = civic_id(&request.pk_identity).unwrap_or_default();
+        let citizen_ref = link.unwrap_or_else(|| {
+            hex::encode(&tagged_hash(
+                "teko/v2/citizen-ref",
+                &[self.secret().unwrap_or_default().as_slice(), &credential_id],
+            ))
+        });
+        self.append_event(&format!(
+            "issued {citizen_ref} {} {cid} {digest} {now}",
+            hex::encode(&credential_id)
+        ))?;
         let line = format!(
-            "{now} credential={} civic_id={}\n",
-            hex::encode(&credential_id),
-            civic_id(&request.pk_identity).unwrap_or_default()
+            "{now} credential={} civic_id={cid}\n",
+            hex::encode(&credential_id)
         );
         let mut log = fs::OpenOptions::new()
             .create(true)
@@ -1184,5 +1428,149 @@ mod tests {
             verify_attestation(&trust, b"0123456789abcdef", 1, 0, &[f.batch_cert], &sig).is_ok()
         );
         let _ = fs::remove_dir_all(issuer.dir());
+    }
+
+    // ───────────────────────── reissue and revocation ─────────────────────────
+
+    fn now() -> u64 {
+        1_800_000_000
+    }
+
+    fn setup(tag: &str) -> Issuer {
+        let i = Issuer::open(scratch_dir(tag));
+        i.dev_setup().unwrap();
+        i
+    }
+
+    fn first_issue(i: &Issuer) -> (credential::IssuedCredential, SigningKey, String) {
+        let nonce = Issuer::new_nonce();
+        let (req, key) = fake_request(i, &nonce, true);
+        let issued = i
+            .issue_credential_at(&nonce, &req, &subject(), now())
+            .unwrap();
+        let cid = civic_id(&req.pk_identity).unwrap();
+        (issued, key, cid)
+    }
+
+    fn cred_id(c: &credential::IssuedCredential) -> Vec<u8> {
+        c.credential.as_ref().unwrap().credential_id.clone()
+    }
+
+    #[test]
+    fn a_person_cannot_get_a_second_identity_without_a_reissue() {
+        let i = setup("dup");
+        first_issue(&i);
+        let nonce = Issuer::new_nonce();
+        let (req, _) = fake_request(&i, &nonce, true);
+        let err = i
+            .issue_credential_at(&nonce, &req, &subject(), now())
+            .unwrap_err();
+        assert!(err.to_string().contains("REEMISSÃO"), "{err}");
+        // same person with different capitalisation / spacing is still the same person
+        let mut s = subject();
+        s.name = "  MARIA DA SILVA ".into();
+        assert!(i.issue_credential_at(&nonce, &req, &s, now()).is_err());
+        let _ = fs::remove_dir_all(i.dir());
+    }
+
+    #[test]
+    fn reissue_revokes_the_old_credential_and_keeps_the_same_citizen() {
+        let i = setup("reissue");
+        let (old, _, old_civic) = first_issue(&i);
+        assert!(i.revocation_list().unwrap().is_none());
+
+        let nonce = Issuer::new_nonce();
+        let (req, _) = fake_request(&i, &nonce, true);
+        let new = i
+            .reissue_credential_at(&nonce, &req, &subject(), &old_civic, "lost", now() + 10)
+            .unwrap();
+        verify_issued(&i.trust().unwrap().authority_root, &new).unwrap();
+        assert_ne!(cred_id(&old), cred_id(&new));
+
+        // the signed list now holds the OLD id only, and verifies under the authority root
+        let list = i.revocation_list().unwrap().unwrap();
+        credential::verify_revocation_list(&i.trust().unwrap().authority_root, &list).unwrap();
+        assert!(list.is_revoked(&cred_id(&old)) && !list.is_revoked(&cred_id(&new)));
+        assert_eq!(list.seq, 1);
+
+        // same citizen across both credentials
+        let c = i.citizens().unwrap();
+        assert_eq!(c.len(), 2);
+        assert_eq!(c[0].citizen_ref, c[1].citizen_ref);
+        assert!(c[0].revoked && !c[1].revoked);
+
+        // reissuing AGAIN revokes the previous one too (and only the active ones)
+        let nonce = Issuer::new_nonce();
+        let (req2, _) = fake_request(&i, &nonce, true);
+        let new_civic = civic_id(&req.pk_identity).unwrap();
+        let third = i
+            .reissue_credential_at(&nonce, &req2, &subject(), &new_civic, "stolen", now() + 20)
+            .unwrap();
+        let list = i.revocation_list().unwrap().unwrap();
+        assert!(list.is_revoked(&cred_id(&new)) && !list.is_revoked(&cred_id(&third)));
+        assert_eq!(list.seq, 2);
+        let _ = fs::remove_dir_all(i.dir());
+    }
+
+    #[test]
+    fn reissue_is_refused_for_the_wrong_person_unknown_ids_bad_proofs_and_the_same_key() {
+        let i = setup("refuse");
+        let (_, _, old_civic) = first_issue(&i);
+        let nonce = Issuer::new_nonce();
+        let (req, _) = fake_request(&i, &nonce, true);
+        let mut other = subject();
+        other.name = "Outra Pessoa".into();
+        let e = i
+            .reissue_credential_at(&nonce, &req, &other, &old_civic, "lost", now())
+            .unwrap_err();
+        assert!(e.to_string().contains("não conferem"), "{e}");
+        assert!(
+            i.reissue_credential_at(&nonce, &req, &subject(), "teko1inexistente", "lost", now())
+                .is_err()
+        );
+        let (bad_pop, _) = fake_request(&i, &nonce, false);
+        assert!(
+            i.reissue_credential_at(&nonce, &bad_pop, &subject(), &old_civic, "lost", now())
+                .is_err()
+        );
+        // nothing was revoked by any refused attempt
+        assert!(i.revocation_list().unwrap().is_none());
+        let _ = fs::remove_dir_all(i.dir());
+    }
+
+    #[test]
+    fn immediate_revoke_blocks_the_old_credential_and_allows_a_later_reissue() {
+        let i = setup("revoke");
+        let (old, _, old_civic) = first_issue(&i);
+        assert_eq!(i.revoke_civic_id(&old_civic, "stolen", now()).unwrap(), 1);
+        assert_eq!(
+            i.revoke_civic_id(&old_civic, "stolen", now()).unwrap(),
+            0,
+            "idempotent"
+        );
+        assert!(
+            i.revocation_list()
+                .unwrap()
+                .unwrap()
+                .is_revoked(&cred_id(&old))
+        );
+        let nonce = Issuer::new_nonce();
+        let (req, _) = fake_request(&i, &nonce, true);
+        i.reissue_credential_at(&nonce, &req, &subject(), &old_civic, "stolen", now())
+            .unwrap();
+        let _ = fs::remove_dir_all(i.dir());
+    }
+
+    #[test]
+    fn a_tampered_revocation_list_is_rejected() {
+        let i = setup("tamper");
+        let (_, _, old_civic) = first_issue(&i);
+        i.revoke_civic_id(&old_civic, "lost", now()).unwrap();
+        let mut list = i.revocation_list().unwrap().unwrap();
+        list.revoked.clear(); // an attacker "un-revokes"
+        assert!(
+            credential::verify_revocation_list(&i.trust().unwrap().authority_root, &list).is_err()
+        );
+        let _ = fs::remove_dir_all(i.dir());
     }
 }

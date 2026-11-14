@@ -145,6 +145,7 @@
     resultsShape: null,
     elecChecked: false,
     explorer: null, explorerTried: false, inclusion: null, net: null,
+    devMode: true,   // false numa versão de produção: sem autoridade/operador de teste
     idTried: false,       // evitam laços de re-tentativa em loadId/loadFirmware
     fwTried: false,
     fwLoading: false,   // já perguntei ao dispositivo por uma eleição nesta visita?
@@ -565,7 +566,8 @@
       <div class="screen"><div class="screen__label">Confira com o dispositivo</div><div class="id-big">${esc(S.civic.id)}</div></div>
       <p class="muted">Não é RG nem CPF: é derivado da sua chave pública e não contém dados pessoais.</p>
     </article>
-    <article class="card">
+    ${S.devMode ? '' : `<article class="card"><div class="card__head"><div class="card__ico card__ico--boto">${ico('badge')}</div><h2>Emissão da credencial</h2></div>${callout('info', 'shield', 'Feita pela autoridade', '<p>Nesta versão a emissão é feita pela autoridade, presencialmente, em um serviço externo que ainda não está integrado a esta Suite. Se você perdeu ou trocou de dispositivo, é lá que a credencial anterior é revogada e uma nova é emitida.</p>')}</article>`}
+    ${S.devMode ? `<article class="card">
       <div class="card__head"><div class="card__ico card__ico--boto">${ico('badge')}</div><h2>Emissão da credencial</h2></div>
       ${callout('info', 'shield', 'Simulação da autoridade', '<p>Na vida real você é verificado presencialmente pela autoridade, que digita estes dados. Aqui o <code>issuer-cli</code> faz esse papel: confere que o dispositivo é genuíno e que possui a chave, e assina a credencial vinculada à sua chave de identidade.</p>')}
       <div class="fields">
@@ -576,8 +578,15 @@
         <div class="field"><label for="f-mun">Domicílio eleitoral: município</label>${combo('f-mun', geoCities('SP'), '3550308', 'Escolha o estado e busque o município')}<span class="hint">Define o pleito de prefeito</span></div>
       </div>
       <p class="muted">Quem atesta o domicílio no mundo real é o cadastro eleitoral; aqui o <code>issuer-cli</code> simula esse papel.</p>
+      <details class="protonote" ${S.reissue ? 'open' : ''}><summary>${ico('lock')}Perdi ou troquei de dispositivo (reemissão)</summary>
+        <p class="muted">Não existe frase de recuperação: a chave só existe no dispositivo. Para voltar a usar sua identidade, a autoridade confere você <strong>presencialmente</strong>, <strong>revoga</strong> a credencial anterior e emite uma nova. Quem estiver com o dispositivo antigo não consegue mais provar nada. Se você já se registrou para votar em um pleito, esse registro continua valendo (e não pode ser refeito).</p>
+        <div class="fields">
+          <div class="field"><label for="f-old">ID Cívico do dispositivo anterior</label><input class="input" id="f-old" placeholder="teko1…" autocomplete="off" spellcheck="false" value="${esc(S.oldCivic || '')}"><span class="hint">Deixe em branco se é a sua primeira credencial.</span></div>
+          <div class="field"><label for="f-why">Motivo</label><select class="input" id="f-why"><option value="lost">Perdido</option><option value="stolen">Roubado</option><option value="replaced">Troquei de aparelho</option></select></div>
+        </div>
+      </details>
       <div class="row"><button class="btn" data-act="issue">${ico('badge')}Emitir credencial</button></div>
-    </article>`;
+    </article>` : ''}`;
   }
 
   function sDone() {
@@ -893,9 +902,9 @@
     return `<article class="card">
       <div class="card__head"><div class="card__ico card__ico--onca">${ico('chart')}</div><h2>Ainda não há resultados para mostrar</h2></div>
       <p class="muted">${esc(r.reason || '')}</p>
-      <div class="row"><button class="btn" data-act="publishboard">${ico('upload')}Publicar a eleição de exemplo no quadro</button></div>
+      ${S.devMode ? `<div class="row"><button class="btn" data-act="publishboard">${ico('upload')}Publicar a eleição de exemplo no quadro</button></div>
       <p class="muted">Depois, para ver os gráficos andando, abra outro terminal:</p>
-      <div class="codeblock"><span class="codeline">make simulate-live   <span class="dim"># ~15 cédulas/s por 2 min (DADOS SIMULADOS)</span></span><span class="codeline">make simulate        <span class="dim"># 5.000 eleitores sintéticos de uma vez</span></span></div>
+      <div class="codeblock"><span class="codeline">make simulate-live   <span class="dim"># ~15 cédulas/s por 2 min (DADOS SIMULADOS)</span></span><span class="codeline">make simulate        <span class="dim"># 5.000 eleitores sintéticos de uma vez</span></span></div>` : '<p class="muted">O quadro é publicado pelos validadores da rede.</p>'}
     </article>`;
   }
 
@@ -1108,8 +1117,9 @@
       const state = comboValue('f-uf'), municipality = comboValue('f-mun');
       if (!state || !municipality || !nat) { toast('Escolha nacionalidade, estado e município na lista.'); return; }
       await guarded(async () => {
-        await call('issue_credential', { name, birthDate: birth, nationality: nat, state, municipality });
-        toast('Credencial emitida e instalada no dispositivo.', 'ok');
+        const oldCivicId = ($('#f-old') || {}).value || '', reason = ($('#f-why') || {}).value || 'lost';
+        await call('issue_credential', { form: { name, birthDate: birth, nationality: nat, state, municipality, oldCivicId: oldCivicId.trim() || null, reason } });
+        toast(oldCivicId.trim() ? 'Credencial reemitida: a anterior foi revogada.' : 'Credencial emitida e instalada no dispositivo.', 'ok');
       });
       S.lastKey = ''; await poll();
     },
@@ -1287,6 +1297,7 @@
     } catch (e) {
       toast('Não consegui ouvir eventos do dispositivo; os avisos de confirmação podem não aparecer.');
     }
+    try { S.devMode = await invoke('dev_mode'); } catch { S.devMode = false; }
     await poll();
     setInterval(poll, 2000);
     setInterval(pollResults, 1500);

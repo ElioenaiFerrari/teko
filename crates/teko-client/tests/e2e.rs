@@ -621,3 +621,112 @@ fn a_forged_or_old_election_never_reaches_a_vote() {
     ));
     let _ = fs::remove_dir_all(rig.issuer.dir());
 }
+
+#[test]
+fn losing_the_device_means_reissue_the_old_credential_is_revoked_and_the_citizen_stays_one() {
+    use teko_crypto::credential::RevocationList;
+    let rig = start();
+    let mut c = connect(&rig);
+    onboard(&rig, &mut c);
+    let old_civic = c.civic_id().unwrap().id;
+    let e = c.load_election(&rig.trust, &election_bundle(&rig)).unwrap();
+    let eid = e.election_id.clone();
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_secs();
+    let attr = |c: &mut DeviceClient<TcpTransport>| {
+        c.prove_attribute(
+            &rig.trust,
+            teko_protocol::Predicate {
+                kind: teko_protocol::PredicateKind::AgeAtLeast as i32,
+                arg: 18,
+                name: String::new(),
+            },
+            "Loja",
+        )
+    };
+    assert!(attr(&mut c).is_ok(), "valid before any revocation");
+
+    // The citizen registers for the President with device A.
+    let req = c.begin_registration(&eid, "presidente").unwrap();
+    let sig = rig
+        .issuer
+        .sign_registration(&eid, "presidente", &req, now)
+        .unwrap();
+    c.finish_registration(&eid, "presidente", &sig).unwrap();
+
+    // Device A is LOST: the citizen asks the authority to block it at once.
+    rig.issuer.revoke_civic_id(&old_civic, "lost", now).unwrap();
+    let blocked = RevocationList::decode(
+        fs::read(rig.issuer.dir().join("revocations.signed"))
+            .unwrap()
+            .as_slice(),
+    )
+    .unwrap();
+    c.use_revocations(&rig.trust, blocked).unwrap();
+    let err = attr(&mut c).unwrap_err();
+    assert!(
+        err.to_string().contains("REVOGADA"),
+        "the lost device's proof is refused: {err}"
+    );
+    // Then she goes in person with a new device.
+    c.wipe().unwrap(); // the new/clean device (same emulator here, stands for a new one)
+    c.setup_pin().unwrap();
+    let nonce = Issuer::new_nonce();
+    let new_req = c.identity_request(&nonce, "Autoridade Cívica").unwrap();
+    let subject = Subject {
+        name: "Maria da Silva".into(),
+        birth_date: "1990-05-17".into(),
+        nationality: "BR".into(),
+        electoral_state: "SP".into(),
+        electoral_municipality: "3550308".into(),
+    };
+    // A plain first issuance is refused: she already has a record.
+    let refused = rig.issuer.issue_credential(&nonce, &new_req, &subject);
+    assert!(refused.unwrap_err().to_string().contains("REEMISSÃO"));
+    // The in-person reissue works and REVOKES the old credential.
+    let issued = rig
+        .issuer
+        .reissue_credential_at(&nonce, &new_req, &subject, &old_civic, "lost", now)
+        .unwrap();
+    c.load_credential(&issued.encode_to_vec()).unwrap();
+    let new_civic = c.civic_id().unwrap().id;
+    assert_ne!(new_civic, old_civic, "a new device has a new identity key");
+
+    // Verifiers holding the signed list reject the OLD credential id and accept the new one.
+    let list = RevocationList::decode(
+        fs::read(rig.issuer.dir().join("revocations.signed"))
+            .unwrap()
+            .as_slice(),
+    )
+    .unwrap();
+    let old_id = rig.issuer.revocation_list().unwrap().unwrap().revoked[0].clone();
+    assert!(list.is_revoked(&old_id));
+    c.use_revocations(&rig.trust, list.clone()).unwrap();
+    assert!(
+        attr(&mut c).is_ok(),
+        "the NEW credential verifies against the list"
+    );
+    // A stale (lower seq) or forged list is refused.
+    let mut forged = list.clone();
+    forged.revoked.clear();
+    assert!(c.use_revocations(&rig.trust, forged).is_err());
+
+    // Same CITIZEN: a new device cannot register again for the contest she already registered.
+    c.load_election(&rig.trust, &election_bundle(&rig)).unwrap();
+    let req2 = c.begin_registration(&eid, "presidente").unwrap();
+    let err = rig
+        .issuer
+        .sign_registration(&eid, "presidente", &req2, now)
+        .unwrap_err();
+    assert!(err.to_string().contains("já se registrou"), "{err}");
+    // ...but a contest she had NOT registered for is fine.
+    let req3 = c.begin_registration(&eid, "governador-sp").unwrap();
+    assert!(
+        rig.issuer
+            .sign_registration(&eid, "governador-sp", &req3, now)
+            .is_ok()
+    );
+    let _ = fs::remove_dir_all(rig.issuer.dir());
+}

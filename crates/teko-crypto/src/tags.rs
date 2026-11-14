@@ -32,3 +32,4 @@ pub const REGISTRATION_BLIND: &str = "teko/v2/registration-blind";
 pub const BLOCK: &str = "teko/v2/block";
 pub const BLOCK_ENTRIES: &str = "teko/v2/block-entries";
 pub const CHAIN_GENESIS: &str = "teko/v2/chain-genesis";
+pub const REVOCATION_LIST: &str = "teko/v2/revocation-list";

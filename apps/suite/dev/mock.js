@@ -57,6 +57,8 @@
     setup_pin: async () => { await prompt('pin_entry', 1200); dev.state = 'initialized'; },
     unlock: async () => { await prompt('pin_entry', 1000); dev.locked = false; return { result: 'unlocked' }; },
     civic_id: async () => { if (dev.state === 'initialized') await prompt('confirm_civic_id'); return { id: ID, public_key: '02' + 'ab'.repeat(32) }; },
+    dev_mode: async () => true,
+    revoke_credential: async () => 1,
     issue_credential: async () => { await prompt('issue_identity'); await prompt('load_credential'); dev.state = 'credentials_issued'; },
     reveal_identity: async () => { for (let i = 0; i < 4; i++) await prompt('prove_attribute', 500); return [['name', 'Maria da Silva'], ['birth_date', '1990-05-17'], ['nationality', 'BR'], ['registry_id', 'TK-9A41C07E']]; },
     pairwise_id: async ({ service }) => { await prompt('pairwise_id'); return 'tekop1' + btoa(service).replace(/[^a-z0-9]/gi, '').toLowerCase().slice(0, 32); },

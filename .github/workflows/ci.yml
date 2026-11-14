@@ -33,6 +33,8 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - run: cargo clippy -p teko-suite --all-targets --locked -- -D warnings
+      # Suite de PRODUÇÃO: sem a autoridade/operador de teste (feature dev-simulation)
+      - run: cargo clippy -p teko-suite --no-default-features --features custom-protocol --all-targets --locked -- -D warnings
       - run: cargo build -p teko-suite --locked
 
   deny:

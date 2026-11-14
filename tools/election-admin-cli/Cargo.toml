@@ -12,6 +12,15 @@ path = "src/lib.rs"
 [[bin]]
 name = "election-admin"
 path = "src/main.rs"
+required-features = ["operator"]
+
+[[test]]
+name = "admin"
+required-features = ["operator"]
+
+[[test]]
+name = "network"
+required-features = ["operator"]
 
 [dependencies]
 teko-crypto.workspace = true
@@ -21,9 +30,15 @@ teko-bulletin.workspace = true
 teko-registration.workspace = true
 teko-chain.workspace = true
 teko-node.workspace = true
-issuer-cli.workspace = true
+issuer-cli = { workspace = true, optional = true }
 prost.workspace = true
 thiserror = { workspace = true, features = ["std"] }
+
+[features]
+default = ["operator"]
+# Operator/authority SIMULATION (publish, close, synthetic voters, registration keys).
+# NEVER part of a production build: it needs the test authority keys.
+operator = ["dep:issuer-cli"]
 
 [dev-dependencies]
 

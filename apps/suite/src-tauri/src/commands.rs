@@ -3,7 +3,9 @@ use std::sync::{Arc, Mutex, MutexGuard, TryLockError};
 use std::time::Duration;
 
 use election_admin::{Admin, feed_new};
+#[cfg(feature = "dev-simulation")]
 use issuer_cli::{ISSUER_NAME, Issuer, Subject};
+#[cfg(feature = "dev-simulation")]
 use prost::Message;
 use serde::Serialize;
 use tauri::{AppHandle, Emitter, Manager, State};
@@ -105,6 +107,34 @@ fn load_trust() -> Result<TrustPolicy, UiError> {
         )
     })?;
     TrustPolicy::parse(&text).map_err(|e| ui_err("NoTrust", e))
+}
+
+/// The authority's signed revocation list, if it has published one. A list that
+/// does not verify is ignored by the client (it only ever LOADS verified lists).
+fn load_revocations(c: &mut Client, trust: &TrustPolicy) {
+    let path = resolve_dev_dir().join("revocations.signed");
+    if let Ok(bytes) = fs::read(path)
+        && let Ok(list) =
+            <teko_crypto::credential::RevocationList as prost::Message>::decode(bytes.as_slice())
+    {
+        let _ = c.use_revocations(trust, list);
+    }
+}
+
+/// Returned when a command needs the TEST authority/operator, which a production
+/// build does not contain (`dev-simulation` feature).
+#[cfg(not(feature = "dev-simulation"))]
+fn dev_only() -> UiError {
+    ui_err(
+        "DevOnly",
+        "Disponível só no ambiente de desenvolvimento: numa versão de produção a autoridade e o operador do quadro são serviços externos.",
+    )
+}
+
+/// Whether this build carries the test authority/operator (the UI hides those actions otherwise).
+#[tauri::command]
+pub fn dev_mode() -> bool {
+    cfg!(feature = "dev-simulation")
 }
 
 fn lock(inner: &SuiteInner) -> MutexGuard<'_, Option<Client>> {
@@ -345,16 +375,54 @@ pub async fn civic_id(app: AppHandle, suite: State<'_, Suite>) -> Result<CivicId
 /// Simulated authority: the person was verified out of band; the device
 /// proves possession of its key and genuineness; the issuer binds the
 /// credential to the device's identity key.
-#[tauri::command]
-pub async fn issue_credential(
-    app: AppHandle,
-    suite: State<'_, Suite>,
+/// What the person tells the authority (in person, in real life).
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+#[cfg_attr(not(feature = "dev-simulation"), allow(dead_code))]
+pub struct IssueForm {
     name: String,
     birth_date: String,
     nationality: String,
     state: String,
     municipality: String,
+    /// Set = REISSUE (lost/replaced device): the previous credential is revoked.
+    old_civic_id: Option<String>,
+    reason: Option<String>,
+}
+
+#[tauri::command]
+pub async fn issue_credential(
+    app: AppHandle,
+    suite: State<'_, Suite>,
+    form: IssueForm,
 ) -> Result<(), UiError> {
+    issue_credential_impl(app, suite, form).await
+}
+
+#[cfg(not(feature = "dev-simulation"))]
+async fn issue_credential_impl(
+    _app: AppHandle,
+    _suite: State<'_, Suite>,
+    _form: IssueForm,
+) -> Result<(), UiError> {
+    Err(dev_only())
+}
+
+#[cfg(feature = "dev-simulation")]
+async fn issue_credential_impl(
+    app: AppHandle,
+    suite: State<'_, Suite>,
+    form: IssueForm,
+) -> Result<(), UiError> {
+    let IssueForm {
+        name,
+        birth_date,
+        nationality,
+        state,
+        municipality,
+        old_civic_id,
+        reason,
+    } = form;
     let subject = Subject {
         name,
         birth_date,
@@ -366,12 +434,53 @@ pub async fn issue_credential(
         let issuer = Issuer::open(resolve_dev_dir());
         let nonce = Issuer::new_nonce();
         let request = c.identity_request(&nonce, ISSUER_NAME)?;
-        let issued = issuer
-            .issue_credential(&nonce, &request, &subject)
-            .map_err(|e| ClientError::Verification(e.to_string()))?;
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_or(0, |d| d.as_secs());
+        let issued = match old_civic_id
+            .as_deref()
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+        {
+            // In-person REISSUE (no seed): revokes the previous credential.
+            Some(old) => issuer.reissue_credential_at(
+                &nonce,
+                &request,
+                &subject,
+                old,
+                reason.as_deref().unwrap_or("lost"),
+                now,
+            ),
+            None => issuer.issue_credential(&nonce, &request, &subject),
+        }
+        .map_err(|e| ClientError::Verification(e.to_string()))?;
         c.load_credential(&issued.encode_to_vec())
     })
     .await
+}
+
+/// "I lost my device": the authority blocks the credential at once. Needs no device.
+#[tauri::command]
+pub async fn revoke_credential(civic_id: String, reason: String) -> Result<usize, UiError> {
+    #[cfg(not(feature = "dev-simulation"))]
+    {
+        let _ = (civic_id, reason);
+        Err(dev_only())
+    }
+    #[cfg(feature = "dev-simulation")]
+    {
+        revoke_impl(civic_id, reason)
+    }
+}
+
+#[cfg(feature = "dev-simulation")]
+fn revoke_impl(civic_id: String, reason: String) -> Result<usize, UiError> {
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |d| d.as_secs());
+    Issuer::open(resolve_dev_dir())
+        .revoke_civic_id(civic_id.trim(), &reason, now)
+        .map_err(|e| ui_err("Revoke", e))
 }
 
 fn reveal(name: &str) -> Predicate {
@@ -390,6 +499,7 @@ pub async fn reveal_identity(
 ) -> Result<Vec<(String, String)>, UiError> {
     let trust = load_trust()?;
     with_device(app, suite.inner().clone(), move |c| {
+        load_revocations(c, &trust);
         let mut out = Vec::new();
         for field in ["name", "birth_date", "nationality", "registry_id"] {
             let r = c.prove_attribute(&trust, reveal(field), "Teko Suite (ver meus dados)")?;
@@ -524,6 +634,7 @@ pub async fn prove_attribute(
         name,
     };
     with_device(app, suite.inner().clone(), move |c| {
+        load_revocations(c, &trust);
         c.prove_attribute(&trust, predicate, &verifier)
     })
     .await
@@ -638,12 +749,7 @@ fn register_anonymously(
         return Ok(None);
     }
     let req = c.begin_registration(election_id, contest_id)?;
-    let now = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map_or(0, |d| d.as_secs());
-    let sig = Issuer::open(resolve_dev_dir())
-        .sign_registration(election_id, contest_id, &req, now)
-        .map_err(|e| ClientError::Unexpected(e.to_string()))?;
+    let sig = authority_sign_registration(election_id, contest_id, &req)?;
     let token = c.finish_registration(election_id, contest_id, &sig)?;
     let published = Admin::open(resolve_dev_dir())
         .map_err(|e| e.to_string())
@@ -664,6 +770,33 @@ fn register_anonymously(
     Ok(published
         .err()
         .map(|e| format!("Registro anônimo não publicado ({e}): a cédula não será contada.")))
+}
+
+/// The registration AUTHORITY: in development it is the simulated `issuer-cli`; a
+/// production Suite would call the real authority's service instead.
+#[cfg(feature = "dev-simulation")]
+fn authority_sign_registration(
+    election_id: &str,
+    contest_id: &str,
+    req: &teko_protocol::RegistrationRequest,
+) -> Result<Vec<u8>, ClientError> {
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |d| d.as_secs());
+    Issuer::open(resolve_dev_dir())
+        .sign_registration(election_id, contest_id, req, now)
+        .map_err(|e| ClientError::Unexpected(e.to_string()))
+}
+
+#[cfg(not(feature = "dev-simulation"))]
+fn authority_sign_registration(
+    _election_id: &str,
+    _contest_id: &str,
+    _req: &teko_protocol::RegistrationRequest,
+) -> Result<Vec<u8>, ClientError> {
+    Err(ClientError::Unexpected(
+        "o registro anônimo precisa da autoridade (serviço externo, ainda não integrado): disponível só em desenvolvimento".into(),
+    ))
 }
 
 fn submit_to_board(b: &SignedBallot) -> Result<u64, String> {
@@ -789,6 +922,7 @@ pub async fn results_snapshot(suite: State<'_, Suite>) -> Result<ResultsReply, U
         };
         // SIMULATED governance: contests past their deadline are closed in the log
         // (at most every 5 s), so the public count locks without anyone clicking.
+        #[cfg(feature = "dev-simulation")]
         {
             static LAST: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
             let now = std::time::SystemTime::now()
@@ -1233,11 +1367,18 @@ pub async fn verify_inclusion(index: u64) -> Result<InclusionReply, UiError> {
 /// Publishes the demo election on the local board (idempotent).
 #[tauri::command]
 pub fn board_publish() -> Result<u64, UiError> {
-    let admin = Admin::open(resolve_dev_dir()).map_err(|e| ui_err("NoElection", e))?;
-    admin
-        .publish()
-        .map(|r| r.appended)
-        .map_err(|e| ui_err("NoElection", e))
+    #[cfg(not(feature = "dev-simulation"))]
+    {
+        Err(dev_only())
+    }
+    #[cfg(feature = "dev-simulation")]
+    {
+        let admin = Admin::open(resolve_dev_dir()).map_err(|e| ui_err("NoElection", e))?;
+        admin
+            .publish()
+            .map(|r| r.appended)
+            .map_err(|e| ui_err("NoElection", e))
+    }
 }
 
 #[tauri::command]

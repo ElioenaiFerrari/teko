@@ -10,19 +10,27 @@ use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
 use std::thread::sleep;
-use std::time::{Duration, Instant};
+use std::time::Duration;
+#[cfg(feature = "operator")]
+use std::time::Instant;
 
 pub use backend::{AnyBoard, NetBackend, NetBoard};
 use prost::Message;
 use teko_attestation::TrustPolicy;
 use teko_bulletin::{BoardError, BulletinBoard, Entry, EntryKind, FileBoard, Receipt};
+#[cfg(feature = "operator")]
 use teko_crypto::{public_key_bytes, tagged_hash, voter::derive_voter_key};
+#[cfg(feature = "operator")]
 use teko_election::{
-    BallotBody, ElectionBundle, ElectionTally, GovernancePolicy, LogEntry, LogKind, Phase,
-    SubmittedBallot, SubmittedRegistration, Tallier, contest_hash, registration_message,
-    sign_ballot, tally_with,
+    BallotBody, ElectionBundle, Phase, contest_hash, registration_message, sign_ballot,
 };
-use teko_registration::{BlindSignature, IssuerKey, RsaRegistration, blind, finalize};
+use teko_election::{
+    ElectionTally, GovernancePolicy, LogEntry, LogKind, SubmittedBallot, SubmittedRegistration,
+    Tallier, tally_with,
+};
+use teko_registration::RsaRegistration;
+#[cfg(feature = "operator")]
+use teko_registration::{BlindSignature, IssuerKey, blind, finalize};
 use thiserror::Error;
 
 pub const BOARD_FILE: &str = "board.log";
@@ -115,12 +123,14 @@ pub struct Admin {
     net: Option<NetBackend>,
 }
 
+#[cfg(feature = "operator")]
 #[derive(Debug, Default, Clone, Copy)]
 pub struct PublishReport {
     pub appended: u64,
     pub already_there: u64,
 }
 
+#[cfg(feature = "operator")]
 #[derive(Debug, Default, Clone, Copy)]
 pub struct SimReport {
     pub ballots: u64,
@@ -129,8 +139,10 @@ pub struct SimReport {
 
 // ───────────────────────── tiny deterministic PRNG (simulation only) ─────────────────────────
 
+#[cfg(feature = "operator")]
 struct Prng(u64);
 
+#[cfg(feature = "operator")]
 impl Prng {
     fn next(&mut self) -> u64 {
         // splitmix64
@@ -146,6 +158,7 @@ impl Prng {
     }
 }
 
+#[cfg(feature = "operator")]
 /// Synthetic share of the national electorate per contest (NOT real data).
 fn synthetic_weight(contest_id: &str) -> f64 {
     match contest_id {
@@ -159,6 +172,7 @@ fn synthetic_weight(contest_id: &str) -> f64 {
     }
 }
 
+#[cfg(feature = "operator")]
 struct SimContest {
     id: String,
     hash: Vec<u8>,
@@ -227,6 +241,7 @@ impl Admin {
         }
     }
 
+    #[cfg(feature = "operator")]
     /// Appends entries (file: one strict write; network: queued for the next block).
     fn append_entries(&self, entries: Vec<Entry>) -> Result<(), AdminError> {
         match &self.net {
@@ -249,6 +264,7 @@ impl Admin {
         self.dir.join(SIM_MARKER).exists()
     }
 
+    #[cfg(feature = "operator")]
     pub fn reset_board(&self) {
         if self.net.is_some() {
             return; // a blockchain is append-only: reset it with `make devnet-reset`
@@ -276,6 +292,7 @@ impl Admin {
 
     /// Appends `election.bundle` (manifest, then transitions) to the board,
     /// skipping entries that are already there. Idempotent.
+    #[cfg(feature = "operator")]
     pub fn publish(&self) -> Result<PublishReport, AdminError> {
         let bytes = fs::read(self.dir.join("election.bundle")).map_err(|_| AdminError::NoBundle)?;
         let bundle = ElectionBundle::decode(bytes.as_slice()).map_err(|_| AdminError::BadBundle)?;
@@ -312,6 +329,7 @@ impl Admin {
     /// SIMULATED governance: closes every contest whose deadline has passed (signed
     /// `VotingClosed`, appended to the bundle) and, if the board exists, publishes
     /// it. From then on the tally refuses further ballots for those contests.
+    #[cfg(feature = "operator")]
     pub fn close_due(&self, now: u64) -> Result<usize, AdminError> {
         let n = issuer_cli::Issuer::open(&self.dir)
             .close_due(now)
@@ -355,6 +373,7 @@ impl Admin {
         Ok(t.snapshot())
     }
 
+    #[cfg(feature = "operator")]
     fn sim_contests(&self, seed: u64) -> Result<(String, Vec<SimContest>), AdminError> {
         let board = self.read_board()?;
         let mut t = self.new_tallier();
@@ -409,6 +428,7 @@ impl Admin {
         Ok((manifest.election_id, out))
     }
 
+    #[cfg(feature = "operator")]
     fn next_index(&self) -> u64 {
         fs::read_to_string(self.dir.join(SIM_MARKER))
             .ok()
@@ -419,6 +439,7 @@ impl Admin {
     /// The board entries ONE synthetic voter produces: a registration (when the
     /// contest requires it) and then the ballot. SIMULATION: the full blind-RSA
     /// flow runs for real, with the simulator playing the authority.
+    #[cfg(feature = "operator")]
     fn voter_entries(
         election: &str,
         c: &SimContest,
@@ -457,6 +478,7 @@ impl Admin {
         out
     }
 
+    #[cfg(feature = "operator")]
     fn make_ballot(
         election: &str,
         c: &SimContest,
@@ -493,6 +515,7 @@ impl Admin {
 
     /// Appends `voters` SYNTHETIC voters (President gets `voters`, each governor a
     /// synthetic share of it) in ONE batch, then marks the board as simulated.
+    #[cfg(feature = "operator")]
     pub fn simulate_batch(&self, voters: u64, seed: u64) -> Result<SimReport, AdminError> {
         let (election, contests) = self.sim_contests(seed)?;
         let start = self.next_index();
@@ -524,6 +547,7 @@ impl Admin {
 
     /// Streams synthetic ballots at ~`rate` per second for `duration`, in small
     /// batches, so a live chart visibly moves. `on_tick(total_so_far)` per batch.
+    #[cfg(feature = "operator")]
     pub fn simulate_live(
         &self,
         rate: u64,

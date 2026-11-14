@@ -137,8 +137,21 @@ Legenda: **P** = `proptest` (muitos casos), **U** = unitário, **E** = ponta a p
 | Dispositivo ligado a uma rede recusa eleição de outra; apuração ligada ignora manifesto de outra | device-core: `a_device_bound_to_a_network_refuses_elections_of_any_other_network`; election: `a_tallier_bound_to_a_network_ignores_manifests_of_another` |
 | **Eleição inteira na rede:** publicar, registrar, votar e simular via blocos; apuração reconstruída da réplica verificada; ao parar os nós volta ao arquivo | admin: `an_election_runs_on_the_network_and_the_tally_is_rebuilt_from_verified_blocks` |
 
+## Fase 2, etapa 7: reemissão, revogação e build de produção
+
+| Garantia | Teste |
+|---|---|
+| Lista de revogação é canônica, assinada e à prova de adulteração (seq, remover/adicionar, ordem, outra autoridade) | crypto: `revocation_list_is_canonical_signed_and_tamper_evident` |
+| Quem já tem cadastro não obtém segunda identidade (nem com outra grafia do nome) | issuer: `a_person_cannot_get_a_second_identity_without_a_reissue` |
+| Reemissão revoga a anterior, mantém o mesmo cidadão, reemitir de novo revoga a ativa | issuer: `reissue_revokes_the_old_credential_and_keeps_the_same_citizen` |
+| Reemissão recusada para outra pessoa, ID desconhecido, prova de posse inválida; nada é revogado numa tentativa recusada | issuer: `reissue_is_refused_for_the_wrong_person...` |
+| Revogação imediata é idempotente e permite reemissão depois; lista adulterada rejeitada | issuer: `immediate_revoke_blocks...`, `a_tampered_revocation_list_is_rejected` |
+| **Ponta a ponta com dispositivo real:** registrar, perder, bloquear (prova do dispositivo perdido é recusada), reemitir, nova credencial verifica, lista falsa/atrasada recusada, **mesmo cidadão não registra de novo no mesmo pleito** mas registra em outro | e2e: `losing_the_device_means_reissue_the_old_credential_is_revoked_and_the_citizen_stays_one` |
+| A Suite de produção não contém a autoridade/operador de teste (com controle do detector) | `scripts/release-check.sh` (`cargo tree` sem/com `dev-simulation`) |
+
 ## O que **não** está coberto por teste automático (honestidade)
 
+- **Fluxo de reemissão na Suite (JS):** só exercitado com o mock no navegador. Sem teste de autoridade real, dupla autorização nem de lista de revogação publicada e distribuída (hoje é um arquivo em `dev/`).
 - **Rede em várias máquinas / testnet real, partições de rede e latência:** só loopback, 3 nós em threads. Sem teste de carga nem fuzzing do protocolo de rede.
 - **Painel de rede na Suite (JS):** só exercitado com o mock no navegador.
 - **Explorador público (Rust + JS):** a conferência de inclusão e o explorador só foram exercitados com o mock no navegador; a prova Merkle em si é testada em `teko-bulletin`. A "conferência" na Suite recalcula contra a raiz do MESMO arquivo: confirma consistência interna, não protege contra um operador que mostre logs diferentes (V19).

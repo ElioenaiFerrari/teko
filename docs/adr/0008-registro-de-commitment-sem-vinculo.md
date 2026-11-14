@@ -32,3 +32,6 @@ Para a fase de estudo: **não implementar o registro** nesta fase; manter a inte
 
 ## Consequências
 Define o desenho de toda a fase de votação; deve ser decidido antes dela, não antes da Suite.
+
+## Reemissão e registro (etapa 7)
+O livro da autoridade passou a guardar o registro por **cidadão** (`citizen_ref`, estável entre reemissões), não por chave de identidade. Efeito: um cidadão reemitido **não consegue registrar de novo** no pleito em que já se registrou (decisão B do dono do produto; alternativas A/C descartadas em ADR-0003). A credencial revogada também não registra.

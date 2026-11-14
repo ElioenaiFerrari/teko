@@ -68,8 +68,9 @@ tally: ## Apura o quadro e mostra o top 10 de cada pleito no terminal
 reset-board: ## Apaga o quadro (cédulas) e o marcador de simulação
 	$(CARGO) run -q -p election-admin-cli -- reset-board
 
-reset: ## Volta o dispositivo a "virgem" (apaga o estado do emulador)
+reset: ## Volta o dispositivo a "virgem" e esquece cidadãos/registros/revogações de TESTE
 	$(CARGO) run -q -p device-emulator -- --reset
+	$(CARGO) run -q -p issuer-cli -- dev-forget
 
 demo: ## Emulador com botões AUTOMÁTICOS (só teste/demo, não protege nada). PIN=482913
 	$(CARGO) run -q -p device-emulator --features test-buttons -- --auto-pin $(PIN)

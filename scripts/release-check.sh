@@ -22,3 +22,14 @@ if [ "$normal" -ne 0 ] || [ "$with" -ne "${#MARKS[@]}" ]; then
   echo "FALHOU: botões automáticos vazaram para o build normal (ou o detector está quebrado)"; exit 1
 fi
 echo "OK: o build normal não contém botões automáticos"
+
+# A Suite de PRODUÇÃO não pode carregar a autoridade/operador de teste (feature dev-simulation).
+# Detector com controle: o build de desenvolvimento DEVE listar issuer-cli, o de produção NÃO.
+echo "→ Suite: dependências sem e com dev-simulation…"
+prod=$(cargo tree --locked -p teko-suite --no-default-features --features custom-protocol -e normal | grep -c "issuer-cli" || true)
+dev=$(cargo tree --locked -p teko-suite -e normal | grep -c "issuer-cli" || true)
+echo "issuer-cli na Suite de produção: $prod (esperado 0) | de desenvolvimento: $dev (esperado >=1)"
+if [ "$prod" -ne 0 ] || [ "$dev" -lt 1 ]; then
+  echo "FALHOU: a autoridade de teste vazou para a Suite de produção (ou o detector está quebrado)"; exit 1
+fi
+echo "OK: a Suite de produção não contém a autoridade/operador de teste"

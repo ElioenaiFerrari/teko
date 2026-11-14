@@ -38,6 +38,8 @@ pub struct DeviceClient<T: Transport> {
     on_button: Option<OnButton>,
     /// Manifest of the election last loaded (to verify ballots against).
     election: Option<ElectionManifest>,
+    /// Latest verified revocation list from the authority (None = none loaded).
+    revocations: Option<credential::RevocationList>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -139,6 +141,7 @@ impl<T: Transport> DeviceClient<T> {
             next_id: 1,
             on_button: None,
             election: None,
+            revocations: None,
         }
     }
 
@@ -454,12 +457,40 @@ impl<T: Transport> DeviceClient<T> {
         let disclosed =
             credential::verify_presentation(&policy.authority_root, &pres, &nonce, unix_secs())
                 .map_err(|e| ClientError::Verification(format!("prova inválida: {e}")))?;
+        // A REVOKED credential never verifies, even if its signature is perfect (a lost
+        // device cannot be told: the check lives here, on the verifier).
+        if let (Some(list), Some(c)) = (&self.revocations, &pres.credential)
+            && list.is_revoked(&c.credential_id)
+        {
+            return Err(ClientError::Verification(
+                "credencial REVOGADA pela autoridade (dispositivo perdido, roubado ou substituído)"
+                    .into(),
+            ));
+        }
         Ok(AttributeResult {
             verified: true,
             issuer: pres.credential.map(|c| c.issuer).unwrap_or_default(),
             disclosed,
             nonce: hex::encode(&nonce),
         })
+    }
+
+    /// Loads the authority's signed revocation list. A list that does not verify,
+    /// or is OLDER than the one already held (a rollback), is refused.
+    pub fn use_revocations(
+        &mut self,
+        policy: &TrustPolicy,
+        list: credential::RevocationList,
+    ) -> Result<(), ClientError> {
+        credential::verify_revocation_list(&policy.authority_root, &list)
+            .map_err(|_| ClientError::Verification("lista de revogação inválida".into()))?;
+        if self.revocations.as_ref().is_some_and(|l| l.seq > list.seq) {
+            return Err(ClientError::Verification(
+                "lista de revogação mais antiga que a já conhecida".into(),
+            ));
+        }
+        self.revocations = Some(list);
+        Ok(())
     }
 
     // ───────────────────────── elections (Phase 2) ─────────────────────────

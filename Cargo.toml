@@ -49,7 +49,7 @@ teko-client = { path = "crates/teko-client" }
 device-emulator = { path = "tools/device-emulator" }
 issuer-cli = { path = "tools/issuer-cli" }
 teko-node = { path = "tools/teko-node" }
-election-admin = { package = "election-admin-cli", path = "tools/election-admin-cli" }
+election-admin = { package = "election-admin-cli", path = "tools/election-admin-cli", default-features = false }
 
 [workspace.lints.clippy]
 unwrap_used = "deny"

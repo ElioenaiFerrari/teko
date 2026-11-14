@@ -19,13 +19,19 @@ teko-attestation.workspace = true
 teko-protocol.workspace = true
 teko-transport.workspace = true
 teko-crypto.workspace = true
-issuer-cli.workspace = true
+# Test authority (signs credentials/registrations): DEV ONLY, behind `dev-simulation`.
+issuer-cli = { workspace = true, optional = true }
 election-admin.workspace = true
 teko-bulletin.workspace = true
 teko-election.workspace = true
 
 [features]
-default = ["custom-protocol"]
+default = ["custom-protocol", "dev-simulation"]
+# The Suite plays the AUTHORITY (signs credentials and registrations) and the board
+# OPERATOR (publishes, closes contests, simulates voters) using TEST keys in dev/.
+# A production build must NOT include this: build with --no-default-features
+# --features custom-protocol (scripts/release-check.sh verifies it).
+dev-simulation = ["dep:issuer-cli", "election-admin/operator"]
 # Serves the embedded UI instead of a dev server (needed for `cargo run`).
 custom-protocol = ["tauri/custom-protocol"]
 

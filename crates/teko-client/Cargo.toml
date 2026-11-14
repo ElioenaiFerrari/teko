@@ -21,7 +21,7 @@ thiserror = { workspace = true, features = ["std"] }
 [dev-dependencies]
 device-emulator.workspace = true
 issuer-cli.workspace = true
-election-admin.workspace = true
+election-admin = { workspace = true, features = ["operator"] }
 teko-election.workspace = true
 teko-crypto.workspace = true
 teko-device-core = { workspace = true, features = ["testing"] }

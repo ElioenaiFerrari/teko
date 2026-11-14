@@ -50,6 +50,13 @@ Cada etapa só começa com a anterior com testes passando. Ao fim de cada etapa,
 - **TDD** com `proptest` cobrindo: PIN errado N vezes apaga o dispositivo; firmware sem M-de-N é recusado; downgrade é recusado; nenhuma mensagem do protocolo expõe chave privada ou PIN; IDs pairwise de serviços distintos são distintos e não correlacionáveis; ID Cívico tem checksum válido e detecta erros de digitação; assinatura só sai depois da confirmação no dispositivo.
 - E2E: emulador + `issuer-cli` + Suite (headless) executando o onboarding completo. Botões automatizados do emulador existem **somente** sob feature de teste, nunca no build normal.
 
+## Documentação viva (regra permanente)
+
+- Toda mudança de **comportamento, comando `make`, crate, protocolo ou fluxo** atualiza, **no mesmo trabalho**, o `README.md` (estado atual, mapa de crates, início rápido) e o fluxo correspondente em `docs/fluxos/` (texto **e** diagrama). Quando couber, também `TEST-MATRIX`, `THREAT-MODEL` e ADR.
+- Tudo em **pt-BR** (código e identificadores em inglês). Fluxos seguem o molde: resumo; quem participa; diagramas; passo a passo; o que é verificado e por quem; o que pode dar errado; onde está no código; testes que cobrem; limites honestos. Funcionalidade só planejada leva o aviso "planejado".
+- **Diagramas sempre pela skill `diagram-design`**, no tema Teko (`docs/diagramas/TEMA.md`): edite o gerador em `scripts/diagramas/` e rode `make diagramas` (gera PNG + SVG + HTML). Não edite os arquivos gerados à mão. Embuta o PNG no markdown com texto alternativo em pt-BR e link para SVG/HTML.
+- `make docs-check` (links, imagens, texto alternativo, crates no README, títulos em pt-BR) faz parte de `make check` e do CI.
+
 ## Fluxo de trabalho
 
 1. Spec (docs) → aprovação do dono do produto → teste → código → atualizar docs.
@@ -66,12 +73,16 @@ cargo test --workspace
 cargo run -p issuer-cli -- dev-setup   # 1x: chaves de teste, firmware, fábrica (pasta dev/, ignorada pelo git)
 cargo run -p device-emulator           # terminal 1: tela e botões do dispositivo (PIN aqui!)
 cargo run -p teko-suite                # terminal 2: a Suite (Tauri v2)
+make docs-check                        # confere links, imagens e crates no README
+make diagramas                         # regenera os diagramas (docs/diagramas)
 make devnet                            # blockchain de TESTE local: 3 validadores PoA (docs/NETWORKS.md)
 make                                   # lista todos os atalhos (check, repro, release-check, verify-fw...)
 # demo sem teclado (NUNCA em produção): cargo run -p device-emulator --features test-buttons -- --auto-pin 482913
 ```
 
 ## Documentos
+
+- [README](README.md) · [Índice da documentação e fluxos](docs/README.md)
 
 - [ARCHITECTURE](docs/ARCHITECTURE.md) · [THREAT-MODEL](docs/THREAT-MODEL.md) · [KEY-HIERARCHY](docs/KEY-HIERARCHY.md)
 - [DEVICE-PROTOCOL](docs/DEVICE-PROTOCOL.md) · [ONBOARDING-FLOW](docs/ONBOARDING-FLOW.md) · [GLOSSARY](docs/GLOSSARY.md)

@@ -1,56 +1,72 @@
 # Teko
 
-Dispositivo de identidade cívica (emulado) + **Teko Suite** (Tauri v2), em Rust. Projeto de estudo.
-Leia `CLAUDE.md` e `docs/` para a visão, o modelo de ameaças e o protocolo.
+**Teko** (guarani: "modo de ser", identidade) é um projeto de estudo: um **dispositivo de identidade cívica** em formato USB (hoje emulado), a **Teko Suite** (app desktop, Tauri v2) e uma **rede federada de validadores** que guarda uma votação com cédulas cifradas. Tudo em Rust.
 
-## Atalhos (Makefile)
+> Protótipo de estudo. Chaves e PINs são **de teste**; a criptografia é própria e **sem auditoria**; não há valor real nem validade jurídica.
 
-`make` lista tudo. O essencial: `make setup` (uma vez), `make emulator` (terminal 1), `make suite` (terminal 2), `make check` (formato + clippy + testes).
+## Arquitetura em uma imagem
 
-## Rodando sem make (3 terminais, na raiz do repositório)
+![Arquitetura do Teko: dispositivo, Suite, emissor, órgãos eleitorais, validadores, verificador independente e os livros de votos e de economia](docs/diagramas/arquitetura-macro.png)
 
-```bash
-# 0) uma vez: cria chaves de teste, firmware v1/v2 assinados 2-de-3 e o material de "fábrica"
-cargo run -p issuer-cli -- dev-setup
+O computador (Suite) **nunca** vê chaves nem PIN. O dispositivo cifra e assina a cédula; a Suite só a repassa; os validadores conferem provas e gravam em blocos assinados M-de-N; qualquer um pode refazer a verificação. Fontes: [SVG](docs/diagramas/arquitetura-macro.svg) · [HTML](docs/diagramas/arquitetura-macro.html).
 
-# 1) o dispositivo: a "tela e botões" ficam NESTE terminal (PIN e confirmações são digitados aqui)
-cargo run -p device-emulator
+## Mapa de crates
 
-# 2) a Suite (janela desktop)
-cargo run -p teko-suite
-```
+![Camadas dos crates, da fundação até os binários e apps](docs/diagramas/camadas-crates.png)
 
-Na Suite, siga **Configurar dispositivo**: autenticidade → firmware → PIN (digitado no emulador) → ID Cívico → credencial.
-Depois: ver identidade, assinar documentos, provar atributos e **votar por pleito** (protótipo: Presidente para todos; governador e prefeito só do seu estado/município; a cédula é assinada pelo dispositivo mas ainda não é enviada). Sem emulador ligado, a Suite abre no **Explorador público** (placeholder).
+| Crate | Papel |
+|---|---|
+| `teko-protocol` | mensagens, framing e versões do protocolo Suite ↔ dispositivo |
+| `teko-crypto` | derivação, hashes etiquetados, ID Cívico (bech32m), assinaturas, credenciais |
+| `teko-device-core` | máquina de estados, PIN e armazenamento do dispositivo (`no_std`) |
+| `teko-attestation` | manifestos de firmware, M-de-N e cadeias de atestação |
+| `teko-election` | manifesto da eleição, ciclo de vida dos pleitos, apuração |
+| `teko-registration` | registro anônimo por assinatura cega (RFC 9474) |
+| `teko-ballot-crypto` | ElGamal de limiar P-256, provas 0/1 e soma, DKG de Feldman |
+| `teko-bulletin` | quadro de avisos: log Merkle append-only, provas e head assinado |
+| `teko-chain` | blocos M-de-N, perfis devnet/testnet (mainnet travada), réplica verificada |
+| `teko-bft` | consenso BFT estilo Tendermint ponderado por stake (ainda fora do nó) |
+| `teko-transport` | trait de transporte e implementação local |
+| `teko-client` | cliente da Suite: onboarding, assinatura, eleição |
+| `device-emulator` | "tela e botões" do dispositivo, em processo separado |
+| `issuer-cli` | autoridade simulada: credenciais, reemissão e revogação |
+| `election-admin-cli` | órgãos eleitorais: publicar, simular votos (rotulados), apurar |
+| `teko-node` | validador (gossip, rodízio, DKG) e cliente que não confia em nós |
+| `teko-suite` (`apps/suite`) | app Tauri v2 |
 
-- Apagar o estado do dispositivo (voltar a "virgem"): `cargo run -p device-emulator -- --reset`
-- Outro endereço: `TEKO_DEVICE_ADDR=127.0.0.1:9000 cargo run -p teko-suite` (e `--listen` no emulador)
+## Início rápido (do zero)
 
-## Resultados ao vivo (gráficos por cargo e por estado)
-
-```bash
-make publish         # publica a eleição de exemplo no quadro de avisos (dev/board.log)
-make simulate-live   # outro terminal: ~15 cédulas/s por 2 min (DADOS SIMULADOS)
-# na Suite: menu "Resultados ao vivo" -> abas Presidente / Governador / Prefeito
-make tally           # a mesma apuração no terminal (top 10 por pleito)
-```
-Ao votar com o dispositivo na tela **Votar**, a cédula entra no quadro e aparece no gráfico. `make election` recria a eleição de exemplo (apaga o quadro). Os dados simulados são **sempre** rotulados; a contagem do protótipo **não é confiável** (sem registro anônimo).
-
-## Pré-visualizar a interface sem Tauri (só desenvolvimento)
-
-```bash
-python3 apps/suite/dev/preview.py   # http://127.0.0.1:8765/?mock=virgin|locked|ready|none
-```
-Usa um backend falso (`apps/suite/dev/mock.js`, **fora** do pacote do app). Serve apenas para ajustar o visual.
-
-## Qualidade
+Pré-requisitos: Rust (o `rust-toolchain.toml` fixa a versão) e, para a Suite, as dependências do Tauri v2. `make` lista todos os atalhos.
 
 ```bash
-cargo fmt --all && cargo clippy --workspace --all-targets -- -D warnings && cargo test --workspace
+make clean-dev      # opcional: apaga o estado local de testes
+make check          # opcional: formato + clippy + testes + docs
+make setup          # 1x: chaves de teste, firmware assinado e "fábrica" (pasta dev/)
+make devnet         # rede de TESTE: 3 validadores PoA
+make devnet-dkg     # cerimônia de chave entre os validadores (cédulas cifradas)
+make election       # cria a eleição de exemplo (7 pleitos)
+make emulator       # terminal 1: tela e botões do dispositivo (PIN aqui). Reinicie após make election
+make publish        # publica a eleição no quadro
+make suite          # terminal 2: onboarding e votar (2 confirmações no emulador)
+make simulate N=200 # opcional: eleitores SINTÉTICOS (sempre rotulados)
+make devnet-status  # estado da rede     |  make devnet-blocks  # blocos
+make tally          # apuração no terminal
+make close          # encerra a votação; depois a Suite mostra os gráficos
+make devnet-stop    # para os validadores
 ```
 
-O teste ponta a ponta (`crates/teko-client/tests/e2e.rs`) sobe emulador + `issuer-cli` + cliente da Suite (sem janela) por TCP e executa o onboarding completo.
+Demo sem teclado (**nunca** em produção): `cargo run -p device-emulator --features test-buttons -- --auto-pin 482913`.
 
-Mais: `make verify-fw` (confere o firmware sem a Suite), `make release-check` (build normal sem botões automáticos) e `make repro` (build reproduzível). Veja `docs/RELEASE.md` e `docs/TEST-MATRIX.md`.
+## Estado atual
+- **Fase 1** (dispositivo, Suite, emissor): completa.
+- **Fase 2** (votação): eleição com vários pleitos e jurisdições, registro anônimo, **cédulas cifradas** até o fechamento, rede PoA federada, reemissão sem seed, resultados em gráficos.
+- **Em construção**: consenso BFT (`teko-bft`, núcleo pronto) e, depois, livro de economia (moeda e bens), ainda só **planejado**.
+- **Fora de escopo**: hardware real, validade jurídica (ICP-Brasil), prova ZK de elegibilidade, explorador público (só placeholder).
 
-> Chaves e PINs aqui são **de teste**. O emulador não tem isolamento de hardware (ver `docs/THREAT-MODEL.md`).
+## Documentação
+Comece por [docs/README.md](docs/README.md): um fluxo curto por assunto, todos em pt-BR e com diagramas ([visão geral](docs/fluxos/00-visao-geral.md), [assinatura](docs/fluxos/02-assinatura.md), [votação](docs/fluxos/05-votacao-cifrada.md), [blocos](docs/fluxos/09-blocos-e-validacao.md), [BFT](docs/fluxos/11-consenso-bft.md)...). Referência: [ARCHITECTURE](docs/ARCHITECTURE.md), [THREAT-MODEL](docs/THREAT-MODEL.md), [TEST-MATRIX](docs/TEST-MATRIX.md), [ADRs](docs/adr/README.md). Contexto para o assistente: [CLAUDE.md](CLAUDE.md).
+
+## Qualidade e documentação viva
+`make check` roda formato, clippy (`-D warnings`), testes e `make docs-check`. Também: `make verify-fw`, `make release-check` (o build normal não tem botões automáticos nem `dev-simulation`) e `make repro` (build reproduzível, [RELEASE](docs/RELEASE.md)). Os diagramas vêm de `scripts/diagramas/` (`make diagramas`; tema em [TEMA](docs/diagramas/TEMA.md)). **Regra:** mudou comportamento, comando, crate ou fluxo? Atualize este README e o fluxo correspondente no mesmo trabalho.
+
+> Chaves e PINs aqui são **de teste**. O emulador não tem isolamento de hardware (ver [THREAT-MODEL](docs/THREAT-MODEL.md)).

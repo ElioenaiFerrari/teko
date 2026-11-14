@@ -1,6 +1,6 @@
 # Teko — atalhos. Rode `make` (ou `make help`) para ver tudo.
 .DEFAULT_GOAL := help
-.PHONY: help setup emulator suite reset demo issuer-help preview fmt lint test check build clean-dev verify-fw release-check repro devnet close devnet-dkg devnet-stop devnet-status devnet-reset devnet-blocks testnet-help election publish simulate simulate-live tally reset-board
+.PHONY: help setup emulator suite reset demo issuer-help preview fmt lint test check build clean-dev verify-fw release-check repro docs-check diagramas devnet close devnet-dkg devnet-stop devnet-status devnet-reset devnet-blocks testnet-help election publish simulate simulate-live tally reset-board
 
 CARGO ?= cargo
 PIN   ?= 482913
@@ -98,10 +98,17 @@ lint: ## Clippy sem avisos (-D warnings)
 test: ## Roda todos os testes (unit, proptest e e2e)
 	$(CARGO) test --workspace
 
-check: ## Tudo que deve passar antes de commitar: formato + clippy + testes
+check: ## Tudo que deve passar antes de commitar: formato + clippy + testes + docs
 	$(CARGO) fmt --all --check
 	$(MAKE) lint
 	$(MAKE) test
+	$(MAKE) docs-check
+
+docs-check: ## Confere a documentação: links, imagens, texto alternativo, crates no README, títulos em pt-BR
+	./scripts/docs-check.sh
+
+diagramas: ## Regenera os diagramas (docs/diagramas/*.svg|html|png) a partir de scripts/diagramas (precisa do Brave)
+	python3 scripts/diagramas/gerar.py
 
 verify-fw: ## Verifica firmware v1 e v2 de forma independente da Suite (M-de-N, hash, downgrade)
 	$(CARGO) run -q -p issuer-cli -- verify-firmware --manifest dev/firmware-v1.manifest --blob dev/firmware-v1.blob

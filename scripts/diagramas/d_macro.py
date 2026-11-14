@@ -1,0 +1,28 @@
+from lib import *
+
+def arquitetura_macro():
+    d = D("arquitetura-macro", 1100, 600, "Arquitetura do Teko", "Quem fala com quem — o computador (Suite) nunca vê chaves nem PIN", "VISÃO GERAL")
+    d.arrow([(280, 168), (420, 168)], "default", both=True)
+    d.label("USB · protocolo", (350, 154))
+    d.arrow([(780, 168), (640, 168)], "link")
+    d.label("credencial", (710, 154))
+    d.arrow([(530, 206), (530, 290)], "default", label="cédula cifrada", at=(600, 248))
+    d.arrow([(280, 328), (420, 328)], "default")
+    d.label("manifesto M-de-N", (350, 314))
+    d.arrow([(780, 328), (640, 328)], "default", dashed=True)
+    d.label("sincroniza e verifica", (710, 314))
+    d.arrow([(470, 366), (470, 450)], "boto")
+    d.arrow([(590, 366), (590, 408), (750, 408), (750, 450)], "default", dashed=True)
+    d.node(60, 130, 220, 76, "Dispositivo Teko", "teko-device-core", "onca", "emulador", sub2="chaves nascem e ficam aqui")
+    d.node(420, 130, 220, 76, "Teko Suite", "apps/suite · Tauri v2", "link", "não confiável")
+    d.node(780, 130, 220, 76, "Emissor", "issuer-cli · credenciais", "external", "autoridade")
+    d.node(60, 290, 220, 76, "Órgãos eleitorais", "election-admin-cli", "plain", "M-de-N")
+    d.node(420, 290, 220, 76, "Validadores", "teko-node · teko-bft", "focal", "rede PoA/BFT", sub2="blocos M-de-N")
+    d.node(780, 290, 220, 76, "Verificador independente", "NodeClient::sync_chain", "ok", "não confia")
+    d.node(300, 450, 220, 76, "Livro de votos", "teko-bulletin · teko-chain", "boto", "implementado")
+    d.node(640, 450, 220, 76, "Livro de economia", "moeda e bens", "optional", "planejado")
+    d.text(60, 468, "O dispositivo nunca fala com a rede:", 11, INK, weight=600)
+    d.text(60, 486, "só a Suite repassa cédulas já cifradas", 11, MUTED)
+    d.text(60, 502, "e assinadas dentro do dispositivo.", 11, MUTED)
+    d.legend([(MUTED, "fluxo de dados", False), (LINK, "emissão de credencial", False), (BOTO, "gravação no livro", False), (MUTED, "leitura / planejado", True)])
+    return d

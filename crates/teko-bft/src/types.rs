@@ -70,10 +70,24 @@ impl ValidatorSet {
         power.saturating_mul(3) > self.total
     }
 
-    /// Weighted round-robin: the proposer for `(height, round)`, deterministic, with
-    /// frequency proportional to the power.
+    /// The proposer for `(height, round)`: deterministic and proportional to the power in
+    /// the long run, chosen by a hash of `(height, round, total power)` so that a
+    /// validator with a large power does NOT propose long contiguous runs of heights
+    /// (a contiguous weighted rotation would hand the first validator thousands of
+    /// consecutive heights). Every node computes the same answer.
     pub fn proposer(&self, height: u64, round: u32) -> &Validator {
-        let mut slot = (height.wrapping_add(u64::from(round))) % self.total;
+        let h = tagged_hash(
+            tags::BFT_PROPOSAL,
+            &[
+                b"proposer",
+                &height.to_be_bytes(),
+                &round.to_be_bytes(),
+                &self.total.to_be_bytes(),
+            ],
+        );
+        let mut word = [0u8; 8];
+        word.copy_from_slice(&h[..8]);
+        let mut slot = u64::from_be_bytes(word) % self.total;
         for v in &self.validators {
             if slot < v.power {
                 return v;
@@ -338,11 +352,24 @@ mod tests {
     fn the_proposer_rotates_in_proportion_to_the_power() {
         let s = set(&[3, 1]);
         let mut hits = [0u32; 2];
-        for h in 0..400u64 {
+        let mut longest = 0u32;
+        let mut run = 0u32;
+        let mut last = 9usize;
+        for h in 0..4_000u64 {
             let p = s.proposer(h, 0);
-            hits[usize::from(p.key[0] - 1)] += 1;
+            let i = usize::from(p.key[0] - 1);
+            hits[i] += 1;
+            run = if i == last { run + 1 } else { 1 };
+            longest = longest.max(run);
+            last = i;
         }
-        assert_eq!(hits, [300, 100], "3:1 power gives 3:1 turns");
+        // 3:1 power gives about 3:1 turns (a hash draw is proportional in the long run)
+        assert!((2_850..=3_150).contains(&hits[0]), "{hits:?}");
+        assert!((850..=1_150).contains(&hits[1]), "{hits:?}");
+        // ...and never a long contiguous run (the reason for the hash draw)
+        assert!(longest < 40, "longest run {longest}");
+        // the same input gives the same proposer everywhere
+        assert_eq!(s.proposer(123, 4).key, s.proposer(123, 4).key);
         // a different round gives a different proposer for the same height (view change)
         let s = set(&[1, 1, 1, 1]);
         let first = s.proposer(7, 0).key.clone();

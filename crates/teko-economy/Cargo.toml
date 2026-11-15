@@ -1,0 +1,22 @@
+[package]
+name = "teko-economy"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+description = "Economy ledger on BFT: blocks of transactions with commit certificates, validator set derived from stake with a founder phase (sans-I/O)"
+
+[dependencies]
+teko-crypto.workspace = true
+teko-ledger.workspace = true
+teko-coin.workspace = true
+teko-assets.workspace = true
+teko-bft.workspace = true
+prost.workspace = true
+
+[dev-dependencies]
+rand.workspace = true
+proptest.workspace = true
+
+[lints]
+workspace = true

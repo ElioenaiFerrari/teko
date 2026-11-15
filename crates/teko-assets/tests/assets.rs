@@ -39,6 +39,7 @@ fn world(funded: &[(&SigningKey, u64)]) -> W {
         slash_bps: 1000,
         faucet_amount: 0,
         faucet_cooldown: 0,
+        ..Default::default()
     };
     let alloc: Vec<(Address, u64)> = funded.iter().map(|(k, v)| (addr(k), *v)).collect();
     teko_coin::genesis(&mut l, cfg, &alloc, true).unwrap();

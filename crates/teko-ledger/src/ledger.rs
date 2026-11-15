@@ -181,7 +181,7 @@ impl Ctx<'_, '_> {
 
 /// A pluggable rule set (coin, assets, ...). Must be DETERMINISTIC: no clocks, no
 /// randomness, no I/O, no hash-map iteration order.
-pub trait Module {
+pub trait Module: Send {
     /// Non-zero module id carried in `Tx::module`.
     fn id(&self) -> u32;
     fn execute(&self, ctx: &mut Ctx<'_, '_>, payload: &[u8]) -> Result<(), ModuleError>;
@@ -503,6 +503,46 @@ impl Ledger {
             state_root: self.state.root(),
             receipts,
         })
+    }
+
+    /// DRY RUN of `apply_block`: executes the block on an overlay and returns the state
+    /// root it would produce, without changing anything. Used to validate a proposal.
+    pub fn check_block(
+        &self,
+        height: u64,
+        proposer: &Address,
+        txs: &[Tx],
+    ) -> Result<(Hash, Vec<Receipt>), LedgerError> {
+        let expected = self.height.saturating_add(1);
+        if height != expected {
+            return Err(LedgerError::WrongHeight {
+                expected,
+                got: height,
+            });
+        }
+        if txs.len() > MAX_TXS_PER_BLOCK {
+            return Err(LedgerError::TooManyTxs);
+        }
+        let mut overlay = Overlay {
+            base: &self.state,
+            writes: BTreeMap::new(),
+        };
+        let mut receipts = Vec::with_capacity(txs.len());
+        self.begin_block(&mut overlay, height, proposer)?;
+        for (index, tx) in txs.iter().enumerate() {
+            let r = self
+                .run(&mut overlay, height, proposer, tx)
+                .map_err(|error| LedgerError::Tx { index, error })?;
+            receipts.push(r);
+        }
+        let mut state = self.state.clone();
+        for (k, v) in overlay.writes {
+            match v {
+                Some(v) => state.put(k, v),
+                None => state.remove(&k),
+            }
+        }
+        Ok((state.root(), receipts))
     }
 
     /// Same as `apply_block`, decoding canonical transaction bytes first.

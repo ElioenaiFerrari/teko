@@ -4204,6 +4204,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "teko-economy"
+version = "0.1.0"
+dependencies = [
+ "proptest",
+ "prost",
+ "rand",
+ "teko-assets",
+ "teko-bft",
+ "teko-coin",
+ "teko-crypto",
+ "teko-ledger",
+]
+
+[[package]]
 name = "teko-election"
 version = "0.1.0"
 dependencies = [
@@ -4236,12 +4250,17 @@ dependencies = [
  "proptest",
  "prost",
  "rand",
+ "teko-assets",
  "teko-attestation",
  "teko-ballot-crypto",
+ "teko-bft",
  "teko-bulletin",
  "teko-chain",
+ "teko-coin",
  "teko-crypto",
+ "teko-economy",
  "teko-election",
+ "teko-ledger",
  "teko-registration",
  "thiserror 2.0.21",
 ]
@@ -4288,6 +4307,7 @@ dependencies = [
  "teko-crypto",
  "teko-election",
  "teko-ledger",
+ "teko-node",
  "teko-protocol",
  "teko-transport",
 ]

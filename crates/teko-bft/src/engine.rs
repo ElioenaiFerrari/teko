@@ -38,6 +38,13 @@ pub enum Action {
 pub trait App {
     fn build(&mut self, height: u64) -> Vec<u8>;
     fn validate(&self, height: u64, payload: &[u8]) -> bool;
+
+    /// Like `validate`, also told WHO proposed the block (the validator the engine
+    /// already checked is the right one for the round). Applications whose blocks name
+    /// their proposer (to pay rewards) override this to cross-check it.
+    fn validate_from(&self, height: u64, _proposer: &[u8], payload: &[u8]) -> bool {
+        self.validate(height, payload)
+    }
 }
 
 /// Timeouts grow with the round so a slow network eventually fits inside them.
@@ -123,6 +130,18 @@ impl<A: App> Engine<A> {
 
     /// Begins deciding `height` with validator set `set`.
     pub fn start_height(&mut self, height: u64, set: ValidatorSet) -> Vec<Action> {
+        self.start_height_at(height, set, 0)
+    }
+
+    /// Like `start_height`, beginning at round `first_round`. A validator that restarts
+    /// uses it to skip the rounds it may already have voted in (a vote in a NEW round
+    /// is never a conflict), so a restart does not make it sign twice in one round.
+    pub fn start_height_at(
+        &mut self,
+        height: u64,
+        set: ValidatorSet,
+        first_round: u32,
+    ) -> Vec<Action> {
         self.set = set;
         self.height = height;
         self.locked = None;
@@ -133,7 +152,7 @@ impl<A: App> Engine<A> {
         self.decided = false;
         self.active = true;
         let mut out = Vec::new();
-        self.start_round(0, &mut out);
+        self.start_round(first_round, &mut out);
         self.evaluate(&mut out);
         out
     }
@@ -184,7 +203,11 @@ impl<A: App> Engine<A> {
             || commit.height != self.height
             || commit.block_id != block_id(payload)
             || !commit.verify(&self.chain_id, &self.set)
-            || !self.app.validate(self.height, payload)
+            || !self.app.validate_from(
+                self.height,
+                &self.set.proposer(commit.height, commit.round).key,
+                payload,
+            )
         {
             return Vec::new();
         }
@@ -347,7 +370,7 @@ impl<A: App> Engine<A> {
             if self
                 .set
                 .is_quorum(self.power_for(r, VoteKind::Precommit, Some(&id)))
-                && self.app.validate(self.height, &p.payload)
+                && self.app.validate_from(self.height, &p.proposer, &p.payload)
             {
                 let precommits = self
                     .votes
@@ -410,7 +433,7 @@ impl<A: App> Engine<A> {
             return false;
         };
         let id = block_id(&p.payload);
-        let valid = self.app.validate(self.height, &p.payload);
+        let valid = self.app.validate_from(self.height, &p.proposer, &p.payload);
         let vote_for = if p.valid_round == -1 {
             valid && self.locked.as_ref().is_none_or(|(lid, _)| *lid == id)
         } else if p.valid_round >= 0
@@ -464,7 +487,7 @@ impl<A: App> Engine<A> {
         if !self
             .set
             .is_quorum(self.power_for(self.round, VoteKind::Prevote, Some(&id)))
-            || !self.app.validate(self.height, &p.payload)
+            || !self.app.validate_from(self.height, &p.proposer, &p.payload)
             || !self.fired.insert((self.round, 2))
         {
             return false;

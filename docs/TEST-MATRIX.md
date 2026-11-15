@@ -235,7 +235,22 @@ Legenda: **P** = `proptest` (muitos casos), **U** = unitário, **E** = ponta a p
 | **Ponta a ponta:** travar, sair, resgatar cedo (recusado), esperar blocos, resgatar; o mundo de teste unificado continua servindo saldo após tráfego de bens e stake; recusa no botão | e2e: `staking_is_signed_on_the_device_and_the_wallet_becomes_a_validator_in_the_devnet_world` |
 | Saldo de teste da devnet (arquivo de alocações) | coin: `devnet::tests::allocations_roundtrip_and_balance`, `bad_input_is_refused` |
 
+## Economia sobre BFT e fase de fundador (`teko-coin`, `teko-economy`, `teko-node`, ADR-0028)
+
+| Invariante | Teste |
+|---|---|
+| A fase de fundador paga as recompensas ao **dono** (não à chave do nó), sem pré-mineração, e **encerra de vez** quando o stake total chega a N; depois o conjunto vem do stake; `Unstake` abaixo do mínimo é recusado | coin: `the_founder_phase_pays_rewards_to_the_owner_and_ends_when_enough_stake_exists` |
+| Fundadores de gênese validados e nunca em rede travada; chave de consenso única e religável; evidência da **chave de consenso** pune o stake do **dono**; conjunto respeita mínimo, máximo e ordem | coin: `genesis_founders_are_validated…`, `a_consensus_key_can_be_linked_once_and_relinked`, `equivocation_by_a_consensus_key_slashes_the_stake_of_its_owner`, `the_set_after_the_founder_phase_respects…` |
+| Execução de ensaio do bloco prevê a raiz real e não muda nada | ledger: `check_block_is_a_dry_run_that_predicts_the_real_root` |
+| O proponente sorteado por hash é proporcional ao poder e **sem sequências longas**; o bloco só é aceito se o proponente declarado é o da rodada | bft: `the_proposer_rotates_in_proportion_to_the_power`; economy: `invalid_proposals_are_not_accepted_by_the_checker` |
+| **Fundador sozinho produz blocos** com réplicas que acompanham; o conjunto muda quando o stake chega e um segundo validador entra; ambos decidem juntos e as raízes coincidem | economy: `the_founder_alone_produces_blocks…`, `the_phase_ends_when_the_stake_arrives_and_a_second_validator_joins_by_stake` |
+| **Cliente que não confia em nós** reproduz e verifica a cadeia inteira; certificado ausente, bloco trocado, payload adulterado, proponente falso ou outra rede são recusados | economy: `a_client_replays_and_verifies_the_whole_chain_without_trusting_the_node` |
+| Equivocação vira penalidade do dono; stake vira poder de voto limitado | economy: `equivocation_evidence_becomes_a_slash_of_the_owner`, `stake_becomes_bounded_voting_power` |
+| **Rede real (3 nós em loopback):** só o fundador vota; as recompensas chegam ao dono; um cliente verifica; ao travar stake a fase encerra, os nós 1 e 2 entram por stake e os três decidem; um nó reiniciado reproduz e alcança | node: `the_founder_alone_produces_blocks_and_every_node_and_a_client_verify_the_same_chain`, `staking_ends_the_founder_phase_new_validators_join_and_a_restarted_node_catches_up` |
+
 ## O que **não** está coberto por teste automático (honestidade)
+
+- **Economia BFT:** o fundador não ganha com o nó parado e o motor BFT não grava o *lock* em disco (reinício simultâneo de > 1/3 do poder é risco conhecido); a evidência de equívoco é contada mas **não** enviada como `Slash` pelo nó; sem teste de partição de rede entre processos nem de carga; a Suite (JS) com a cadeia do nó só foi exercitada com o mock.
 
 - **Carteira:** a tela de digitação das palavras no terminal do emulador (`TerminalHal`) e a limpeza da tela só foram exercitadas à mão; a etapa e a tela Carteira da Suite (JS) só com o mock no navegador. Sem teste de tempo constante da comparação de palavras (o dispositivo compara com varredura completa, mas a frase não é um segredo de login). Sem auditoria da derivação.
 

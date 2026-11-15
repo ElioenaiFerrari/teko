@@ -37,6 +37,7 @@ fn main() {
             commands::wallet_history,
             commands::assets_view,
             commands::stake_view,
+            commands::economy_overview,
             commands::stake_action,
             commands::asset_register_test,
             commands::asset_lien,

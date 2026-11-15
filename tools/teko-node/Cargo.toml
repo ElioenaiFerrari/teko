@@ -22,6 +22,11 @@ teko-attestation.workspace = true
 teko-ballot-crypto.workspace = true
 teko-election.workspace = true
 teko-registration.workspace = true
+teko-bft.workspace = true
+teko-ledger.workspace = true
+teko-coin.workspace = true
+teko-assets.workspace = true
+teko-economy.workspace = true
 prost = { workspace = true, features = ["std"] }
 rand.workspace = true
 thiserror = { workspace = true, features = ["std"] }

@@ -22,6 +22,14 @@ pub const DKG_START: u32 = 7; // coordinator -> node: begin the key ceremony (ro
 pub const DKG_PACKAGES: u32 = 8; // coordinator -> node: everyone's round-1 packages; node finishes
 pub const DKG_SHARE: u32 = 9; // node -> node: the secret share for the requester (loopback only)
 pub const DKG_REPLY: u32 = 104;
+// Economy ledger on BFT (ADR-0028)
+pub const ECON_TX: u32 = 20; // client -> node: SubmitTxs (node forwards to peers)
+pub const ECON_TX_FWD: u32 = 21; // node -> node: SubmitTxs (NOT re-forwarded)
+pub const ECON_BFT: u32 = 22; // node -> node: one consensus message (proposal or vote)
+pub const ECON_COMMIT: u32 = 23; // node -> node: a decided block with its certificate
+pub const ECON_BLOCKS: u32 = 24; // anyone -> node: GetBlocks -> BlocksReply of DecidedBlock
+pub const ECON_STATUS: u32 = 25; // anyone -> node: EconStatusReply
+pub const ECON_STATUS_REPLY: u32 = 105;
 pub const ACK: u32 = 100;
 pub const STATUS_REPLY: u32 = 101;
 pub const BLOCKS_REPLY: u32 = 102;
@@ -184,4 +192,55 @@ pub struct DkgReply {
     /// The election public key a node derived (DKG_PACKAGES reply).
     #[prost(bytes = "vec", tag = "5")]
     pub group_key: Vec<u8>,
+}
+
+#[derive(Clone, PartialEq, Message)]
+pub struct SubmitTxs {
+    #[prost(bytes = "vec", repeated, tag = "1")]
+    pub txs: Vec<Vec<u8>>,
+}
+
+/// One BFT message: exactly one of the two fields is set (encoded `teko_bft` types).
+#[derive(Clone, PartialEq, Message)]
+pub struct BftEnvelope {
+    #[prost(bytes = "vec", tag = "1")]
+    pub proposal: Vec<u8>,
+    #[prost(bytes = "vec", tag = "2")]
+    pub vote: Vec<u8>,
+}
+
+#[derive(Clone, PartialEq, Message)]
+pub struct EconValidator {
+    #[prost(bytes = "vec", tag = "1")]
+    pub key: Vec<u8>,
+    #[prost(bytes = "vec", tag = "2")]
+    pub owner: Vec<u8>,
+    #[prost(uint64, tag = "3")]
+    pub power: u64,
+}
+
+#[derive(Clone, PartialEq, Message)]
+pub struct EconStatusReply {
+    #[prost(string, tag = "1")]
+    pub chain_id: String,
+    #[prost(uint64, tag = "2")]
+    pub height: u64,
+    #[prost(bytes = "vec", tag = "3")]
+    pub state_root: Vec<u8>,
+    #[prost(uint32, tag = "4")]
+    pub mempool: u32,
+    #[prost(bool, tag = "5")]
+    pub founder_phase_active: bool,
+    #[prost(uint64, tag = "6")]
+    pub total_stake: u64,
+    #[prost(message, repeated, tag = "7")]
+    pub validators: Vec<EconValidator>,
+    #[prost(bool, tag = "8")]
+    pub is_validator: bool,
+    #[prost(uint32, tag = "9")]
+    pub round: u32,
+    #[prost(uint32, tag = "10")]
+    pub evidence: u32,
+    #[prost(uint64, tag = "11")]
+    pub founder_target: u64,
 }

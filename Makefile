@@ -1,6 +1,6 @@
 # Teko — atalhos. Rode `make` (ou `make help`) para ver tudo.
 .DEFAULT_GOAL := help
-.PHONY: help setup emulator suite reset demo issuer-help preview fmt lint test check build clean-dev verify-fw release-check repro fund docs-check diagramas coin-demo assets-demo devnet close devnet-dkg devnet-stop devnet-status devnet-reset devnet-blocks testnet-help election publish simulate simulate-live tally reset-board
+.PHONY: help setup emulator suite reset demo issuer-help preview fmt lint test check build clean-dev verify-fw release-check repro fund docs-check diagramas coin-demo assets-demo devnet close devnet-dkg devnet-economy devnet-founder devnet-stop devnet-status devnet-reset devnet-blocks testnet-help election publish simulate simulate-live tally reset-board
 
 CARGO ?= cargo
 PIN   ?= 482913
@@ -25,9 +25,9 @@ suite: ## Abre a Teko Suite (janela desktop)
 NET ?= dev/net
 NODE = target/debug/teko-node
 
-devnet: ## Sobe a blockchain de TESTE local: 3 validadores PoA (2 de 3 assinam), só loopback
+devnet: ## Sobe a rede de TESTE local (votos PoA 2-de-3 + economia BFT). Primeira vez: make devnet FOUNDER=tekow1… (sua carteira)
 	$(CARGO) build -q -p teko-node
-	@test -f $(NET)/network.txt || $(NODE) init --dir $(NET) --network devnet
+	@test -f $(NET)/network.txt || $(NODE) init --dir $(NET) --network devnet $(if $(FOUNDER),--founder $(FOUNDER))
 	@$(NODE) stop --dir $(NET) >/dev/null 2>&1; \
 	for i in 0 1 2; do $(NODE) run --dir $(NET) --index $$i >$(NET)/node-$$i/node.log 2>&1 & done; \
 	sleep 1; $(NODE) status --dir $(NET)
@@ -40,6 +40,13 @@ devnet-stop: ## Para os 3 validadores (os blocos ficam em dev/net/node-*/blocks.
 	@$(NODE) stop --dir $(NET) 2>/dev/null || true
 	@# Rede apagada ou .pid perdido: mata nós órfãos pelo nome (senão eles seguem ocupando as portas)
 	@pkill -f 'teko-node run --dir $(NET)' 2>/dev/null && echo 'nós órfãos parados' || true
+
+devnet-founder: ## Define a carteira do fundador (recebe as recompensas) e zera a economia. Uso: make devnet-founder FOUNDER=tekow1…
+	@test -n "$(FOUNDER)" || { echo 'Uso: make devnet-founder FOUNDER=tekow1… (endereço da aba Carteira da Suite)'; exit 1; }
+	@$(NODE) stop --dir $(NET) >/dev/null 2>&1; $(NODE) founder --dir $(NET) --address $(FOUNDER)
+
+devnet-economy: ## Economia BFT: altura, fase de fundador, validadores e verificação da cadeia
+	@$(NODE) economy --dir $(NET)
 
 devnet-status: ## Altura, entradas, mempool e pares de cada validador
 	@$(NODE) status --dir $(NET)

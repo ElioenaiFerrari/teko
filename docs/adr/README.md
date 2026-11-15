@@ -27,10 +27,11 @@ Regra: decisões de produto/segurança só passam a `Aceito` pela aprovação do
 | [0018](0018-resultados-ao-vivo-e-visibilidade.md) | Resultados em tempo real e visibilidade | Proposto | Superado em parte pelo 0019 (parciais escondidos por cifra) |
 | [0019](0019-cedulas-cifradas-elgamal-de-limiar.md) | Cédulas cifradas até o fechamento (ElGamal de limiar + DKG) | Aceito (etapa 8) | confirmar |
 | [0020](0020-livro-razao-generico-e-modulos.md) | Livro-razão genérico com módulos (`teko-ledger`) | Aceito provisoriamente (M2) | confirmar |
-| [0021](0021-moeda-teto-fixo-stake-e-taxas.md) | Moeda de teto fixo, stake, taxas e penalidades (`teko-coin`) | Aceito provisoriamente (M3) | PENDENTE: início da rede (A/B/C) |
+| [0021](0021-moeda-teto-fixo-stake-e-taxas.md) | Moeda de teto fixo, stake, taxas e penalidades (`teko-coin`) | Aceito provisoriamente (M3) | **Opção B decidida** (ADR-0028) |
 | [0022](0022-bens-registro-com-orgao-e-troca-atomica.md) | Bens: registro com órgão M-de-N, consentimentos e troca atômica (`teko-assets`) | Aceito provisoriamente (M4) | confirmar |
 | [0023](0023-carteira-com-seed-bip39.md) | Carteira com frase de recuperação (BIP-39 + SLIP-10 P-256), separada da identidade | **Aceito** (M5a); supera em parte o 0003 | — |
 | [0024](0024-assinar-transferencias-no-dispositivo.md) | Assinar transferências de moeda no dispositivo (`SignTransfer`) | Aceito provisoriamente (M5b) | confirmar |
 | [0025](0025-consentimentos-de-bens-no-dispositivo.md) | Consentimentos de bens assinados no dispositivo (`SignAssetConsent`) | Aceito provisoriamente (M5c) | confirmar |
 | [0026](0026-bens-na-suite-com-orgao-e-contraparte-simulados.md) | Bens na Suite com órgão e contraparte simulados (só desenvolvimento) | Aceito provisoriamente | confirmar |
 | [0027](0027-stake-assinado-no-dispositivo.md) | Stake assinado no dispositivo e tela Validadores | Aceito provisoriamente | confirmar (início da rede: ADR-0021) |
+| [0028](0028-economia-sobre-bft-e-fase-de-fundador.md) | Economia sobre consenso BFT, validadores por stake e fase de fundador | Aceito provisoriamente (M6a) | confirmar |

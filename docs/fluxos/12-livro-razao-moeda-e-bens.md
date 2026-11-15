@@ -38,6 +38,16 @@ Validadores (stake + histórico), emissor (elegibilidade de eleitores), órgão 
 
 **Para ver funcionando:** `make coin-demo` roda alguns blocos em memória e imprime saldos, stake, recompensa, taxa, penalidade e a conservação da oferta. Ainda não há moeda na devnet nem na Suite (M5 e M6).
 
+## Fase de fundador e validação por stake (M6a, [ADR-0028](../adr/0028-economia-sobre-bft-e-fase-de-fundador.md))
+
+![Da fase de fundador à validação por stake: o fundador valida sozinho, o dono trava as recompensas como stake e, ao chegar a N, a fase termina e os validadores passam a ser os que têm stake](../diagramas/fundador-fases.png)
+
+*Fontes: [SVG](../diagramas/fundador-fases.svg) · [HTML](../diagramas/fundador-fases.html)*
+
+- **Opção B, sem pré-mineração:** no começo só o validador **fundador** (da gênese) produz blocos; as **recompensas** vão para a **carteira do dono** (`make devnet FOUNDER=<endereço>`). O dono as **trava como stake** (tela Validadores) e, quando o **stake total chega a N = 1.000.000**, uma trava no estado encerra a fase para sempre; a partir do bloco seguinte o conjunto de validadores vem do stake (poder proporcional, no máximo K).
+- A **chave do validador** (a do nó) é diferente da chave da carteira; o vínculo vem da gênese (fundador) ou da operação `SetValidatorKey`.
+- O livro roda em **consenso BFT** nos nós; a Suite baixa os blocos e **verifica cada certificado** antes de mostrar saldo, bens e stake. Limites: a fase de fundador é centralizada por desenho; só loopback; sem auditoria.
+
 ## Os bens (implementados)
 - **Classes** (imóvel, veículo...) nascem na gênese e são governadas por um **órgão registrador** com quórum M-de-N.
 - **Registro** do bem: só com o quórum do órgão.

@@ -123,3 +123,81 @@ pub(crate) fn load_key(path: &Path) -> Result<SigningKey, NodeError> {
 pub fn load_validator_key(dir: &Path, index: usize) -> Result<SigningKey, NodeError> {
     load_key(&node_dir(dir, index).join("validator.key"))
 }
+
+/// File with the economy genesis of the network (public parameters, no secrets).
+pub const ECONOMY_FILE: &str = "economy.txt";
+
+/// Writes `economy.txt` for the network in `dir` (ADR-0028, option B): the founder is
+/// validator 0 (its consensus key is the node key) and the rewards go to `founder_owner`
+/// (the wallet address of the product owner). Without an owner the rewards go to the
+/// node's own account, which nobody can spend from (a warning for the caller).
+/// Also creates the TEST registrar keys of the asset class `imovel` (2 of 3).
+pub fn init_economy(
+    dir: &Path,
+    founder_owner: Option<teko_ledger::Address>,
+    force: bool,
+) -> Result<teko_economy::EconomyGenesis, NodeError> {
+    let path = dir.join(ECONOMY_FILE);
+    if path.exists() && !force {
+        return Err(NodeError::Refused(format!(
+            "{} already exists (use --force)",
+            path.display()
+        )));
+    }
+    let net = load_network(dir)?;
+    let founder_key = net
+        .profile
+        .validators
+        .first()
+        .cloned()
+        .ok_or_else(|| NodeError::Protocol("network without validators".into()))?;
+    let owner = founder_owner.unwrap_or_else(|| teko_ledger::address_of(&founder_key));
+    let mut g = teko_economy::EconomyGenesis::test_defaults(
+        &format!("{}-economy", net.profile.chain_id),
+        founder_key,
+        owner,
+    );
+    let mut rng = UnwrapErr(rand::rngs::SysRng);
+    let mut regs = Vec::new();
+    for i in 0..3 {
+        let p = dir.join(format!("registrar-{i}.key"));
+        let k = if p.exists() {
+            load_key(&p)?
+        } else {
+            let k = generate_signing_key(&mut rng);
+            write_private(&p, &hex::encode(&k.to_bytes()))?;
+            k
+        };
+        regs.push(public_key_bytes(&k));
+    }
+    g.classes.push(teko_economy::ClassSpec {
+        name: "imovel".into(),
+        threshold: 2,
+        registrars: regs,
+    });
+    fs::write(&path, g.to_text())?;
+    Ok(g)
+}
+
+/// Loads the economy configuration of the network, if it has one.
+pub fn load_economy(dir: &Path) -> Result<Option<crate::EconomyConfig>, NodeError> {
+    let Ok(text) = fs::read_to_string(dir.join(ECONOMY_FILE)) else {
+        return Ok(None);
+    };
+    let genesis = teko_economy::EconomyGenesis::parse(&text).map_err(NodeError::Economy)?;
+    let interval = std::env::var("TEKO_EMPTY_BLOCK_MS")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(3_000);
+    Ok(Some(crate::EconomyConfig {
+        genesis,
+        empty_block_interval_ms: interval,
+    }))
+}
+
+/// The TEST registrar keys of the asset classes (`registrar-<i>.key` next to the network).
+pub fn load_registrar_keys(dir: &Path) -> Vec<SigningKey> {
+    (0..3)
+        .filter_map(|i| load_key(&dir.join(format!("registrar-{i}.key"))).ok())
+        .collect()
+}

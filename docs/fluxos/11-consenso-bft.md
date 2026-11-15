@@ -10,6 +10,11 @@ Validadores com peso (stake), proponente por rodada.
 
 ## Diagramas
 
+![Um bloco de economia sob consenso BFT: o cliente envia a transação, o proponente propõe, os validadores votam e o bloco final leva o certificado de commit](../diagramas/economia-bloco.png)
+
+*Fontes: [SVG](../diagramas/economia-bloco.svg) · [HTML](../diagramas/economia-bloco.html)*
+
+
 ![Rodadas do BFT: proposta, prevote, precommit e commit; timeouts levam a uma nova rodada com novo proponente](../diagramas/bft-rodadas.png)
 
 *Fontes: [SVG](../diagramas/bft-rodadas.svg) · [HTML](../diagramas/bft-rodadas.html)*
@@ -38,4 +43,4 @@ Partição de rede, mensagens perdidas, validadores parados ou desonestos: cober
 `crates/teko-bft/tests/sim.rs`.
 
 ## Limites honestos
-**Ainda não integrado** ao `teko-node` (marco M6). Implementação própria, sem auditoria. A penalidade (slash) depende da moeda, planejada.
+**Integrado ao livro de economia** (M6a): o `teko-node` roda o motor BFT do `teko-economy` ao lado do PoA dos votos (que continua M-de-N fixo até o M6b). O proponente de cada rodada é sorteado por hash, proporcional ao poder; a penalidade (`Slash`) existe na moeda e a evidência é contada pelo nó. Implementação própria, sem auditoria.

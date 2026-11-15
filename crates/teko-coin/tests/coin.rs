@@ -22,6 +22,7 @@ fn cfg() -> CoinConfig {
         slash_bps: 1000,
         faucet_amount: 500,
         faucet_cooldown: 3,
+        ..Default::default()
     }
 }
 
@@ -464,4 +465,208 @@ proptest! {
             prop_assert!(minted(&l) <= c.cap);
         }
     }
+}
+
+// ───────────────────────── founder phase (ADR-0028) ─────────────────────────
+
+fn founder_world(target: u64) -> (Ledger, SigningKey, SigningKey, Address) {
+    // `node` is the founder's CONSENSUS key; `wallet` is the owner's wallet key.
+    let node = key(900);
+    let wallet = key(901);
+    let owner = addr(&wallet);
+    let c = CoinConfig {
+        cap: 10_000_000,
+        initial_reward: 400,
+        halving_interval: 1_000,
+        fee_per_byte: 0,
+        unbonding_period: 3,
+        slash_bps: 1000,
+        founder_target: target,
+        min_total_stake: 100,
+        min_validator_stake: 50,
+        max_validators: 8,
+        ..Default::default()
+    };
+    let mut l = Ledger::new(CHAIN, vec![module()])
+        .unwrap()
+        .with_fee_module(COIN_MODULE)
+        .unwrap();
+    genesis(&mut l, c, &[], false).unwrap(); // no allocations: no pre-mine
+    genesis_founders(&mut l, &[(public_key_bytes(&node), owner)], true).unwrap();
+    (l, node, wallet, owner)
+}
+
+/// One block proposed by the founder's node: rewards go to the OWNER of the key.
+fn founder_block(l: &mut Ledger, node: &SigningKey, txs: &[Tx]) -> Result<(), LedgerError> {
+    let proposer = owner_of(l, &public_key_bytes(node));
+    let h = l.height() + 1;
+    l.apply_block(h, &proposer, txs).map(|_| ())
+}
+
+#[test]
+fn the_founder_phase_pays_rewards_to_the_owner_and_ends_when_enough_stake_exists() {
+    let (mut l, node, wallet, owner) = founder_world(1000);
+    assert!(founder_phase_active(&l));
+    assert_eq!(minted(&l), 0); // no pre-mine
+    // during the phase the set is the genesis founders, and nobody else counts
+    let set = validator_set(&l);
+    assert_eq!(set.len(), 1);
+    assert_eq!(
+        (set[0].key.clone(), set[0].owner),
+        (public_key_bytes(&node), owner)
+    );
+    // three blocks: the OWNER (a wallet key, not the node key) collects the rewards
+    for _ in 0..3 {
+        founder_block(&mut l, &node, &[]).unwrap();
+    }
+    assert_eq!(balance(&l, &owner), 1200);
+    assert_eq!(balance(&l, &address_of(&public_key_bytes(&node))), 0);
+    // the owner bonds 1000 (only 1200 exist): stake alone does not end the phase yet...
+    let t = tx(&wallet, &l, 0, Op::Stake { amount: 900 });
+    founder_block(&mut l, &node, &[t]).unwrap();
+    assert!(founder_phase_active(&l)); // 900 < 1000
+    let t = tx(&wallet, &l, 0, Op::Stake { amount: 200 });
+    founder_block(&mut l, &node, &[t]).unwrap();
+    // ...the check runs at the start of the NEXT block
+    assert!(founder_phase_active(&l));
+    founder_block(&mut l, &node, &[]).unwrap();
+    assert!(founder_phase_over(&l) && !founder_phase_active(&l));
+    assert_eq!(total_stake(&l), 1100);
+    // now the set comes from stake: the owner's stake, under the LINKED node key
+    let set = validator_set(&l);
+    assert_eq!(set.len(), 1);
+    assert_eq!(set[0].key, public_key_bytes(&node));
+    assert_eq!(set[0].stake, 1100);
+    // the phase never comes back, even if stake drops (the guard keeps a floor)
+    let t = tx(&wallet, &l, 0, Op::Unstake { amount: 900 });
+    founder_block(&mut l, &node, &[t]).unwrap();
+    assert!(founder_phase_over(&l));
+    let t = tx(&wallet, &l, 0, Op::Unstake { amount: 150 });
+    assert_eq!(
+        err_msg(founder_block(&mut l, &node, &[t])),
+        "total stake would fall below the minimum"
+    );
+    audit(&l).unwrap();
+}
+
+#[test]
+fn genesis_founders_are_validated_and_never_on_a_locked_network() {
+    let mut l = Ledger::new(CHAIN, vec![module()]).unwrap();
+    genesis(
+        &mut l,
+        CoinConfig {
+            cap: 1000,
+            halving_interval: 1,
+            ..Default::default()
+        },
+        &[],
+        false,
+    )
+    .unwrap();
+    let k = public_key_bytes(&key(1));
+    assert_eq!(
+        genesis_founders(&mut l, &[(k.clone(), [1; 32])], false),
+        Err(CoinError::OnlyDevnet)
+    );
+    assert!(genesis_founders(&mut l, &[], true).is_err());
+    assert!(genesis_founders(&mut l, &[(vec![1, 2], [1; 32])], true).is_err());
+    assert!(genesis_founders(&mut l, &[(k.clone(), [1; 32]), (k, [2; 32])], true).is_err());
+}
+
+#[test]
+fn a_consensus_key_can_be_linked_once_and_relinked() {
+    let (mut l, node, wallet, owner) = founder_world(0);
+    let (rival, other_node) = (key(902), key(903));
+    // rewards still go to the founder's owner; a rival cannot steal the founder's key
+    let t = tx(
+        &rival,
+        &l,
+        0,
+        Op::SetValidatorKey {
+            key: public_key_bytes(&node),
+        },
+    );
+    assert_eq!(
+        err_msg(founder_block(&mut l, &node, &[t])),
+        "consensus key already linked to another owner"
+    );
+    // the owner re-links to another node key; owner_of follows
+    let t = tx(
+        &wallet,
+        &l,
+        0,
+        Op::SetValidatorKey {
+            key: public_key_bytes(&other_node),
+        },
+    );
+    founder_block(&mut l, &node, &[t]).unwrap();
+    assert_eq!(owner_of(&l, &public_key_bytes(&other_node)), owner);
+    // the old key no longer maps to the owner (it maps to its own address)
+    assert_eq!(
+        owner_of(&l, &public_key_bytes(&node)),
+        address_of(&public_key_bytes(&node))
+    );
+    // malformed keys never decode
+    assert!(Op::decode(&[6, 1, 2, 3]).is_err());
+}
+
+#[test]
+fn equivocation_by_a_consensus_key_slashes_the_stake_of_its_owner() {
+    let (mut l, node, wallet, owner) = founder_world(0);
+    for _ in 0..3 {
+        founder_block(&mut l, &node, &[]).unwrap();
+    }
+    let t = tx(&wallet, &l, 0, Op::Stake { amount: 1000 });
+    founder_block(&mut l, &node, &[t]).unwrap();
+    assert_eq!(total_stake(&l), 1000);
+    // the NODE key (not the wallet) signs two conflicting prevotes
+    let reporter = key(904);
+    let ev = evidence(&node, l.height());
+    let t = tx(&reporter, &l, 0, Op::Slash { evidence: ev });
+    founder_block(&mut l, &node, &[t]).unwrap();
+    assert_eq!(stake_of(&l, &owner), 900); // 10% burned from the OWNER's stake
+    assert_eq!(total_stake(&l), 900);
+    assert_eq!(burned(&l), 100);
+    audit(&l).unwrap();
+}
+
+#[test]
+fn the_set_after_the_founder_phase_respects_minimums_maximums_and_ordering() {
+    let c = CoinConfig {
+        cap: 10_000_000,
+        initial_reward: 0,
+        halving_interval: 100,
+        min_validator_stake: 100,
+        max_validators: 2,
+        min_total_stake: 1,
+        ..Default::default()
+    };
+    let people: Vec<SigningKey> = (0..4).map(|i| key(950 + i)).collect();
+    let alloc: Vec<(Address, u64)> = people.iter().map(|p| (addr(p), 1000)).collect();
+    let mut l = Ledger::new(CHAIN, vec![module()])
+        .unwrap()
+        .with_fee_module(COIN_MODULE)
+        .unwrap();
+    genesis(&mut l, c, &alloc, true).unwrap();
+    for (p, amt) in people.iter().zip([500u64, 900, 50, 700]) {
+        let t = tx(p, &l, 0, Op::Stake { amount: amt });
+        blk(&mut l, &[t]).unwrap();
+    }
+    let set = validator_set(&l);
+    // 50 is below the minimum; of the rest only the top 2 stakes (900, 700); sorted by key
+    assert_eq!(set.len(), 2);
+    let mut stakes: Vec<u64> = set.iter().map(|v| v.stake).collect();
+    stakes.sort();
+    assert_eq!(stakes, vec![700, 900]);
+    assert!(set[0].key < set[1].key);
+    // no founders and nobody above the minimum: nothing to fall back on
+    let c2 = CoinConfig {
+        cap: 1000,
+        halving_interval: 1,
+        min_validator_stake: 100,
+        ..Default::default()
+    };
+    let mut l2 = Ledger::new(CHAIN, vec![module()]).unwrap();
+    genesis(&mut l2, c2, &[], false).unwrap();
+    assert!(validator_set(&l2).is_empty());
 }

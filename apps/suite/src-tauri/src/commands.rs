@@ -402,6 +402,38 @@ pub async fn wallet_check_backup(app: AppHandle, suite: State<'_, Suite>) -> Res
     with_device(app, suite.inner().clone(), |c| c.wallet_check_backup()).await
 }
 
+/// The economy the devnet screens work with: the VERIFIED chain of a running node network
+/// when there is one, else the local test file. DEVELOPMENT ONLY.
+#[cfg(feature = "dev-simulation")]
+struct EconCtx {
+    world: Box<dyn teko_assets::devnet::World>,
+    cast: teko_assets::devnet::Cast,
+    /// "node" or "local".
+    mode: &'static str,
+}
+
+#[cfg(feature = "dev-simulation")]
+fn economy_open(dev: &std::path::Path) -> Result<EconCtx, String> {
+    use teko_assets::devnet::{self, Cast};
+    let net = dev.join("net");
+    if net.join(teko_node::ECONOMY_FILE).exists()
+        && let Ok(w) = teko_node::NodeWorld::open(&net)
+    {
+        let cast = Cast::load(dev)?.with_registrars(teko_node::load_registrar_keys(&net));
+        return Ok(EconCtx {
+            world: Box::new(w),
+            cast,
+            mode: "node",
+        });
+    }
+    let (econ, cast) = devnet::open(dev)?;
+    Ok(EconCtx {
+        world: Box::new(econ),
+        cast,
+        mode: "local",
+    })
+}
+
 /// Result of a sent transfer.
 #[derive(serde::Serialize)]
 pub struct SendResult {
@@ -455,7 +487,6 @@ async fn send_impl(
     to: String,
     amount: u64,
 ) -> Result<SendResult, UiError> {
-    use teko_coin::devnet::CHAIN_ID;
     let dir = resolve_dev_dir();
     with_device(app, suite.inner().clone(), move |c| {
         let v = |m: String| ClientError::Verification(m);
@@ -471,7 +502,8 @@ async fn send_impl(
         if mine == dest {
             return Err(v("o destino é a sua própria carteira".into()));
         }
-        let (mut econ, _cast) = teko_assets::devnet::open(&dir).map_err(v)?;
+        let mut ctx = economy_open(&dir).map_err(v)?;
+        let econ = &mut ctx.world;
         let nonce = econ.nonce(&mine);
         let fee = econ.estimate_fee(&pk, nonce, &dest, amount);
         let needed = amount.saturating_add(fee);
@@ -481,7 +513,8 @@ async fn send_impl(
                 econ.balance(&mine)
             )));
         }
-        let tx = c.wallet_sign_transfer(CHAIN_ID, &to, amount, fee, nonce)?;
+        let chain = econ.chain_id().to_string();
+        let tx = c.wallet_sign_transfer(&chain, &to, amount, fee, nonce)?;
         econ.submit(tx).map_err(v)?;
         Ok(SendResult {
             amount,
@@ -509,10 +542,11 @@ fn history_impl(address: &str) -> Vec<HistoryItem> {
     let Ok(who) = teko_crypto::parse_wallet_address(address) else {
         return Vec::new();
     };
-    let Ok((econ, _cast)) = teko_assets::devnet::open(&resolve_dev_dir()) else {
+    let Ok(ctx) = economy_open(&resolve_dev_dir()) else {
         return Vec::new();
     };
-    econ.history(&who)
+    ctx.world
+        .history(&who)
         .into_iter()
         .rev()
         .map(|r| {
@@ -581,10 +615,11 @@ fn assets_view_impl(address: &str) -> Result<AssetsView, UiError> {
     use teko_assets::devnet;
     let me = teko_crypto::parse_wallet_address(address)
         .map_err(|_| ui_err("InvalidArgument", "endereço inválido"))?;
-    let (econ, cast) = devnet::open(&resolve_dev_dir()).map_err(|e| ui_err("Io", e))?;
+    let ctx = economy_open(&resolve_dev_dir()).map_err(|e| ui_err("Io", e))?;
+    let (econ, cast) = (&ctx.world, &ctx.cast);
     let cp = cast.counterparty_address();
     let items = |who: &teko_ledger::Address| {
-        devnet::owned(&econ, who)
+        devnet::owned(&**econ, who)
             .into_iter()
             .map(|(id, version, liens)| AssetItem {
                 id,
@@ -624,15 +659,15 @@ fn register_impl(address: &str, for_counterparty: bool) -> Result<String, UiErro
     use teko_assets::devnet;
     let me = teko_crypto::parse_wallet_address(address)
         .map_err(|_| ui_err("InvalidArgument", "endereço inválido"))?;
-    let (mut econ, cast) = devnet::open(&resolve_dev_dir()).map_err(|e| ui_err("Io", e))?;
+    let mut ctx = economy_open(&resolve_dev_dir()).map_err(|e| ui_err("Io", e))?;
     let owner = if for_counterparty {
-        cast.counterparty_address()
+        ctx.cast.counterparty_address()
     } else {
         me
     };
-    let n = econ.txs().len() + 1;
+    let n = ctx.world.ledger().height() + 1;
     let id = format!("matricula-{n:03}");
-    devnet::register(&mut econ, &cast, &owner, &id).map_err(|e| ui_err("Rejected", e))?;
+    devnet::register(&mut *ctx.world, &ctx.cast, &owner, &id).map_err(|e| ui_err("Rejected", e))?;
     Ok(id)
 }
 
@@ -650,8 +685,8 @@ fn lien_impl(_a: &str, _o: bool) -> Result<(), UiError> {
 #[cfg(feature = "dev-simulation")]
 fn lien_impl(asset: &str, on: bool) -> Result<(), UiError> {
     use teko_assets::devnet;
-    let (mut econ, cast) = devnet::open(&resolve_dev_dir()).map_err(|e| ui_err("Io", e))?;
-    devnet::set_lien(&mut econ, &cast, asset, on).map_err(|e| ui_err("Rejected", e))
+    let mut ctx = economy_open(&resolve_dev_dir()).map_err(|e| ui_err("Io", e))?;
+    devnet::set_lien(&mut *ctx.world, &ctx.cast, asset, on).map_err(|e| ui_err("Rejected", e))
 }
 
 /// Sells my asset to (or buys it from) the simulated counterparty. My consent is signed
@@ -694,7 +729,8 @@ async fn trade_impl(
         let pk = teko_crypto::hex::decode(&me_info.public_key)
             .map_err(|_| v("chave pública inválida".into()))?;
         let me = teko_crypto::ledger_address(&pk);
-        let (mut econ, cast) = devnet::open(&dir).map_err(v)?;
+        let mut ctx = economy_open(&dir).map_err(v)?;
+        let chain = ctx.world.chain_id().to_string();
         let mut device_error: Option<ClientError> = None;
         let result = {
             let mut consent = |kind: u8,
@@ -705,25 +741,16 @@ async fn trade_impl(
                                version: u64| {
                 let s = teko_crypto::wallet_address(seller).map_err(|_| "endereço".to_string())?;
                 let b = teko_crypto::wallet_address(buyer).map_err(|_| "endereço".to_string())?;
-                c.wallet_sign_asset_consent(
-                    teko_coin::devnet::CHAIN_ID,
-                    kind,
-                    devnet::CLASS,
-                    id,
-                    &s,
-                    &b,
-                    price,
-                    version,
-                )
-                .map_err(|e| {
-                    let msg = e.to_string();
-                    device_error = Some(e);
-                    msg
-                })
+                c.wallet_sign_asset_consent(&chain, kind, devnet::CLASS, id, &s, &b, price, version)
+                    .map_err(|e| {
+                        let msg = e.to_string();
+                        device_error = Some(e);
+                        msg
+                    })
             };
             devnet::trade_with_counterparty(
-                &mut econ,
-                &cast,
+                &mut *ctx.world,
+                &ctx.cast,
                 &me,
                 &asset,
                 price,
@@ -753,6 +780,11 @@ pub struct StakeView {
     slash_bps: u32,
     /// (short key, stake, is me)
     validators: Vec<(String, u64, bool)>,
+    /// "node" (verified network chain) or "local" (test file).
+    mode: String,
+    founder_phase_active: bool,
+    founder_target: u64,
+    total_stake: u64,
 }
 
 #[tauri::command]
@@ -774,6 +806,10 @@ fn stake_view_impl(_a: &str) -> Result<StakeView, UiError> {
         unbonding_period: 0,
         slash_bps: 0,
         validators: Vec::new(),
+        mode: String::new(),
+        founder_phase_active: false,
+        founder_target: 0,
+        total_stake: 0,
     })
 }
 
@@ -781,8 +817,8 @@ fn stake_view_impl(_a: &str) -> Result<StakeView, UiError> {
 fn stake_view_impl(address: &str) -> Result<StakeView, UiError> {
     let me = teko_crypto::parse_wallet_address(address)
         .map_err(|_| ui_err("InvalidArgument", "endereço inválido"))?;
-    let (econ, _cast) =
-        teko_assets::devnet::open(&resolve_dev_dir()).map_err(|e| ui_err("Io", e))?;
+    let ctx = economy_open(&resolve_dev_dir()).map_err(|e| ui_err("Io", e))?;
+    let econ = &ctx.world;
     let l = econ.ledger();
     let cfg = teko_coin::config(l);
     let hex_short = |pk: &[u8]| {
@@ -802,11 +838,15 @@ fn stake_view_impl(address: &str) -> Result<StakeView, UiError> {
         height: l.height(),
         unbonding_period: cfg.as_ref().map_or(0, |c| c.unbonding_period),
         slash_bps: cfg.as_ref().map_or(0, |c| c.slash_bps),
-        validators: teko_coin::validators(l)
+        mode: ctx.mode.to_string(),
+        founder_phase_active: teko_coin::founder_phase_active(l),
+        founder_target: cfg.as_ref().map_or(0, |c| c.founder_target),
+        total_stake: teko_coin::total_stake(l),
+        validators: teko_coin::validator_set(l)
             .into_iter()
-            .map(|(pk, stake)| {
-                let mine = teko_ledger::address_of(&pk) == me;
-                (hex_short(&pk), stake, mine)
+            .map(|e| {
+                let mine = e.owner == me;
+                (hex_short(&e.key), e.stake, mine)
             })
             .collect(),
     })
@@ -843,7 +883,6 @@ async fn stake_action_impl(
     action: u8,
     amount: u64,
 ) -> Result<u64, UiError> {
-    use teko_coin::devnet::CHAIN_ID;
     let dir = resolve_dev_dir();
     with_device(app, suite.inner().clone(), move |c| {
         let v = |m: String| ClientError::Verification(m);
@@ -851,7 +890,8 @@ async fn stake_action_impl(
         let pk = teko_crypto::hex::decode(&info.public_key)
             .map_err(|_| v("chave pública inválida".into()))?;
         let me = teko_crypto::ledger_address(&pk);
-        let (mut econ, _cast) = teko_assets::devnet::open(&dir).map_err(v)?;
+        let mut ctx = economy_open(&dir).map_err(v)?;
+        let econ = &mut ctx.world;
         let nonce = econ.nonce(&me);
         let payload = teko_crypto::ledger::coin_stake_payload(action, amount);
         // same fee rule as any transaction: price per byte over a generous envelope
@@ -867,11 +907,110 @@ async fn stake_action_impl(
         if action != 1 && have < fee {
             return Err(v(format!("saldo insuficiente para a taxa ({fee})")));
         }
-        let tx = c.wallet_sign_stake(CHAIN_ID, action, amount, fee, nonce)?;
+        let chain = econ.chain_id().to_string();
+        let tx = c.wallet_sign_stake(&chain, action, amount, fee, nonce)?;
         econ.submit(tx).map_err(v)?;
         Ok(econ.balance(&me))
     })
     .await
+}
+
+/// A node of the economy network, as shown by the overview.
+#[derive(serde::Serialize)]
+pub struct EconNodeView {
+    index: usize,
+    up: bool,
+    height: u64,
+    is_validator: bool,
+    mempool: u32,
+}
+
+/// The state of the economy network. DEVELOPMENT ONLY.
+#[derive(serde::Serialize)]
+pub struct EconomyOverview {
+    available: bool,
+    reason: Option<String>,
+    /// "node" or "local".
+    mode: String,
+    chain_id: String,
+    height: u64,
+    founder_phase_active: bool,
+    founder_target: u64,
+    total_stake: u64,
+    validators: usize,
+    nodes: Vec<EconNodeView>,
+}
+
+#[tauri::command]
+pub async fn economy_overview() -> Result<EconomyOverview, UiError> {
+    tauri::async_runtime::spawn_blocking(overview_impl)
+        .await
+        .map_err(|e| ui_err("Internal", e))
+}
+
+#[cfg(not(feature = "dev-simulation"))]
+fn overview_impl() -> EconomyOverview {
+    EconomyOverview {
+        available: false,
+        reason: Some("O livro de economia ainda não está na rede.".into()),
+        mode: String::new(),
+        chain_id: String::new(),
+        height: 0,
+        founder_phase_active: false,
+        founder_target: 0,
+        total_stake: 0,
+        validators: 0,
+        nodes: Vec::new(),
+    }
+}
+
+#[cfg(feature = "dev-simulation")]
+fn overview_impl() -> EconomyOverview {
+    let dev = resolve_dev_dir();
+    let net = dev.join("net");
+    if net.join(teko_node::ECONOMY_FILE).exists()
+        && let Ok(w) = teko_node::NodeWorld::open(&net)
+    {
+        let l = w.ledger_ref();
+        let nodes = w
+            .statuses()
+            .into_iter()
+            .enumerate()
+            .map(|(i, s)| EconNodeView {
+                index: i,
+                up: s.is_some(),
+                height: s.as_ref().map_or(0, |s| s.height),
+                is_validator: s.as_ref().is_some_and(|s| s.is_validator),
+                mempool: s.as_ref().map_or(0, |s| s.mempool),
+            })
+            .collect();
+        return EconomyOverview {
+            available: true,
+            reason: None,
+            mode: "node".into(),
+            chain_id: w.genesis().chain_id.clone(),
+            height: l.height(),
+            founder_phase_active: teko_coin::founder_phase_active(l),
+            founder_target: teko_coin::config(l).map_or(0, |c| c.founder_target),
+            total_stake: teko_coin::total_stake(l),
+            validators: teko_coin::validator_set(l).len(),
+            nodes,
+        };
+    }
+    EconomyOverview {
+        available: true,
+        reason: Some(
+            "Sem rede de economia: usando o livro local de teste (make devnet para a rede).".into(),
+        ),
+        mode: "local".into(),
+        chain_id: teko_coin::devnet::CHAIN_ID.into(),
+        height: 0,
+        founder_phase_active: false,
+        founder_target: 0,
+        total_stake: 0,
+        validators: 0,
+        nodes: Vec::new(),
+    }
 }
 
 /// What the wallet screen shows as balance.
@@ -895,6 +1034,20 @@ pub async fn wallet_balance(address: String) -> Result<BalanceInfo, UiError> {
 fn balance_impl(address: &str) -> BalanceInfo {
     let who =
         teko_crypto::parse_wallet_address(address).map_err(|_| "endereço inválido".to_string());
+    // A running node network wins: the balance comes from its VERIFIED chain.
+    if let Ok(w) = &who
+        && let Ok(ctx) = economy_open(&resolve_dev_dir())
+        && ctx.mode == "node"
+    {
+        return BalanceInfo {
+            available: true,
+            amount: ctx.world.balance(w),
+            note: Some(
+                "Moedas de TESTE da rede local (consenso BFT, verificado aqui). Fundador: as recompensas de bloco chegam à carteira do fundador.".into(),
+            ),
+            reason: None,
+        };
+    }
     match who.and_then(|w| teko_assets::devnet::balance_of(&resolve_dev_dir(), &w)) {
         Ok(Some(amount)) => BalanceInfo {
             available: true,

@@ -14,6 +14,7 @@ members = [
   "crates/teko-coin",
   "crates/teko-assets",
   "crates/teko-wallet",
+  "crates/teko-economy",
   "crates/teko-device-core",
   "crates/teko-transport",
   "crates/teko-client",
@@ -56,6 +57,7 @@ teko-ledger = { path = "crates/teko-ledger" }
 teko-coin = { path = "crates/teko-coin" }
 teko-assets = { path = "crates/teko-assets" }
 teko-wallet = { path = "crates/teko-wallet" }
+teko-economy = { path = "crates/teko-economy" }
 teko-transport = { path = "crates/teko-transport" }
 teko-client = { path = "crates/teko-client" }
 device-emulator = { path = "tools/device-emulator" }

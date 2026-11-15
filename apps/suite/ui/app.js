@@ -1450,8 +1450,10 @@
     if (!k.available) return `${h0}<article class="card">${callout('info', 'shield', 'Indisponível nesta versão', `<p>${esc(k.reason || 'O livro de economia ainda não está na rede.')}</p>`)}</article>`;
     const unb = k.unbonding.map(([rel, amt]) => `<dt>${esc(String(amt))} moedas</dt><dd>${k.height >= rel ? chip('pronto para resgatar', 'ok', 'check') : chip(`libera no bloco ${rel} (faltam ${rel - k.height})`, 'warn')}</dd>`).join('');
     const total = k.validators.reduce((a, v) => a + v[1], 0);
+    const phase = k.mode === 'node' ? founderCard(k) : '';
     return `${h0}
-      ${callout('warn', 'alert', 'Ambiente de teste', '<p>O livro é local e as moedas são de <strong>teste</strong> (<code>make fund</code>). Em desenvolvimento cada transação é um bloco, por isso o prazo de saída é curto (3 blocos).</p>')}
+      ${phase}
+      ${callout('warn', 'alert', 'Ambiente de teste', k.mode === 'node' ? '<p>Rede <strong>local</strong> de teste com consenso BFT (<code>make devnet</code>): moedas de <strong>teste</strong>, só na sua máquina. O que você vê aqui foi <strong>verificado por esta janela</strong> (certificados de cada bloco), não apenas informado por um nó.</p>' : '<p>O livro é local e as moedas são de <strong>teste</strong> (<code>make fund</code>). Em desenvolvimento cada transação é um bloco, por isso o prazo de saída é curto (3 blocos).</p>')}
       <div class="kpis">
         <div class="kpi"><div class="kpi__label">Saldo livre</div><div class="kpi__val">${esc(String(k.balance))}</div></div>
         <div class="kpi"><div class="kpi__label">Meu stake</div><div class="kpi__val">${esc(String(k.my_stake))}</div><div class="kpi__sub">${k.my_stake ? 'você é validador' : 'ainda não é validador'}</div></div>
@@ -1472,9 +1474,25 @@
       </article>
       <article class="card">
         <div class="card__head"><div class="card__ico card__ico--boto">${ico('users')}</div><h2>Validadores por stake</h2></div>
-        ${k.validators.length ? `<dl class="kv">${k.validators.map(([key, st, mine]) => `<dt class="mono">${esc(key)} ${mine ? chip('você', 'ok') : ''}</dt><dd><strong>${esc(String(st))}</strong> <span class="muted">(${total ? Math.round((st * 100) / total) : 0}% do poder de voto)</span></dd>`).join('')}</dl>` : '<p class="muted">Ninguém travou stake ainda.</p>'}
+        ${k.validators.length ? `<dl class="kv">${k.validators.map(([key, st, mine]) => `<dt class="mono">${esc(key)} ${mine ? chip('você', 'ok') : ''}</dt><dd>${k.founder_phase_active ? `<strong>fundador</strong> <span class="muted">(recebe as recompensas de bloco)</span>` : `<strong>${esc(String(st))}</strong> <span class="muted">(${total ? Math.round((st * 100) / total) : 0}% do poder de voto)</span>`}</dd>`).join('')}</dl>` : '<p class="muted">Ninguém travou stake ainda.</p>'}
         <p class="muted">O poder de voto de cada validador no consenso (BFT) é proporcional ao stake; mais de 2/3 do stake precisa concordar para fechar um bloco.</p>
       </article>`;
+  }
+
+  function founderCard(k) {
+    const pct = k.founder_target ? Math.min(100, Math.round((k.total_stake * 100) / k.founder_target)) : 0;
+    if (k.founder_phase_active) {
+      return `<article class="card">
+        <div class="card__head"><div class="card__ico card__ico--onca">${ico('stake')}</div><h2>Fase de fundador</h2></div>
+        <p class="muted">No começo, <strong>só o validador fundador</strong> produz os blocos e as <strong>recompensas</strong> vão para a carteira do fundador (sem pré-mineração). Travando essas moedas como stake, a rede passa a ser validada por <strong>quem tem stake</strong>. A fase termina quando o stake total chega a <strong>${esc(String(k.founder_target))}</strong>.</p>
+        <div class="meter" role="progressbar" aria-valuenow="${pct}" aria-valuemin="0" aria-valuemax="100"><span style="width:${pct}%"></span></div>
+        <p class="muted">${esc(String(k.total_stake))} de ${esc(String(k.founder_target))} (${pct}%) · bloco ${esc(String(k.height))}</p>
+      </article>`;
+    }
+    return `<article class="card">
+      <div class="card__head"><div class="card__ico card__ico--arara">${ico('check')}</div><h2>Fase de fundador encerrada</h2></div>
+      <p class="muted">Desde o stake total de ${esc(String(k.founder_target))}, os validadores são os que têm <strong>stake</strong>, com poder de voto proporcional. Bloco ${esc(String(k.height))}.</p>
+    </article>`;
   }
 
   async function stakeAct(action) {

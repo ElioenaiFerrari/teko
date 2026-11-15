@@ -18,5 +18,11 @@ pub mod devnet;
 mod module;
 mod query;
 
-pub use module::{COIN_MODULE, CoinConfig, CoinError, CoinModule, Op, genesis, module, reward_at};
-pub use query::{audit, balance, burned, config, minted, stake_of, unbonding_of, validators};
+pub use module::{
+    COIN_MODULE, CoinConfig, CoinError, CoinModule, Op, genesis, genesis_founders, module,
+    reward_at,
+};
+pub use query::{
+    ValidatorEntry, audit, balance, burned, config, founder_phase_active, founder_phase_over,
+    minted, owner_of, stake_of, total_stake, unbonding_of, validator_set, validators,
+};

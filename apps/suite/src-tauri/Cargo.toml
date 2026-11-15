@@ -18,6 +18,7 @@ teko-client.workspace = true
 teko-coin.workspace = true
 teko-assets.workspace = true
 teko-ledger.workspace = true
+teko-node.workspace = true
 teko-attestation.workspace = true
 teko-protocol.workspace = true
 teko-transport.workspace = true

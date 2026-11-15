@@ -41,6 +41,7 @@ fn start(dir: &std::path::Path, i: usize) -> NodeHandle {
             peers: net.peers,
             allow_remote: false,
             trust: None,
+            economy: None,
         },
         addr,
     )
@@ -184,6 +185,7 @@ fn start_with_trust(dir: &std::path::Path, i: usize) -> NodeHandle {
             peers: net.peers,
             allow_remote: false,
             trust: Some(trust),
+            economy: None,
         },
         addr,
     )

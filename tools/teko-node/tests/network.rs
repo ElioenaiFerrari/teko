@@ -58,6 +58,7 @@ fn start_node(dir: &std::path::Path, i: usize) -> NodeHandle {
             peers: net.peers,
             allow_remote: false,
             trust: None,
+            economy: None,
         },
         addr,
     )
@@ -250,6 +251,7 @@ fn a_node_refuses_to_listen_outside_loopback_and_a_wrong_key() {
         peers: net.peers.clone(),
         allow_remote: false,
         trust: None,
+        economy: None,
     };
     assert!(Node::start(cfg(0, 0), "0.0.0.0:0".parse().unwrap()).is_err());
     assert!(

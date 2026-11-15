@@ -122,6 +122,7 @@ fn main() {
         slash_bps: 1000,
         faucet_amount: 0,
         faucet_cooldown: 0,
+        ..Default::default()
     };
     teko_coin::genesis(
         &mut l,

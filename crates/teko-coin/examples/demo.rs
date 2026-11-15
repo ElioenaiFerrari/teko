@@ -104,6 +104,7 @@ fn main() {
         slash_bps: 1000,
         faucet_amount: 500,
         faucet_cooldown: 3,
+        ..Default::default()
     };
     println!(
         "Parâmetros: teto 100000 · recompensa 100 (cai pela metade a cada 5 blocos) · taxa 1/byte"

@@ -10,6 +10,8 @@ pub enum NodeError {
     Protocol(String),
     #[error("refused: {0}")]
     Refused(String),
+    #[error("economy: {0}")]
+    Economy(String),
     #[error("no node reachable")]
     Unreachable,
 }

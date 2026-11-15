@@ -151,3 +151,29 @@ def bens_suite():
     d.text(40, 430, "A troca é atômica: bem e moeda mudam de mãos juntos, ou nada acontece. O build de produção não tem órgão nem contraparte simulados.", 11, MUTED)
     d.legend([(MUTED, "chamada", False), (GREEN, "consentimento no dispositivo", False), (RED, "só em desenvolvimento", True), (BOTO, "gravação", False)])
     return d
+
+
+def fundador_fases():
+    d = D("fundador-fases", 1100, 560, "Da fase de fundador à validação por stake", "Opção B: sem pré-mineração; as recompensas viram o primeiro stake", "ECONOMIA")
+    d.arrow([(310, 178), (400, 178)], "default", label="recompensas", at=(355, 164))
+    d.arrow([(620, 178), (710, 178)], "ok", label="stake ≥ N", at=(665, 164))
+    d.arrow([(875, 216), (875, 300)], "default", label="todos validam", at=(955, 258))
+    d.node(60, 140, 250, 76, "Fundador valida sozinho", "único validador da gênese", "onca", "fase de fundador")
+    d.node(400, 140, 220, 76, "Dono trava as moedas", "SignStake no dispositivo", "plain", "carteira do dono")
+    d.node(710, 140, 330, 76, "Trava no estado", "founder_phase_over (irreversível)", "focal", "fim da fase")
+    d.node(725, 300, 300, 76, "Validadores por stake", "poder ∝ stake, no máx. K", "ok", "conjunto por altura")
+    d.text(60, 440, "As recompensas de bloco vão à CARTEIRA do dono (não à chave do nó). O conjunto da altura h vem do estado após h−1.", 11, MUTED)
+    d.legend([(MUTED, "fluxo", False), (GREEN, "transição", False)])
+    return d
+
+
+def economia_bloco():
+    d = D("economia-bloco", 1000, 0, "Um bloco de economia sob consenso BFT", "Proposta, votos ponderados e certificado de commit", "ECONOMIA")
+    A = [("c", "Cliente", "assina no dispositivo", "link", 110), ("p", "Proponente", "validador da vez", "focal", 380), ("v", "Demais validadores", "e réplicas", "boto", 680), ("l", "Livro", "moeda + bens", "plain", 920)]
+    M = [("c", "p", "transação assinada", "default", False), ("p", "v", "proposta: txs + raiz do estado", "default", False),
+         ("v", "p", "prevote e precommit (> 2/3)", "ok", True), ("p", "v", "bloco + certificado de commit", "boto", False),
+         ("v", "l", "reexecuta e confere a raiz", "default", False)]
+    N = [(1, "v", "Cada um refaz a execução antes de votar", 300), (3, "l", "Recompensa e taxas vão ao DONO do proponente", 330)]
+    d.sequence(A, M, notas=N, passo=36)
+    d.legend([(MUTED, "mensagem", False), (GREEN, "votos", True), (BOTO, "decisão final", False)])
+    return d

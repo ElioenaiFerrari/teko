@@ -9,6 +9,12 @@ pub const COIN_MODULE: u32 = teko_crypto::ledger::MODULE_COIN;
 pub(crate) const K_CFG: &[u8] = b"cfg";
 pub(crate) const K_MINTED: &[u8] = b"minted";
 pub(crate) const K_BURNED: &[u8] = b"burned";
+/// Total bonded stake (sum of every `stk:` entry).
+pub(crate) const K_TSTAKE: &[u8] = b"tstake";
+/// Set once, forever, when the founder phase ends.
+pub(crate) const K_FOVER: &[u8] = b"fover";
+/// Genesis founders: consensus keys in order, each length-prefixed (u16 BE).
+pub(crate) const K_FSET: &[u8] = b"fset";
 
 // Key prefixes end with ':' so a prefix scan never matches another family
 // (for example "bal:" versus the "burned" counter).
@@ -16,6 +22,10 @@ pub(crate) const P_BAL: &[u8] = b"bal:";
 pub(crate) const P_STAKE: &[u8] = b"stk:";
 pub(crate) const P_UNB: &[u8] = b"unb:";
 const P_PK: &[u8] = b"pk:";
+/// owner address -> consensus key linked to it.
+pub(crate) const P_VK: &[u8] = b"vk:";
+/// address of a consensus key -> owner address (rewards and slashing go to the owner).
+pub(crate) const P_VO: &[u8] = b"vo:";
 const P_FAUCET: &[u8] = b"fct:";
 const P_SLASHED: &[u8] = b"slx:";
 
@@ -30,6 +40,12 @@ pub(crate) fn k_pk(a: &Address) -> Vec<u8> {
 }
 pub(crate) fn k_unb(a: &Address) -> Vec<u8> {
     [P_UNB, a].concat()
+}
+pub(crate) fn k_vk(a: &Address) -> Vec<u8> {
+    [P_VK, a].concat()
+}
+pub(crate) fn k_vo(a: &Address) -> Vec<u8> {
+    [P_VO, a].concat()
 }
 fn k_faucet(a: &Address) -> Vec<u8> {
     [P_FAUCET, a].concat()
@@ -61,6 +77,18 @@ pub struct CoinConfig {
     /// Blocks between two faucet requests by the same address.
     #[prost(uint64, tag = "8")]
     pub faucet_cooldown: u64,
+    /// Founder phase ends when the TOTAL bonded stake reaches this (0 = no founder phase).
+    #[prost(uint64, tag = "9")]
+    pub founder_target: u64,
+    /// After the founder phase, `Unstake` is refused if it would leave less total stake.
+    #[prost(uint64, tag = "10")]
+    pub min_total_stake: u64,
+    /// Minimum stake for a validator once the set is derived from stake.
+    #[prost(uint64, tag = "11")]
+    pub min_validator_stake: u64,
+    /// Maximum validators once the set is derived from stake (0 = unlimited).
+    #[prost(uint32, tag = "12")]
+    pub max_validators: u32,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -75,12 +103,25 @@ pub enum CoinError {
 /// Operations a coin transaction can carry (`payload` = op byte + arguments).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Op {
-    Transfer { to: Address, amount: u64 },
-    Stake { amount: u64 },
-    Unstake { amount: u64 },
+    Transfer {
+        to: Address,
+        amount: u64,
+    },
+    Stake {
+        amount: u64,
+    },
+    Unstake {
+        amount: u64,
+    },
     Claim,
-    Slash { evidence: Vec<u8> },
+    Slash {
+        evidence: Vec<u8>,
+    },
     Faucet,
+    /// Links the sender (stake owner) to the CONSENSUS key its validator node uses.
+    SetValidatorKey {
+        key: Vec<u8>,
+    },
 }
 
 impl Op {
@@ -92,6 +133,7 @@ impl Op {
             Op::Claim => teko_crypto::ledger::coin_stake_payload(3, 0),
             Op::Slash { evidence } => [&[4u8][..], evidence].concat(),
             Op::Faucet => vec![5],
+            Op::SetValidatorKey { key } => [&[6u8][..], key].concat(),
         }
     }
 
@@ -123,6 +165,9 @@ impl Op {
                 evidence: rest.to_vec(),
             }),
             5 if rest.is_empty() => Ok(Op::Faucet),
+            6 if rest.len() == 33 || rest.len() == 65 => {
+                Ok(Op::SetValidatorKey { key: rest.to_vec() })
+            }
             _ => Err(bad()),
         }
     }
@@ -181,6 +226,41 @@ pub fn genesis(
     put(ledger, K_BURNED, 0)?;
     ledger
         .genesis_put(COIN_MODULE, K_CFG, cfg.encode_to_vec())
+        .map_err(|e| CoinError::Ledger(format!("{e:?}")))
+}
+
+/// Genesis founders: the validators that produce the first blocks (option B, ADR-0028).
+/// Each entry is (consensus key, owner address): rewards go to the OWNER. Requires a
+/// `founder_target` in the config and `allowed` (never on mainnet, which is locked).
+pub fn genesis_founders(
+    ledger: &mut Ledger,
+    founders: &[(Vec<u8>, Address)],
+    allowed: bool,
+) -> Result<(), CoinError> {
+    if !allowed {
+        return Err(CoinError::OnlyDevnet);
+    }
+    if founders.is_empty() || founders.len() > 16 {
+        return Err(CoinError::InvalidConfig("between 1 and 16 founders"));
+    }
+    let mut list = Vec::new();
+    let mut seen: Vec<&[u8]> = Vec::new();
+    for (key, owner) in founders {
+        if (key.len() != 33 && key.len() != 65) || seen.contains(&key.as_slice()) {
+            return Err(CoinError::InvalidConfig("invalid or duplicate founder key"));
+        }
+        seen.push(key);
+        list.extend_from_slice(&(key.len() as u16).to_be_bytes());
+        list.extend_from_slice(key);
+        ledger
+            .genesis_put(COIN_MODULE, &k_vo(&address_of(key)), owner.to_vec())
+            .map_err(|e| CoinError::Ledger(format!("{e:?}")))?;
+        ledger
+            .genesis_put(COIN_MODULE, &k_vk(owner), key.clone())
+            .map_err(|e| CoinError::Ledger(format!("{e:?}")))?;
+    }
+    ledger
+        .genesis_put(COIN_MODULE, K_FSET, list)
         .map_err(|e| CoinError::Ledger(format!("{e:?}")))
 }
 
@@ -296,6 +376,16 @@ impl Module for CoinModule {
         if minted > 0 {
             ctx.emit("reward", minted.to_be_bytes().to_vec());
         }
+        // The founder phase ends, for good, once enough stake exists (judged on the
+        // state left by the previous block, so every node agrees).
+        if cfg.founder_target > 0
+            && ctx.get(K_FOVER).is_none()
+            && ctx.get(K_FSET).is_some()
+            && get_u64(ctx, K_TSTAKE) >= cfg.founder_target
+        {
+            ctx.set(K_FOVER, vec![1]);
+            ctx.emit("founder-phase-over", Vec::new());
+        }
         Ok(())
     }
 
@@ -331,6 +421,7 @@ impl Module for CoinModule {
                 }
                 sub(ctx, &k_bal(&me), amount)?;
                 add(ctx, &k_stake(&me), amount)?;
+                add(ctx, K_TSTAKE, amount)?;
                 ctx.set(&k_pk(&me), ctx.sender_key.to_vec());
                 Ok(())
             }
@@ -339,6 +430,11 @@ impl Module for CoinModule {
                     return Err(ModuleError::new("amount must be positive"));
                 }
                 sub(ctx, &k_stake(&me), amount)?;
+                let total = get_u64(ctx, K_TSTAKE).saturating_sub(amount);
+                if ctx.get(K_FOVER).is_some() && total < cfg.min_total_stake {
+                    return Err(ModuleError::new("total stake would fall below the minimum"));
+                }
+                set_u64(ctx, K_TSTAKE, total);
                 let mut list = read_unbonding(ctx.get(&k_unb(&me)));
                 let release = ctx
                     .height
@@ -381,6 +477,23 @@ impl Module for CoinModule {
                 Ok(())
             }
             Op::Slash { evidence } => slash(ctx, &cfg, &evidence),
+            Op::SetValidatorKey { key } => {
+                let key_addr = address_of(&key);
+                if let Some(owner) = ctx.get(&k_vo(&key_addr))
+                    && owner.as_slice() != me.as_slice()
+                {
+                    return Err(ModuleError::new(
+                        "consensus key already linked to another owner",
+                    ));
+                }
+                if let Some(old) = ctx.get(&k_vk(&me)) {
+                    ctx.delete(&k_vo(&address_of(&old)));
+                }
+                ctx.set(&k_vk(&me), key.clone());
+                ctx.set(&k_vo(&key_addr), me.to_vec());
+                ctx.emit("validator-key", key);
+                Ok(())
+            }
         }
     }
 }
@@ -410,7 +523,12 @@ fn slash(ctx: &mut Ctx<'_, '_>, cfg: &CoinConfig, raw: &[u8]) -> Result<(), Modu
     if ctx.get(&marker_key).is_some() {
         return Err(ModuleError::new("already slashed for this offence"));
     }
-    let addr = address_of(validator);
+    // The evidence names a CONSENSUS key: the penalty hits the stake of its owner.
+    let key_addr = address_of(validator);
+    let addr: Address = ctx
+        .get(&k_vo(&key_addr))
+        .and_then(|o| <Address>::try_from(o.as_slice()).ok())
+        .unwrap_or(key_addr);
     let stake = get_u64(ctx, &k_stake(&addr));
     let mut unb = read_unbonding(ctx.get(&k_unb(&addr)));
     let at_risk = unb
@@ -420,6 +538,8 @@ fn slash(ctx: &mut Ctx<'_, '_>, cfg: &CoinConfig, raw: &[u8]) -> Result<(), Modu
     let total_penalty = penalty;
     let from_stake = penalty.min(stake);
     set_u64(ctx, &k_stake(&addr), stake - from_stake);
+    let total = get_u64(ctx, K_TSTAKE).saturating_sub(from_stake);
+    set_u64(ctx, K_TSTAKE, total);
     penalty -= from_stake;
     for (_, amt) in unb.iter_mut().rev() {
         if penalty == 0 {

@@ -22,6 +22,7 @@ crates/teko-ledger/        (Fase 2, M2) livro-razão genérico: Tx assinada, mó
 crates/teko-coin/          (Fase 2, M3) moeda de teto fixo: halving, taxa por byte, stake, slash, faucet devnet (ADR-0021)
 crates/teko-assets/        (Fase 2, M4) bens: classes com órgão M-de-N, dono+comprador+órgão, gravames, Swap atômico (ADR-0022)
 crates/teko-wallet/        (Fase 2, M5a) carteira: BIP-39 24 palavras (só na tela do dispositivo), SLIP-10 P-256, endereço tekow1…; independente da identidade (ADR-0023)
+crates/teko-economy/       (Fase 2, M6a) economia sobre BFT: blocos com certificado, validadores por stake, fase de fundador (ADR-0028)
 crates/teko-chain/         (Fase 2) rede federada PoA: perfis devnet/testnet (mainnet TRAVADA), blocos M-de-N, réplica verificada
 tools/teko-node/           (Fase 2) validador (gossip, rodízio, troca de turno) + cliente que não confia em nós
 crates/teko-bulletin/      (Fase 2) log Merkle append-only, provas, head assinado, leitor tolerante
@@ -80,6 +81,8 @@ cargo run -p teko-suite                # terminal 2: a Suite (Tauri v2)
 make docs-check                        # confere links, imagens e crates no README
 make fund ADDR=tekow1… AMOUNT=1000    # moedas de TESTE na carteira (devnet local)
 make diagramas                         # regenera os diagramas (docs/diagramas)
+make devnet FOUNDER=tekow1…            # (1ª vez) FOUNDER = sua carteira: recebe as recompensas do fundador (ADR-0028)
+make devnet-economy                    # economia BFT: altura, fase de fundador, validadores
 make devnet                            # blockchain de TESTE local: 3 validadores PoA (docs/NETWORKS.md)
 make                                   # lista todos os atalhos (check, repro, release-check, verify-fw...)
 # demo sem teclado (NUNCA em produção): cargo run -p device-emulator --features test-buttons -- --auto-pin 482913

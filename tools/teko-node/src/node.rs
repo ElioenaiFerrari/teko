@@ -37,6 +37,8 @@ pub struct NodeConfig {
     /// election is bound to. Without them the node still produces blocks but does NOT
     /// decrypt results (it cannot tell which manifests are legitimate).
     pub trust: Option<teko_attestation::TrustPolicy>,
+    /// The economy ledger on BFT (None = this node does not run it).
+    pub economy: Option<crate::economy::EconomyConfig>,
 }
 
 /// The key ceremony in progress at this node (secret polynomial).
@@ -70,11 +72,16 @@ struct State {
     results_sent: HashMap<String, Instant>,
 }
 
-struct Shared {
+pub(crate) struct Shared {
     state: Mutex<State>,
-    cfg: NodeConfig,
+    pub(crate) cfg: NodeConfig,
     me: Vec<u8>,
-    stop: AtomicBool,
+    pub(crate) stop: AtomicBool,
+    pub(crate) econ: Option<Mutex<crate::economy::Econ>>,
+}
+
+pub(crate) fn lock_econ(m: &Mutex<crate::economy::Econ>) -> MutexGuard<'_, crate::economy::Econ> {
+    m.lock().unwrap_or_else(|e| e.into_inner())
 }
 
 pub struct Node;
@@ -148,6 +155,16 @@ impl Node {
                 "this key is not validator `index` of the network".into(),
             ));
         }
+        let econ = match cfg.economy.as_ref() {
+            Some(ec) => Some(Mutex::new(crate::economy::Econ::open(
+                &cfg.dir,
+                ec,
+                &cfg.key,
+                cfg.index,
+                cfg.peers.clone(),
+            )?)),
+            None => None,
+        };
         let listener = TcpListener::bind(listen)?;
         listener.set_nonblocking(true)?;
         let addr = listener.local_addr()?;
@@ -172,12 +189,17 @@ impl Node {
             cfg,
             me,
             stop: AtomicBool::new(false),
+            econ,
         });
         let mut threads = Vec::new();
         let s = shared.clone();
         threads.push(thread::spawn(move || accept_loop(&s, &listener)));
         let s = shared.clone();
         threads.push(thread::spawn(move || producer_loop(&s)));
+        if shared.econ.is_some() {
+            let s = shared.clone();
+            threads.push(thread::spawn(move || crate::economy::run_loop(&s)));
+        }
         Ok(NodeHandle {
             shared,
             threads,
@@ -189,6 +211,14 @@ impl Node {
 impl NodeHandle {
     pub fn height(&self) -> u64 {
         lock(&self.shared).chain.height()
+    }
+
+    /// Height of the economy chain (0 when this node does not run it).
+    pub fn economy_height(&self) -> u64 {
+        self.shared
+            .econ
+            .as_ref()
+            .map_or(0, |e| lock_econ(e).height())
     }
 
     pub fn stop(mut self) {
@@ -234,6 +264,9 @@ fn ack(ok: bool, info: &str, accepted: u32) -> Msg {
 }
 
 fn handle(s: &Arc<Shared>, req: &Msg) -> Msg {
+    if let Some(r) = crate::economy::handle(s, req) {
+        return r;
+    }
     match req.kind {
         wire::SUBMIT | wire::FORWARD => match wire::decode::<SubmitEntries>(req) {
             Ok(b) => submit(s, &b, req.kind == wire::SUBMIT),

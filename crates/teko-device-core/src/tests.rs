@@ -2403,6 +2403,7 @@ fn a_swap_signed_on_the_device_moves_the_asset_and_the_coin_in_the_real_ledger()
         slash_bps: 1000,
         faucet_amount: 0,
         faucet_cooldown: 0,
+        ..Default::default()
     };
     teko_coin::genesis(&mut l, cfg, &[(buyer_addr, 9000)], true).unwrap();
     let keys: Vec<Vec<u8>> = regs.iter().map(public_key_bytes).collect();
@@ -2558,6 +2559,7 @@ fn a_stake_is_shown_on_the_device_and_becomes_a_validator_in_the_real_ledger() {
         slash_bps: 1000,
         faucet_amount: 0,
         faucet_cooldown: 0,
+        ..Default::default()
     };
     teko_coin::genesis(&mut l, cfg, &[(me, 5000)], true).unwrap();
     let run = |l: &mut Ledger, dev: &mut Dev, action: u32, amount: u64| {

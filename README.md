@@ -24,6 +24,7 @@ O computador (Suite) **nunca** vê chaves nem PIN. O dispositivo cifra e assina 
 | `teko-election` | manifesto da eleição, ciclo de vida dos pleitos, apuração |
 | `teko-registration` | registro anônimo por assinatura cega (RFC 9474) |
 | `teko-ballot-crypto` | ElGamal de limiar P-256, provas 0/1 e soma, DKG de Feldman |
+| `teko-economy` | economia sobre consenso BFT: blocos com certificado de commit, conjunto de validadores por stake com fase de fundador, verificação por clientes |
 | `teko-bulletin` | quadro de avisos: log Merkle append-only, provas e head assinado |
 | `teko-chain` | blocos M-de-N, perfis devnet/testnet (mainnet travada), réplica verificada |
 | `teko-bft` | consenso BFT estilo Tendermint ponderado por stake (ainda fora do nó) |
@@ -46,7 +47,7 @@ Pré-requisitos: Rust (o `rust-toolchain.toml` fixa a versão) e, para a Suite, 
 make clean-dev      # opcional: apaga o estado local de testes
 make check          # opcional: formato + clippy + testes + docs
 make setup          # 1x: chaves de teste, firmware assinado e "fábrica" (pasta dev/)
-make devnet         # rede de TESTE: 3 validadores PoA
+make devnet FOUNDER=tekow1…   # rede de TESTE: votos PoA + economia BFT (FOUNDER = endereço da aba Carteira; recebe as recompensas)
 make devnet-dkg     # cerimônia de chave entre os validadores (cédulas cifradas)
 make election       # cria a eleição de exemplo (7 pleitos)
 make emulator       # terminal 1: tela e botões do dispositivo (PIN aqui). Reinicie após make election
@@ -67,7 +68,8 @@ Demo sem teclado (**nunca** em produção): `cargo run -p device-emulator --feat
 ## Estado atual
 - **Fase 1** (dispositivo, Suite, emissor): completa.
 - **Fase 2** (votação): eleição com vários pleitos e jurisdições, registro anônimo, **cédulas cifradas** até o fechamento, rede PoA federada, reemissão sem seed (identidade), resultados em gráficos e **carteira com frase de recuperação de 24 palavras** (criada e confirmada no dispositivo, estilo Trezor; ADR-0023).
-- **Em construção** (programa do livro-razão): consenso BFT (`teko-bft`) e núcleo do livro (`teko-ledger`) **moeda** (`teko-coin`) e **bens** (`teko-assets`) prontos como biblioteca; a **carteira** já tem endereço, frase de recuperação (M5a) e **envia moedas assinando no dispositivo** (M5b, contra a devnet local de teste); o dispositivo também **assina o seu consentimento na venda de bens** (M5c) a Suite abre numa tela **Início** (resumo) e tem as telas **Validadores** (stake assinado no dispositivo) e **Bens** (venda e compra, com órgão e contraparte **simulados**, só em desenvolvimento); negociação entre pessoas reais e os votos sobre o BFT (M6) ainda só **planejados**.
+- **Economia sobre BFT (M6a):** a moeda, os bens e o stake rodam em consenso BFT nos nós (`make devnet-economy`), com **fase de fundador** sem pré-mineração (as recompensas vão para a carteira do dono) e validadores por stake depois (ADR-0028); a Suite verifica a cadeia dos nós.
+- **Antes disso** (programa do livro-razão): consenso BFT (`teko-bft`) e núcleo do livro (`teko-ledger`) **moeda** (`teko-coin`) e **bens** (`teko-assets`) prontos como biblioteca; a **carteira** já tem endereço, frase de recuperação (M5a) e **envia moedas assinando no dispositivo** (M5b, contra a devnet local de teste); o dispositivo também **assina o seu consentimento na venda de bens** (M5c) a Suite abre numa tela **Início** (resumo) e tem as telas **Validadores** (stake assinado no dispositivo) e **Bens** (venda e compra, com órgão e contraparte **simulados**, só em desenvolvimento); negociação entre pessoas reais e os votos sobre o BFT (M6) ainda só **planejados**.
 - **Fora de escopo**: hardware real, validade jurídica (ICP-Brasil), prova ZK de elegibilidade, explorador público (só placeholder).
 
 ## Documentação

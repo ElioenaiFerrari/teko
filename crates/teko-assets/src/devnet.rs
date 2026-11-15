@@ -15,7 +15,7 @@ use std::fs;
 use std::path::Path;
 
 use teko_coin::COIN_MODULE;
-use teko_coin::devnet::{CHAIN_ID, Economy};
+use teko_coin::devnet::{CHAIN_ID, Economy, TransferRecord};
 use teko_crypto::{SigningKey, generate_signing_key, hex, public_key_bytes};
 use teko_ledger::{Address, Ledger, Tx, address_of};
 
@@ -23,6 +23,54 @@ use crate::{
     ASSETS_MODULE, Approval, Intent, LienOp, Op, RegisterOp, ReleaseOp, SwapOp, asset, assets_of,
     genesis_class, module,
 };
+
+/// What the devnet screens need from an economy: the local test file or a real node.
+/// The ledger it exposes is always VERIFIED by this process.
+pub trait World {
+    /// The network id signed into every transaction.
+    fn chain_id(&self) -> &str;
+    fn ledger(&self) -> &Ledger;
+    /// Sends a signed transaction and returns once it is accepted (and, for a node,
+    /// included in a block).
+    fn submit(&mut self, tx: Tx) -> Result<(), String>;
+    fn history(&self, who: &Address) -> Vec<TransferRecord>;
+
+    fn nonce(&self, who: &Address) -> u64 {
+        self.ledger().nonce_of(who)
+    }
+    fn balance(&self, who: &Address) -> u64 {
+        teko_coin::balance(self.ledger(), who)
+    }
+    /// A fee that covers the per-byte price of a coin transfer.
+    fn estimate_fee(&self, sender_key: &[u8], nonce: u64, to: &Address, amount: u64) -> u64 {
+        let price = teko_coin::config(self.ledger()).map_or(0, |c| c.fee_per_byte);
+        let probe = Tx {
+            chain_id: self.chain_id().into(),
+            nonce,
+            module: COIN_MODULE,
+            payload: teko_coin::Op::Transfer { to: *to, amount }.encode(),
+            sender: sender_key.to_vec(),
+            signature: vec![0u8; 64],
+            fee: u64::MAX,
+        };
+        price.saturating_mul(probe.to_bytes().len() as u64)
+    }
+}
+
+impl World for Economy {
+    fn chain_id(&self) -> &str {
+        CHAIN_ID
+    }
+    fn ledger(&self) -> &Ledger {
+        Economy::ledger(self)
+    }
+    fn submit(&mut self, tx: Tx) -> Result<(), String> {
+        Economy::submit(self, tx)
+    }
+    fn history(&self, who: &Address) -> Vec<TransferRecord> {
+        Economy::history(self, who)
+    }
+}
 
 /// The only asset class of the devnet world.
 pub const CLASS: &str = "imovel";
@@ -64,6 +112,15 @@ impl Cast {
             counterparty: load_or_create(&dir.join(COUNTERPARTY_FILE))?,
             relayer: load_or_create(&dir.join(RELAYER_FILE))?,
         })
+    }
+
+    /// The same people, with the registrar keys of a real node network (so the órgão
+    /// simulado signs for the class that network's genesis defined).
+    pub fn with_registrars(mut self, registrars: Vec<SigningKey>) -> Cast {
+        if !registrars.is_empty() {
+            self.registrars = registrars;
+        }
+        self
     }
 
     pub fn counterparty_address(&self) -> Address {
@@ -109,7 +166,7 @@ pub fn balance_of(dir: &Path, who: &Address) -> Result<Option<u64>, String> {
 pub type Consent<'a> =
     dyn FnMut(u8, &str, &Address, &Address, u64, u64) -> Result<Approval, String> + 'a;
 
-fn submit_assets_op(econ: &mut Economy, cast: &Cast, op: Op) -> Result<(), String> {
+fn submit_assets_op(econ: &mut dyn World, cast: &Cast, op: Op) -> Result<(), String> {
     let me = cast.relayer_address();
     let nonce = econ.nonce(&me);
     let pk = public_key_bytes(&cast.relayer);
@@ -118,9 +175,10 @@ fn submit_assets_op(econ: &mut Economy, cast: &Cast, op: Op) -> Result<(), Strin
         .map(|c| c.fee_per_byte)
         .unwrap_or(0);
     let fee = price.saturating_mul(op.encode().len() as u64 + pk.len() as u64 + 160);
+    let chain = econ.chain_id().to_string();
     let tx = Tx::new_signed_with_fee(
         &cast.relayer,
-        CHAIN_ID,
+        &chain,
         nonce,
         fee,
         ASSETS_MODULE,
@@ -129,17 +187,17 @@ fn submit_assets_op(econ: &mut Economy, cast: &Cast, op: Op) -> Result<(), Strin
     econ.submit(tx)
 }
 
-fn quorum(cast: &Cast, i: &Intent) -> Vec<Approval> {
+fn quorum(cast: &Cast, chain_id: &str, i: &Intent) -> Vec<Approval> {
     cast.registrars
         .iter()
         .take(2)
-        .map(|k| Approval::sign(k, CHAIN_ID, i))
+        .map(|k| Approval::sign(k, chain_id, i))
         .collect()
 }
 
 /// The simulated registrar registers `asset_id` to `owner`.
 pub fn register(
-    econ: &mut Economy,
+    econ: &mut dyn World,
     cast: &Cast,
     owner: &Address,
     asset_id: &str,
@@ -151,7 +209,7 @@ pub fn register(
         *owner,
         meta.as_bytes(),
     );
-    let approvals = quorum(cast, &i);
+    let approvals = quorum(cast, econ.chain_id(), &i);
     submit_assets_op(
         econ,
         cast,
@@ -166,7 +224,7 @@ pub fn register(
 }
 
 /// The simulated registrar adds (`on`) or releases the first lien of `asset_id`.
-pub fn set_lien(econ: &mut Economy, cast: &Cast, asset_id: &str, on: bool) -> Result<(), String> {
+pub fn set_lien(econ: &mut dyn World, cast: &Cast, asset_id: &str, on: bool) -> Result<(), String> {
     let a =
         asset(econ.ledger(), CLASS.as_bytes(), asset_id.as_bytes()).ok_or("bem desconhecido")?;
     let owner: Address = a.owner.as_slice().try_into().map_err(|_| "dono inválido")?;
@@ -178,6 +236,7 @@ pub fn set_lien(econ: &mut Economy, cast: &Cast, asset_id: &str, on: bool) -> Re
             a.version,
             "penhora",
         );
+        let ap = quorum(cast, econ.chain_id(), &i);
         submit_assets_op(
             econ,
             cast,
@@ -185,7 +244,7 @@ pub fn set_lien(econ: &mut Economy, cast: &Cast, asset_id: &str, on: bool) -> Re
                 class: CLASS.into(),
                 asset: asset_id.as_bytes().to_vec(),
                 kind: "penhora".into(),
-                approvals: quorum(cast, &i),
+                approvals: ap,
             }),
         )
     } else {
@@ -197,6 +256,7 @@ pub fn set_lien(econ: &mut Economy, cast: &Cast, asset_id: &str, on: bool) -> Re
             a.version,
             lien,
         );
+        let ap = quorum(cast, econ.chain_id(), &i);
         submit_assets_op(
             econ,
             cast,
@@ -204,7 +264,7 @@ pub fn set_lien(econ: &mut Economy, cast: &Cast, asset_id: &str, on: bool) -> Re
                 class: CLASS.into(),
                 asset: asset_id.as_bytes().to_vec(),
                 lien_id: lien,
-                approvals: quorum(cast, &i),
+                approvals: ap,
             }),
         )
     }
@@ -215,7 +275,7 @@ pub fn set_lien(econ: &mut Economy, cast: &Cast, asset_id: &str, on: bool) -> Re
 /// the counterparty and the registrar quorum sign in software; the ledger executes the
 /// atomic swap. Returns my coin balance afterwards.
 pub fn trade_with_counterparty(
-    econ: &mut Economy,
+    econ: &mut dyn World,
     cast: &Cast,
     me: &Address,
     asset_id: &str,
@@ -259,8 +319,9 @@ pub fn trade_with_counterparty(
     let mine = consent(3, asset_id, &seller, &buyer, price, a.version)?;
     // 2) the counterparty (software) and the registrar quorum
     let mut approvals = vec![mine];
-    approvals.push(Approval::sign(&cast.counterparty, CHAIN_ID, &i));
-    approvals.extend(quorum(cast, &i));
+    let chain = econ.chain_id().to_string();
+    approvals.push(Approval::sign(&cast.counterparty, &chain, &i));
+    approvals.extend(quorum(cast, econ.chain_id(), &i));
     // the relayer submits (and pays the fee)
     let op = Op::Swap(SwapOp {
         class: CLASS.into(),
@@ -274,7 +335,7 @@ pub fn trade_with_counterparty(
 }
 
 /// A wallet's assets: (asset id, version, number of liens).
-pub fn owned(econ: &Economy, who: &Address) -> Vec<(String, u64, usize)> {
+pub fn owned(econ: &dyn World, who: &Address) -> Vec<(String, u64, usize)> {
     assets_of(econ.ledger(), who)
         .into_iter()
         .filter_map(|(c, id)| {

@@ -32,6 +32,7 @@ pub fn devnet_config() -> CoinConfig {
         slash_bps: 1000,
         faucet_amount: 0,
         faucet_cooldown: 0,
+        ..Default::default()
     }
 }
 
@@ -210,31 +211,38 @@ impl Economy {
 
     /// Transfers that involve `who`, oldest first.
     pub fn history(&self, who: &Address) -> Vec<TransferRecord> {
-        self.txs
-            .iter()
-            .enumerate()
-            .filter_map(|(i, tx)| {
-                if tx.module != COIN_MODULE {
-                    return None;
-                }
-                let p = tx.payload.as_slice();
-                let (op, rest) = p.split_first()?;
-                if *op != 0 || rest.len() != 40 {
-                    return None;
-                }
-                let to: Address = rest.get(..32)?.try_into().ok()?;
-                let amount = u64::from_be_bytes(rest.get(32..)?.try_into().ok()?);
-                let from = tx.address();
-                (from == *who || to == *who).then_some(TransferRecord {
-                    height: i as u64 + 1,
-                    from,
-                    to,
-                    amount,
-                    fee: tx.fee,
-                })
-            })
-            .collect()
+        history_from_txs(
+            self.txs.iter().enumerate().map(|(i, t)| (i as u64 + 1, t)),
+            who,
+        )
     }
+}
+
+/// The coin transfers among `txs` (each with the height of its block) that involve `who`.
+pub fn history_from_txs<'a>(
+    txs: impl Iterator<Item = (u64, &'a Tx)>,
+    who: &Address,
+) -> Vec<TransferRecord> {
+    txs.filter_map(|(height, tx)| {
+        if tx.module != COIN_MODULE {
+            return None;
+        }
+        let (op, rest) = tx.payload.split_first()?;
+        if *op != 0 || rest.len() != 40 {
+            return None;
+        }
+        let to: Address = rest.get(..32)?.try_into().ok()?;
+        let amount = u64::from_be_bytes(rest.get(32..)?.try_into().ok()?);
+        let from = tx.address();
+        (from == *who || to == *who).then_some(TransferRecord {
+            height,
+            from,
+            to,
+            amount,
+            fee: tx.fee,
+        })
+    })
+    .collect()
 }
 
 fn describe(debug: &str) -> String {

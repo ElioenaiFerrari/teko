@@ -11,13 +11,20 @@
 
 mod client;
 mod dkg;
+mod economy;
 mod error;
 mod node;
 mod setup;
 pub mod wire;
+mod world;
 
-pub use client::{NodeClient, RemoteStatus};
+pub use client::{EconStatus, NodeClient, RemoteStatus};
 pub use dkg::{load_share as load_tally_share, run_ceremony};
+pub use economy::EconomyConfig;
 pub use error::NodeError;
 pub use node::{Node, NodeConfig, NodeHandle};
-pub use setup::{NetFiles, init_network, load_network, load_validator_key, node_dir};
+pub use setup::{
+    ECONOMY_FILE, NetFiles, init_economy, init_network, load_economy, load_network,
+    load_registrar_keys, load_validator_key, node_dir,
+};
+pub use world::NodeWorld;

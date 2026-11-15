@@ -282,3 +282,25 @@ proptest! {
         prop_assert_ne!(l1.state_root(), l2.state_root());
     }
 }
+
+#[test]
+fn check_block_is_a_dry_run_that_predicts_the_real_root() {
+    let mut l = ledger();
+    let a = key(31);
+    let txs = [tx(&a, 0, 1, b"x\0y"), tx(&a, 1, 1, b"bump")];
+    let before = l.state_root();
+    let (root, receipts) = l.check_block(1, &P, &txs).unwrap();
+    assert_eq!(receipts.len(), 2);
+    assert_eq!(l.state_root(), before); // nothing changed
+    assert_eq!(l.height(), 0);
+    assert_eq!(l.apply_block(1, &P, &txs).unwrap().state_root, root);
+    // wrong height and invalid transactions are refused by the dry run too
+    assert!(matches!(
+        l.check_block(1, &P, &[]),
+        Err(LedgerError::WrongHeight {
+            expected: 2,
+            got: 1
+        })
+    ));
+    assert!(l.check_block(2, &P, &[tx(&a, 0, 1, b"x\0y")]).is_err());
+}

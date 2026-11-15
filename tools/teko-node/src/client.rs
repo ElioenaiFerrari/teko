@@ -6,7 +6,9 @@ use teko_bulletin::Entry;
 use teko_chain::{Block, BlockEntry, Chain, NetworkProfile};
 
 use crate::error::NodeError;
-use crate::wire::{self, Ack, BlocksReply, GetBlocks, Msg, StatusReply, SubmitEntries};
+use crate::wire::{
+    self, Ack, BlocksReply, EconStatusReply, GetBlocks, Msg, StatusReply, SubmitEntries, SubmitTxs,
+};
 
 const TIMEOUT: Duration = Duration::from_secs(3);
 
@@ -30,6 +32,24 @@ pub struct RemoteStatus {
     pub peers_online: u32,
     pub peers_total: u32,
     pub equivocations: u32,
+}
+
+/// Status of one node's economy chain.
+#[derive(Clone, Debug)]
+pub struct EconStatus {
+    pub addr: SocketAddr,
+    pub chain_id: String,
+    pub height: u64,
+    pub state_root: Vec<u8>,
+    pub mempool: u32,
+    pub founder_phase_active: bool,
+    pub founder_target: u64,
+    pub total_stake: u64,
+    /// (consensus key, owner address, voting power)
+    pub validators: Vec<(Vec<u8>, Vec<u8>, u64)>,
+    pub is_validator: bool,
+    pub round: u32,
+    pub evidence: u32,
 }
 
 /// Talks to any node of a network. It trusts NONE of them: `sync_chain` re-verifies
@@ -157,6 +177,142 @@ impl NodeClient {
                 let b = Block::decode(raw.as_slice())
                     .map_err(|_| NodeError::Protocol("malformed block".into()))?;
                 chain.apply(b)?;
+            }
+        }
+    }
+
+    // ───────────────────────── economy (ADR-0028) ─────────────────────────
+
+    /// Queues signed transactions on the first reachable node (it gossips them).
+    /// Returns how many were new.
+    pub fn econ_submit(&self, txs: &[teko_ledger::Tx]) -> Result<u32, NodeError> {
+        let m = wire::msg(
+            wire::ECON_TX,
+            &SubmitTxs {
+                txs: txs.iter().map(teko_ledger::Tx::to_bytes).collect(),
+            },
+        );
+        let mut last = NodeError::Unreachable;
+        for a in &self.addrs {
+            match call(*a, &m, TIMEOUT) {
+                Ok(r) if r.kind == wire::ACK => {
+                    let ack: Ack = wire::decode(&r)?;
+                    if ack.ok {
+                        return Ok(ack.accepted);
+                    }
+                    last = NodeError::Refused(ack.info);
+                }
+                Ok(_) => last = NodeError::Protocol("unexpected reply".into()),
+                Err(e) => last = e,
+            }
+        }
+        Err(last)
+    }
+
+    pub fn econ_status(&self, addr: SocketAddr) -> Result<EconStatus, NodeError> {
+        let r = call(
+            addr,
+            &Msg {
+                kind: wire::ECON_STATUS,
+                body: Vec::new(),
+            },
+            TIMEOUT,
+        )?;
+        if r.kind != wire::ECON_STATUS_REPLY {
+            return Err(NodeError::Protocol("this node has no economy chain".into()));
+        }
+        let s: EconStatusReply = wire::decode(&r)?;
+        Ok(EconStatus {
+            addr,
+            chain_id: s.chain_id,
+            height: s.height,
+            state_root: s.state_root,
+            mempool: s.mempool,
+            founder_phase_active: s.founder_phase_active,
+            founder_target: s.founder_target,
+            total_stake: s.total_stake,
+            validators: s
+                .validators
+                .into_iter()
+                .map(|v| (v.key, v.owner, v.power))
+                .collect(),
+            is_validator: s.is_validator,
+            round: s.round,
+            evidence: s.evidence,
+        })
+    }
+
+    /// Downloads and VERIFIES the economy chain: every certificate is checked against the
+    /// validator set the replayed state implies. Trusts no node; returns the longest
+    /// verified chain among the reachable nodes.
+    pub fn econ_sync(
+        &self,
+        genesis: &teko_economy::EconomyGenesis,
+    ) -> Result<teko_economy::EconomyChain, NodeError> {
+        let mut best: Option<teko_economy::EconomyChain> = None;
+        let mut last = NodeError::Unreachable;
+        for a in &self.addrs {
+            match Self::econ_pull(*a, genesis) {
+                Ok(c) => {
+                    if best.as_ref().is_none_or(|b| c.height() > b.height()) {
+                        best = Some(c);
+                    }
+                }
+                Err(e) => last = e,
+            }
+        }
+        best.ok_or(last)
+    }
+
+    /// Brings an already verified chain up to date, downloading ONLY the new blocks
+    /// (each one verified by `apply_decided`). Tries the nodes in order.
+    pub fn econ_pull_into(&self, chain: &mut teko_economy::EconomyChain) -> Result<(), NodeError> {
+        let mut last = NodeError::Unreachable;
+        for a in &self.addrs {
+            match Self::econ_pull_from(*a, chain) {
+                Ok(()) => return Ok(()),
+                Err(e) => last = e,
+            }
+        }
+        Err(last)
+    }
+
+    fn econ_pull(
+        addr: SocketAddr,
+        genesis: &teko_economy::EconomyGenesis,
+    ) -> Result<teko_economy::EconomyChain, NodeError> {
+        let mut chain = teko_economy::EconomyChain::new(genesis.clone())
+            .map_err(|e| NodeError::Economy(format!("{e:?}")))?;
+        Self::econ_pull_from(addr, &mut chain)?;
+        Ok(chain)
+    }
+
+    fn econ_pull_from(
+        addr: SocketAddr,
+        chain: &mut teko_economy::EconomyChain,
+    ) -> Result<(), NodeError> {
+        loop {
+            let req = wire::msg(
+                wire::ECON_BLOCKS,
+                &GetBlocks {
+                    from: chain.height() + 1,
+                    max: 200,
+                },
+            );
+            let r = call(addr, &req, Duration::from_secs(10))?;
+            if r.kind != wire::BLOCKS_REPLY {
+                return Err(NodeError::Protocol("unexpected reply".into()));
+            }
+            let reply: BlocksReply = wire::decode(&r)?;
+            if reply.blocks.is_empty() {
+                return Ok(());
+            }
+            for raw in reply.blocks {
+                let d = teko_economy::DecidedBlock::decode(raw.as_slice())
+                    .map_err(|_| NodeError::Protocol("malformed block".into()))?;
+                chain
+                    .apply_decided(d)
+                    .map_err(|e| NodeError::Economy(format!("{e:?}")))?;
             }
         }
     }

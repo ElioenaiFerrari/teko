@@ -27,7 +27,7 @@ use teko_protocol::{
     ContestInfo, CredentialLoaded, DeviceState, DocumentSignature, ElectionLoaded, ErrorCode,
     Failure, Features, FirmwareStatus, IdentityRequest, PROTO_VERSION, PairwiseId, PinSet,
     PinWrong, Predicate, PredicateKind, RegistrationRequest, RegistrationToken, Request, Response,
-    Success, Unlocked, VoterKey, WalletBackupOk, WalletReady, WipeDone,
+    Success, TransferSigned, Unlocked, VoterKey, WalletBackupOk, WalletReady, WipeDone,
 };
 use teko_wallet::{MasterKey, Phrase, WORD_COUNT};
 use zeroize::{Zeroize, Zeroizing};
@@ -397,6 +397,9 @@ impl<H: Hal, R: Rng + CryptoRng> Device<H, R> {
             Request::RestoreWallet(_) => self.restore_wallet(),
             Request::CheckWalletBackup(_) => self.check_wallet_backup(),
             Request::GetAddress(_) => self.get_address(),
+            Request::SignTransfer(m) => {
+                self.sign_transfer(&m.chain_id, &m.to_address, m.amount, m.fee, m.nonce)
+            }
             Request::GetPairwiseId(m) => self.get_pairwise_id(&m.service_id),
             Request::SignDocument(m) => self.sign_document(&m.hash, &m.summary),
             Request::ProveAttribute(m) => {
@@ -846,6 +849,67 @@ impl<H: Hal, R: Rng + CryptoRng> Device<H, R> {
             Vec::from([String::from("A frase está correta.")]),
         ));
         Ok(Response::WalletBackupOk(WalletBackupOk {}))
+    }
+
+    /// Builds, SHOWS and signs a coin transfer. The host supplies only the fields; the
+    /// bytes that are signed are derived here, from exactly what the screen shows.
+    fn sign_transfer(
+        &mut self,
+        chain_id: &str,
+        to_address: &str,
+        amount: u64,
+        fee: u64,
+        nonce: u64,
+    ) -> Result<Response, Failure> {
+        self.require_unlocked_initialized()?;
+        self.require_wallet()?;
+        let chain = sanitize(chain_id, 48)
+            .filter(|c| !c.trim().is_empty() && c.as_str() == chain_id)
+            .ok_or_else(|| fail(ErrorCode::InvalidArgument, "rede inválida"))?;
+        let to = teko_crypto::parse_wallet_address(to_address)
+            .map_err(|_| fail(ErrorCode::InvalidArgument, "endereço de destino inválido"))?;
+        if amount == 0 {
+            return Err(fail(ErrorCode::InvalidArgument, "valor deve ser positivo"));
+        }
+        let total = amount
+            .checked_add(fee)
+            .ok_or_else(|| fail(ErrorCode::InvalidArgument, "valor + taxa excede o limite"))?;
+        let master = self.master()?;
+        let sk = master
+            .signing_key(0)
+            .map_err(|_| fail(ErrorCode::Internal, "chave da carteira"))?;
+        let sender = public_key_bytes(&sk);
+        if teko_crypto::ledger_address(&sender) == to {
+            return Err(fail(
+                ErrorCode::InvalidArgument,
+                "destino é a sua própria carteira",
+            ));
+        }
+        // What the user will read is built from the SAME values that get signed.
+        let mut lines = Vec::from([String::from("Para:")]);
+        lines.extend(wrap(to_address, 22));
+        lines.push(format!("Valor: {amount}"));
+        lines.push(format!("Taxa:  {fee}"));
+        lines.push(format!("Total: {total}"));
+        lines.push(format!("Rede:  {chain}"));
+        self.confirm(
+            ButtonKind::SignTransfer,
+            Screen::new("ENVIAR MOEDAS", lines),
+        )?;
+        let payload = teko_crypto::ledger::coin_transfer_payload(&to, amount);
+        let msg = teko_crypto::ledger::tx_signing_bytes(
+            &chain,
+            nonce,
+            fee,
+            teko_crypto::ledger::MODULE_COIN,
+            &payload,
+            &sender,
+        );
+        let signature = sign_tagged(&sk, tags::LEDGER_TX, &msg);
+        Ok(Response::TransferSigned(TransferSigned {
+            signature,
+            public_key: sender,
+        }))
     }
 
     fn get_address(&mut self) -> Result<Response, Failure> {

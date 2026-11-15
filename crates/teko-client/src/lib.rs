@@ -424,6 +424,47 @@ impl<T: Transport> DeviceClient<T> {
         })
     }
 
+    /// Asks the device to sign a coin transfer. The DEVICE builds and shows the
+    /// transaction and signs only after the physical confirmation; the client
+    /// assembles the ledger transaction and checks the signature before returning it.
+    pub fn wallet_sign_transfer(
+        &mut self,
+        chain_id: &str,
+        to_address: &str,
+        amount: u64,
+        fee: u64,
+        nonce: u64,
+    ) -> Result<teko_ledger::Tx, ClientError> {
+        let to = parse_wallet_address(to_address)
+            .map_err(|_| ClientError::Verification("endereço de destino inválido".into()))?;
+        let signed = self.expect(
+            Request::SignTransfer(SignTransfer {
+                chain_id: chain_id.to_string(),
+                to_address: to_address.to_string(),
+                amount,
+                fee,
+                nonce,
+            }),
+            |r| match r {
+                Response::TransferSigned(t) => Ok(t),
+                o => Err(o),
+            },
+        )?;
+        let tx = teko_ledger::Tx {
+            chain_id: chain_id.to_string(),
+            nonce,
+            module: teko_coin::COIN_MODULE,
+            payload: teko_coin::Op::Transfer { to, amount }.encode(),
+            sender: signed.public_key,
+            signature: signed.signature,
+            fee,
+        };
+        tx.verify().map_err(|_| {
+            ClientError::Verification("a assinatura devolvida não confere com a transação".into())
+        })?;
+        Ok(tx)
+    }
+
     // ───────────────────────── identity & issuance ─────────────────────────
 
     /// Asks the device for its civic ID and double-checks it locally.

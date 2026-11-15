@@ -2224,3 +2224,134 @@ fn the_wallet_key_is_unrelated_to_the_identity_and_voter_secrets() {
     let m = teko_wallet::MasterKey::from_bytes(&master).unwrap();
     assert_ne!(m.public_key(0).unwrap(), identity_pk);
 }
+
+// ───────────────────────── coin transfers (M5b, ADR-0024) ─────────────────────────
+
+fn transfer_req(to: &str, amount: u64, fee: u64, nonce: u64) -> Request {
+    Request::SignTransfer(SignTransfer {
+        chain_id: "teko-devnet".into(),
+        to_address: to.into(),
+        amount,
+        fee,
+        nonce,
+    })
+}
+
+fn dest() -> String {
+    teko_crypto::wallet_address(&[7u8; 32]).unwrap()
+}
+
+#[test]
+fn a_transfer_is_shown_on_the_device_and_signs_as_a_valid_ledger_tx() {
+    let (_w, hal, mut dev) = fresh_initialized();
+    let created = create_wallet(&mut dev, &hal);
+    hal.clear_screens();
+    hal.clear_interim();
+    let to = dest();
+    let Response::TransferSigned(s) = dev.handle(transfer_req(&to, 500, 3, 4)) else {
+        panic!("not signed")
+    };
+    // The screen showed destination, amount, fee, total and network.
+    let screens = hal.screens();
+    let sc = screens.iter().find(|s| s.title == "ENVIAR MOEDAS").unwrap();
+    let text = sc.lines.join("");
+    assert!(text.contains(&to), "{text}");
+    for needle in ["Valor: 500", "Taxa:  3", "Total: 503", "teko-devnet"] {
+        assert!(sc.lines.iter().any(|l| l.contains(needle)), "{needle}");
+    }
+    assert!(hal.interim().iter().any(|r| matches!(
+        r,
+        Response::ButtonRequest(b) if b.kind == ButtonKind::SignTransfer as i32
+    )));
+    // The signature is a VALID ledger transaction by the wallet address.
+    let tx = teko_ledger::Tx {
+        chain_id: "teko-devnet".into(),
+        nonce: 4,
+        module: teko_coin::COIN_MODULE,
+        payload: teko_coin::Op::Transfer {
+            to: [7u8; 32],
+            amount: 500,
+        }
+        .encode(),
+        sender: s.public_key.clone(),
+        signature: s.signature.clone(),
+        fee: 3,
+    };
+    assert!(tx.verify().is_ok());
+    assert_eq!(
+        teko_crypto::wallet_address(&tx.address()).unwrap(),
+        created.address
+    );
+    // Any change of what was shown invalidates the signature.
+    for tweak in 0..4 {
+        let mut t = tx.clone();
+        match tweak {
+            0 => t.fee += 1,
+            1 => t.nonce += 1,
+            2 => t.chain_id = "other".into(),
+            _ => {
+                t.payload = teko_coin::Op::Transfer {
+                    to: [7u8; 32],
+                    amount: 501,
+                }
+                .encode()
+            }
+        }
+        assert!(t.verify().is_err());
+    }
+}
+
+#[test]
+fn rejecting_the_transfer_on_the_device_produces_no_signature() {
+    let (_w, hal, mut dev) = fresh_initialized();
+    create_wallet(&mut dev, &hal);
+    hal.push_decision(Decision::Reject);
+    let r = dev.handle(transfer_req(&dest(), 10, 0, 0));
+    assert_eq!(failure_code(&r), Some(ErrorCode::UserRejected));
+    hal.push_decision(Decision::Timeout);
+    let r = dev.handle(transfer_req(&dest(), 10, 0, 0));
+    assert_eq!(failure_code(&r), Some(ErrorCode::Timeout));
+}
+
+#[test]
+fn bad_transfer_requests_are_refused_before_any_prompt() {
+    let (_w, hal, mut dev) = fresh_initialized();
+    let created = create_wallet(&mut dev, &hal);
+    let before = hal.confirms_requested();
+    let cases = [
+        transfer_req(&dest(), 0, 0, 0),
+        transfer_req("tekow1notanaddress", 5, 0, 0),
+        transfer_req(&created.address, 5, 0, 0),
+        transfer_req(&dest(), u64::MAX, 1, 0),
+        Request::SignTransfer(SignTransfer {
+            chain_id: String::new(),
+            to_address: dest(),
+            amount: 5,
+            fee: 0,
+            nonce: 0,
+        }),
+        Request::SignTransfer(SignTransfer {
+            chain_id: "rede\nfalsa".into(),
+            to_address: dest(),
+            amount: 5,
+            fee: 0,
+            nonce: 0,
+        }),
+    ];
+    for c in cases {
+        let r = dev.handle(c);
+        assert_eq!(failure_code(&r), Some(ErrorCode::InvalidArgument), "{r:?}");
+    }
+    assert_eq!(hal.confirms_requested(), before); // nothing was ever shown
+}
+
+#[test]
+fn transfers_need_the_wallet_and_the_unlocked_device() {
+    let (_w, hal, mut dev) = fresh_initialized();
+    let r = dev.handle(transfer_req(&dest(), 5, 0, 0));
+    assert_eq!(failure_code(&r), Some(ErrorCode::InvalidState)); // no wallet yet
+    create_wallet(&mut dev, &hal);
+    dev.lock();
+    let r = dev.handle(transfer_req(&dest(), 5, 0, 0));
+    assert_eq!(failure_code(&r), Some(ErrorCode::InvalidState));
+}

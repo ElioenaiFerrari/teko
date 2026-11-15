@@ -67,7 +67,7 @@ Demo sem teclado (**nunca** em produção): `cargo run -p device-emulator --feat
 ## Estado atual
 - **Fase 1** (dispositivo, Suite, emissor): completa.
 - **Fase 2** (votação): eleição com vários pleitos e jurisdições, registro anônimo, **cédulas cifradas** até o fechamento, rede PoA federada, reemissão sem seed (identidade), resultados em gráficos e **carteira com frase de recuperação de 24 palavras** (criada e confirmada no dispositivo, estilo Trezor; ADR-0023).
-- **Em construção** (programa do livro-razão): consenso BFT (`teko-bft`) e núcleo do livro (`teko-ledger`) **moeda** (`teko-coin`) e **bens** (`teko-assets`) prontos como biblioteca; a **carteira** já tem endereço e frase de recuperação (M5a); assinar transações, enviar/receber e patrimônio na Suite (M5b) e os votos sobre o BFT (M6) ainda só **planejados**.
+- **Em construção** (programa do livro-razão): consenso BFT (`teko-bft`) e núcleo do livro (`teko-ledger`) **moeda** (`teko-coin`) e **bens** (`teko-assets`) prontos como biblioteca; a **carteira** já tem endereço, frase de recuperação (M5a) e **envia moedas assinando no dispositivo** (M5b, contra a devnet local de teste); consentimentos de bens, patrimônio na Suite e os votos sobre o BFT (M6) ainda só **planejados**.
 - **Fora de escopo**: hardware real, validade jurídica (ICP-Brasil), prova ZK de elegibilidade, explorador público (só placeholder).
 
 ## Documentação

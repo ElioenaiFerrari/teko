@@ -137,3 +137,16 @@ def carteira_arvore():
     d.label("sem nenhuma derivação", (550, 300), RED)
     d.legend([(MUTED, "deriva", False), (RED, "nunca se liga", True)])
     return d
+
+
+def carteira_enviar():
+    d = D("carteira-enviar", 1000, 0, "Enviar moedas com o dispositivo", "O dispositivo monta, mostra e assina a transação; a Suite só prepara e entrega", "CARTEIRA")
+    A = [("s", "Suite", "prepara os campos", "link", 120), ("d", "Dispositivo", "mostra e assina", "onca", 480), ("l", "Livro de economia", "devnet local", "boto", 860)]
+    M = [("s", "l", "lê nonce e saldo; calcula a taxa", "default", False), ("l", "s", "nonce, saldo, taxa", "default", True),
+         ("s", "d", "SignTransfer{destino, valor, taxa, nonce}", "default", False), ("d", "d", "mostra destino, valor, taxa e rede", "accent", False),
+         ("d", "s", "TransferSigned{assinatura}", "ok", True), ("s", "l", "transação assinada", "boto", False)]
+    N = [(3, "d", "Você confere e confirma no botão. Recusou: nada é assinado", 380),
+         (5, "l", "Valida assinatura, nonce, taxa e saldo; senão recusa", 320)]
+    d.sequence(A, M, notas=N, passo=36)
+    d.legend([(MUTED, "pedido", False), (GOLD, "tela e botão do dispositivo", False), (BOTO, "gravação no livro", False), (GREEN, "resposta", True)])
+    return d

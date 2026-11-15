@@ -4,7 +4,7 @@ use teko_crypto::{tagged_hash, tags};
 use teko_ledger::{Address, Ctx, Ledger, Module, ModuleError, address_of};
 
 /// Module id of the coin in `Tx::module`.
-pub const COIN_MODULE: u32 = 1;
+pub const COIN_MODULE: u32 = teko_crypto::ledger::MODULE_COIN;
 
 pub(crate) const K_CFG: &[u8] = b"cfg";
 pub(crate) const K_MINTED: &[u8] = b"minted";
@@ -86,7 +86,7 @@ pub enum Op {
 impl Op {
     pub fn encode(&self) -> Vec<u8> {
         match self {
-            Op::Transfer { to, amount } => [&[0u8][..], to, &amount.to_be_bytes()].concat(),
+            Op::Transfer { to, amount } => teko_crypto::ledger::coin_transfer_payload(to, *amount),
             Op::Stake { amount } => [&[1u8][..], &amount.to_be_bytes()].concat(),
             Op::Unstake { amount } => [&[2u8][..], &amount.to_be_bytes()].concat(),
             Op::Claim => vec![3],

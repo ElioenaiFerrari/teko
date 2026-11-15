@@ -87,6 +87,7 @@ fn prompt_name(kind: ButtonKind) -> &'static str {
         ButtonKind::WalletRestore => "wallet_restore",
         ButtonKind::WalletCheck => "wallet_check",
         ButtonKind::WalletPassphrase => "wallet_passphrase",
+        ButtonKind::SignTransfer => "sign_transfer",
         ButtonKind::Unspecified => "unknown",
     }
 }
@@ -397,6 +398,133 @@ pub async fn wallet_restore(
 #[tauri::command]
 pub async fn wallet_check_backup(app: AppHandle, suite: State<'_, Suite>) -> Result<(), UiError> {
     with_device(app, suite.inner().clone(), |c| c.wallet_check_backup()).await
+}
+
+/// Result of a sent transfer.
+#[derive(serde::Serialize)]
+pub struct SendResult {
+    amount: u64,
+    fee: u64,
+    to: String,
+    balance_after: u64,
+}
+
+/// One line of the wallet history.
+#[derive(serde::Serialize)]
+pub struct HistoryItem {
+    height: u64,
+    /// "sent" or "received".
+    direction: String,
+    counterparty: String,
+    amount: u64,
+    fee: u64,
+}
+
+/// Sends coins. The DEVICE shows destination, amount and fee and signs only after the
+/// physical confirmation; the Suite prepares the fields and submits the signed result.
+/// DEVELOPMENT ONLY for now: it goes to the local devnet economy (`dev/economy.*`).
+#[tauri::command]
+pub async fn wallet_send(
+    app: AppHandle,
+    suite: State<'_, Suite>,
+    to: String,
+    amount: u64,
+) -> Result<SendResult, UiError> {
+    send_impl(app, suite, to, amount).await
+}
+
+#[cfg(not(feature = "dev-simulation"))]
+async fn send_impl(
+    _app: AppHandle,
+    _suite: State<'_, Suite>,
+    _to: String,
+    _amount: u64,
+) -> Result<SendResult, UiError> {
+    Err(ui_err(
+        "NotAvailable",
+        "O livro de economia ainda não está na rede: enviar moedas ficará disponível com ele.",
+    ))
+}
+
+#[cfg(feature = "dev-simulation")]
+async fn send_impl(
+    app: AppHandle,
+    suite: State<'_, Suite>,
+    to: String,
+    amount: u64,
+) -> Result<SendResult, UiError> {
+    use teko_coin::devnet::{CHAIN_ID, Economy};
+    let dir = resolve_dev_dir();
+    with_device(app, suite.inner().clone(), move |c| {
+        let v = |m: String| ClientError::Verification(m);
+        let dest = teko_crypto::parse_wallet_address(&to)
+            .map_err(|_| v("endereço de destino inválido (confira o checksum)".into()))?;
+        if amount == 0 {
+            return Err(v("informe um valor maior que zero".into()));
+        }
+        let me = c.wallet_address()?;
+        let pk = teko_crypto::hex::decode(&me.public_key)
+            .map_err(|_| v("chave pública inválida".into()))?;
+        let mine = teko_crypto::ledger_address(&pk);
+        if mine == dest {
+            return Err(v("o destino é a sua própria carteira".into()));
+        }
+        let mut econ = Economy::open(&dir).map_err(v)?;
+        let nonce = econ.nonce(&mine);
+        let fee = econ.estimate_fee(&pk, nonce, &dest, amount);
+        let needed = amount.saturating_add(fee);
+        if econ.balance(&mine) < needed {
+            return Err(v(format!(
+                "saldo insuficiente: precisa de {needed} (valor {amount} + taxa {fee}), tem {}",
+                econ.balance(&mine)
+            )));
+        }
+        let tx = c.wallet_sign_transfer(CHAIN_ID, &to, amount, fee, nonce)?;
+        econ.submit(tx).map_err(v)?;
+        Ok(SendResult {
+            amount,
+            fee,
+            to,
+            balance_after: econ.balance(&mine),
+        })
+    })
+    .await
+}
+
+/// Wallet history (DEVELOPMENT ONLY: local devnet economy).
+#[tauri::command]
+pub async fn wallet_history(address: String) -> Result<Vec<HistoryItem>, UiError> {
+    Ok(history_impl(&address))
+}
+
+#[cfg(not(feature = "dev-simulation"))]
+fn history_impl(_address: &str) -> Vec<HistoryItem> {
+    Vec::new()
+}
+
+#[cfg(feature = "dev-simulation")]
+fn history_impl(address: &str) -> Vec<HistoryItem> {
+    let Ok(who) = teko_crypto::parse_wallet_address(address) else {
+        return Vec::new();
+    };
+    let Ok(econ) = teko_coin::devnet::Economy::open(&resolve_dev_dir()) else {
+        return Vec::new();
+    };
+    econ.history(&who)
+        .into_iter()
+        .rev()
+        .map(|r| {
+            let sent = r.from == who;
+            let other = if sent { r.to } else { r.from };
+            HistoryItem {
+                height: r.height,
+                direction: if sent { "sent" } else { "received" }.into(),
+                counterparty: teko_crypto::wallet_address(&other).unwrap_or_default(),
+                amount: r.amount,
+                fee: if sent { r.fee } else { 0 },
+            }
+        })
+        .collect()
 }
 
 /// What the wallet screen shows as balance.

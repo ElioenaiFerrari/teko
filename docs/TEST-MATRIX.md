@@ -220,6 +220,11 @@ Legenda: **P** = `proptest` (muitos casos), **U** = unitário, **E** = ponta a p
 | Restaurar a mesma frase dá o **mesmo endereço**; frase com palavra desconhecida ou checksum errado é recusada; "não confere o endereço" não salva | device: `restore_gives_the_same_address_and_rejects_bad_phrases`; e2e: `a_wallet_restores_on_a_new_device_with_the_same_address` |
 | "Verificar backup" confirma a frase certa e recusa outras sem mudar nada | device: `backup_check_confirms_the_right_phrase_and_refuses_others` |
 | `GetAddress` só com o dispositivo desbloqueado; a carteira sobrevive ao reinício e o `Wipe` a destrói | device: `get_address_needs_the_unlocked_device_and_returns_public_data`, `the_wallet_survives_a_restart_and_a_wipe_destroys_it` |
+| **O dispositivo mostra tudo que assina**: destino, valor, taxa, total e rede aparecem na tela e a assinatura é uma `Tx` válida do livro (qualquer mudança de campo a invalida) | device: `a_transfer_is_shown_on_the_device_and_signs_as_a_valid_ledger_tx` |
+| Recusar ou expirar no dispositivo não gera assinatura; pedido inválido (zero, endereço ruim, para si mesmo, estouro, rede vazia) é recusado **antes de qualquer tela** | device: `rejecting_the_transfer_on_the_device_produces_no_signature`, `bad_transfer_requests_are_refused_before_any_prompt` |
+| Enviar exige carteira e dispositivo desbloqueado | device: `transfers_need_the_wallet_and_the_unlocked_device` |
+| **Ponta a ponta:** assinar no dispositivo, entregar ao livro local, saldos corretos, reinício reproduz, recusa no botão não muda nada | e2e: `sending_coins_is_signed_on_the_device_and_lands_in_the_devnet_economy` |
+| A economia local move moedas com taxa, recusa repetição (nonce), saldo insuficiente e taxa baixa sem deixar rastro, e rejeita arquivo adulterado | coin: `devnet::tests::the_local_economy_moves_coins_with_fees_and_history`, `a_tampered_transactions_file_is_rejected_on_open` |
 | Saldo de teste da devnet (arquivo de alocações) | coin: `devnet::tests::allocations_roundtrip_and_balance`, `bad_input_is_refused` |
 
 ## O que **não** está coberto por teste automático (honestidade)

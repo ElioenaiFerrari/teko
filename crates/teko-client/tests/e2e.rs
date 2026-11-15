@@ -879,3 +879,59 @@ fn a_wallet_restores_on_a_new_device_with_the_same_address() {
     }
     assert!(cb.wallet_check_backup().is_err());
 }
+
+#[test]
+fn sending_coins_is_signed_on_the_device_and_lands_in_the_devnet_economy() {
+    use teko_coin::devnet::{CHAIN_ID, ECONOMY_FILE, Economy, append_allocation};
+
+    let rig = start();
+    let mut c = connect(&rig);
+    let (m, b) = firmware(&rig, 1);
+    c.install_firmware(&rig.trust, &m, &b, &mut |_, _| {})
+        .unwrap();
+    c.setup_pin().unwrap();
+    let wallet = c.wallet_setup().unwrap();
+    let me = c.wallet_address().unwrap();
+    let pk = teko_crypto::hex::decode(&me.public_key).unwrap();
+    let mine = teko_crypto::ledger_address(&pk);
+
+    // test coins for this wallet, and somebody to pay
+    let dir = scratch_dir("e2e-econ");
+    let friend = teko_crypto::ledger_address(&[9u8; 33]);
+    let friend_addr = teko_crypto::wallet_address(&friend).unwrap();
+    append_allocation(&dir.join(ECONOMY_FILE), &wallet.address, 10_000).unwrap();
+    let mut econ = Economy::open(&dir).unwrap();
+    assert_eq!(econ.balance(&mine), 10_000);
+
+    // the device shows the transfer and signs; the Suite submits
+    let nonce = econ.nonce(&mine);
+    let fee = econ.estimate_fee(&pk, nonce, &friend, 2500);
+    let prompts = Arc::new(AtomicUsize::new(0));
+    let p2 = prompts.clone();
+    c.set_on_button(move |k| {
+        if k == teko_protocol::ButtonKind::SignTransfer {
+            p2.fetch_add(1, Ordering::SeqCst);
+        }
+    });
+    let tx = c
+        .wallet_sign_transfer(CHAIN_ID, &friend_addr, 2500, fee, nonce)
+        .unwrap();
+    assert_eq!(prompts.load(Ordering::SeqCst), 1);
+    assert!(rig.hal.screens().iter().any(|s| {
+        s.title == "ENVIAR MOEDAS" && s.lines.iter().any(|l| l.contains("Valor: 2500"))
+    }));
+    econ.submit(tx).unwrap();
+    assert_eq!(econ.balance(&friend), 2500);
+    assert_eq!(econ.balance(&mine), 10_000 - 2500 - fee);
+    // restart the economy: the signed transaction was stored and replays
+    let again = Economy::open(&dir).unwrap();
+    assert_eq!(again.balance(&friend), 2500);
+    assert_eq!(again.history(&mine).len(), 1);
+
+    // the user rejects on the device: no signature, nothing changes
+    rig.hal.push_decision(Decision::Reject);
+    let nonce = again.nonce(&mine);
+    let r = c.wallet_sign_transfer(CHAIN_ID, &friend_addr, 1, fee, nonce);
+    assert_eq!(device_code(r.unwrap_err()), ErrorCode::UserRejected);
+    assert_eq!(Economy::open(&dir).unwrap().balance(&friend), 2500);
+}

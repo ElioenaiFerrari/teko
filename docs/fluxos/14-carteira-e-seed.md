@@ -27,6 +27,17 @@ Você (com papel e caneta), o dispositivo (tela e botões) e a Suite, que só es
 6. **Restaurar** (dispositivo novo ou apagado): **Restaurar com minha frase**, digite as 24 palavras **no dispositivo**, informe a passphrase (se houver) e **confira o endereço** mostrado: uma frase errada gera outra carteira em silêncio, então o endereço é a prova.
 7. **Verificar backup** (tela Carteira): o dispositivo pede a frase inteira e só diz se confere.
 
+## Enviar moedas (M5b)
+
+![Sequência de envio: a Suite lê nonce, saldo e taxa do livro, pede ao dispositivo a assinatura, o dispositivo mostra destino, valor e taxa e assina após o botão, e a Suite entrega a transação ao livro](../diagramas/carteira-enviar.png)
+
+*Fontes: [SVG](../diagramas/carteira-enviar.svg) · [HTML](../diagramas/carteira-enviar.html)*
+
+1. Na tela Carteira, informe o endereço de destino e o valor. A Suite lê o `nonce` e o saldo do livro e calcula a taxa (preço por byte); recusa cedo se o saldo não cobre.
+2. Ela envia ao dispositivo só os campos (`SignTransfer`). O dispositivo **monta a transação**, mostra **destino, valor, taxa, total e rede** e espera o botão. **Confira o destino na tela do dispositivo**: é a única fonte confiável.
+3. Confirmado, o dispositivo devolve a assinatura; a Suite remonta a transação, confere a assinatura e a entrega ao livro, que valida de novo (assinatura, nonce, taxa, saldo).
+4. Hoje o livro é a **devnet local** (`dev/economy.*`); o histórico e o saldo da tela vêm dele. Decisão: [ADR-0024](../adr/0024-assinar-transferencias-no-dispositivo.md).
+
 ## O que é verificado e por quem
 - O **dispositivo**: lista de palavras e checksum BIP-39, as palavras das posições sorteadas, a igualdade das duas digitações da passphrase.
 - A **Suite**: só confere que o endereço recebido é bech32m válido e que corresponde à chave pública (`wallet_address`).
@@ -44,4 +55,4 @@ Você (com papel e caneta), o dispositivo (tela e botões) e a Suite, que só es
 Vetores oficiais de BIP-39 e SLIP-10 (`crates/teko-wallet`), os testes `creating_a_wallet_shows_24_words_only_on_the_screen`, `a_wrong_word_shows_the_phrase_again…`, `restore_gives_the_same_address…` (device-core) e o ponta a ponta `a_wallet_restores_on_a_new_device_with_the_same_address`. Lista completa em [TEST-MATRIX](../TEST-MATRIX.md).
 
 ## Limites honestos
-Emulador sem isolamento de hardware (a frase passa por um terminal comum; ele limpa a tela, mas não há garantia). Derivação própria sobre o crate `bip39`, **sem auditoria**. A carteira ainda **não assina transações** (`SignTransaction` é o próximo marco) e o saldo mostrado hoje vem de uma alocação de **moeda de teste** da devnet local (`make fund`), não de um livro na rede.
+Emulador sem isolamento de hardware (a frase passa por um terminal comum; ele limpa a tela, mas não há garantia). Derivação própria sobre o crate `bip39`, **sem auditoria**. O saldo e o envio funcionam só contra a **devnet local de teste** (`make fund`, `dev/economy.*`), não contra um livro na rede (M6). Só transferência de **moeda**: assinar consentimentos de bens fica para o próximo marco.

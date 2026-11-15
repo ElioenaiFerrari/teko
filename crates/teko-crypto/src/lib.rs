@@ -14,6 +14,7 @@ mod error;
 pub mod hex;
 mod ids;
 mod keys;
+pub mod ledger;
 mod sign;
 pub mod tags;
 pub mod voter;

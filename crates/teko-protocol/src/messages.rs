@@ -48,6 +48,8 @@ pub enum ButtonKind {
     WalletCheck = 19,
     /// "Use a passphrase?" prompt.
     WalletPassphrase = 20,
+    /// "Send N coins to ADDRESS?" prompt (everything shown comes from the device).
+    SignTransfer = 21,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, prost::Enumeration)]
@@ -146,6 +148,24 @@ pub struct RestoreWallet {}
 pub struct CheckWalletBackup {}
 #[derive(Clone, PartialEq, prost::Message)]
 pub struct GetAddress {}
+/// Asks the device to sign a coin transfer. The device BUILDS the transaction itself
+/// from these fields, shows it on its screen (destination, amount, fee, network) and
+/// signs only after the physical confirmation.
+#[derive(Clone, PartialEq, prost::Message)]
+pub struct SignTransfer {
+    #[prost(string, tag = "1")]
+    pub chain_id: String,
+    /// bech32m `tekow1…` destination.
+    #[prost(string, tag = "2")]
+    pub to_address: String,
+    #[prost(uint64, tag = "3")]
+    pub amount: u64,
+    #[prost(uint64, tag = "4")]
+    pub fee: u64,
+    /// Number of transactions the account already executed.
+    #[prost(uint64, tag = "5")]
+    pub nonce: u64,
+}
 #[derive(Clone, PartialEq, prost::Message)]
 pub struct GetPairwiseId {
     #[prost(string, tag = "1")]
@@ -261,6 +281,14 @@ pub struct Address {
 }
 #[derive(Clone, PartialEq, prost::Message)]
 pub struct WalletBackupOk {}
+/// Signature of the transfer built by the device (public data).
+#[derive(Clone, PartialEq, prost::Message)]
+pub struct TransferSigned {
+    #[prost(bytes = "vec", tag = "1")]
+    pub signature: Vec<u8>,
+    #[prost(bytes = "vec", tag = "2")]
+    pub public_key: Vec<u8>,
+}
 
 #[derive(Clone, PartialEq, prost::Message)]
 pub struct Features {
@@ -531,6 +559,7 @@ define_messages! {
         RestoreWallet(RestoreWallet) = 0x001A,
         CheckWalletBackup(CheckWalletBackup) = 0x001B,
         GetAddress(GetAddress) = 0x001C,
+        SignTransfer(SignTransfer) = 0x001D,
     }
 }
 
@@ -561,6 +590,7 @@ define_messages! {
         WalletReady(WalletReady) = 0x0116,
         Address(Address) = 0x0117,
         WalletBackupOk(WalletBackupOk) = 0x0118,
+        TransferSigned(TransferSigned) = 0x0119,
     }
 }
 

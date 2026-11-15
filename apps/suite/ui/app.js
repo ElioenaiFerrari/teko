@@ -220,6 +220,7 @@
     wallet_confirm: ['Confirme a sua anotação no dispositivo', 'O dispositivo vai pedir palavras de posições sorteadas. Digite-as no dispositivo, lendo do seu papel.'],
     wallet_passphrase: ['Escolha no dispositivo: usar passphrase?', 'Uma senha extra protege a frase, mas esquecê-la significa perder os fundos. Decida no dispositivo.'],
     wallet_restore: ['Restaure a carteira no dispositivo', 'Digite as 24 palavras NO DISPOSITIVO e confira o endereço mostrado. Esta janela nunca vê as palavras.'],
+    sign_transfer: ['Confirme o envio no dispositivo', 'Confira o ENDEREÇO de destino, o valor e a taxa que o dispositivo mostra. Só confirme se for exatamente o que você quer enviar.'],
     wallet_check: ['Verifique o backup no dispositivo', 'Digite a frase do seu papel no dispositivo. Ele só diz se confere ou não.'],
     unknown: ['Aguardando o dispositivo', 'Olhe a tela do dispositivo.'],
   };
@@ -669,6 +670,22 @@
       <article class="card">
         <div class="card__head"><div class="card__ico card__ico--arara">${ico('chart')}</div><h2>Saldo</h2></div>
         ${bal}
+      </article>
+      <article class="card">
+        <div class="card__head"><div class="card__ico card__ico--onca">${ico('upload')}</div><h2>Enviar moedas</h2></div>
+        <p class="muted">O dispositivo mostra o destino, o valor e a taxa e só assina depois da sua confirmação no botão dele. Moedas de teste, na devnet local.</p>
+        <div class="fields">
+          <div class="field"><label for="f-to">Endereço de destino</label><input class="input" id="f-to" placeholder="tekow1…" autocomplete="off" spellcheck="false"></div>
+          <div class="field"><label for="f-amt">Valor</label><input class="input" id="f-amt" type="number" min="1" step="1" placeholder="ex.: 100"></div>
+        </div>
+        <p class="muted">A taxa é calculada por byte e paga a quem produz o bloco; você vê o valor exato no dispositivo.</p>
+        <div class="row"><button class="btn" data-act="walletsend">${ico('upload')}Enviar com o dispositivo</button></div>
+      </article>
+      <article class="card">
+        <div class="card__head"><div class="card__ico card__ico--arara">${ico('list')}</div><h2>Histórico</h2></div>
+        ${!S.history ? `<div class="row">${ico('spin', 'spin')}<span>Lendo…</span></div>`
+          : S.history.length === 0 ? '<p class="muted">Nenhuma movimentação ainda.</p>'
+          : `<dl class="kv">${S.history.map((h) => `<dt>${h.direction === 'sent' ? 'Enviado' : 'Recebido'} · bloco ${esc(String(h.height))}</dt><dd><strong>${h.direction === 'sent' ? '−' : '+'}${esc(String(h.amount))}</strong>${h.fee ? ` <span class="muted">(taxa ${esc(String(h.fee))})</span>` : ''} <span class="muted mono" style="font-size:.8rem">${h.direction === 'sent' ? 'para' : 'de'} ${esc(h.counterparty.slice(0, 14))}…${esc(h.counterparty.slice(-6))}</span></dd>`).join('')}</dl>`}
       </article>
       <article class="card">
         <div class="card__head"><div class="card__ico">${ico('shield')}</div><h2>Backup da frase</h2></div>
@@ -1122,7 +1139,7 @@
       if (id === 'explorer') { S.explorerTried = false; S.inclusion = null; }
       if (id === 'results') { S.resultsShape = null; setTimeout(pollResults, 0); }
       if (id === 'identity') S.idTried = false;
-      if (id === 'wallet') { S.walletTried = false; S.walletAddr = null; S.balance = null; }
+      if (id === 'wallet') { S.walletTried = false; S.walletAddr = null; S.balance = null; S.history = null; }
       if (id === 'identity') loadId();
       render();
     },
@@ -1171,6 +1188,16 @@
     async walletrestore() {
       await guarded(async () => { const w = await call('wallet_restore'); S.wallet = w; toast('Carteira restaurada. Confira o endereço.', 'ok'); });
       S.lastKey = ''; await poll();
+    },
+    async walletsend() {
+      const to = ($('#f-to') || {}).value || '', amount = Number(($('#f-amt') || {}).value || 0);
+      if (!to.trim() || !Number.isInteger(amount) || amount <= 0) { toast('Informe o endereço de destino e um valor inteiro maior que zero.'); return; }
+      let r = null;
+      await guarded(async () => { r = await call('wallet_send', { to: to.trim(), amount }, { delay: 300 }); });
+      if (r) {
+        toast(`Enviado: ${r.amount} (taxa ${r.fee}). Saldo: ${r.balance_after}.`, 'ok');
+        S.walletTried = false; S.balance = null; S.history = null; S.lastKey = ''; render(); loadWallet();
+      }
     },
     async walletcheck() {
       await guarded(async () => { await call('wallet_check_backup'); toast('Backup conferido: a frase confere com esta carteira.', 'ok'); });
@@ -1301,6 +1328,7 @@
     await guarded(async () => { S.walletAddr = await call('wallet_address', {}, { delay: 5000 }); }, { silent: true });
     if (S.walletAddr) {
       try { S.balance = await invoke('wallet_balance', { address: S.walletAddr.address }); } catch { S.balance = { available: false, reason: 'Não foi possível ler o saldo.' }; }
+      try { S.history = await invoke('wallet_history', { address: S.walletAddr.address }); } catch { S.history = []; }
     }
     S.lastKey = ''; render();
   }

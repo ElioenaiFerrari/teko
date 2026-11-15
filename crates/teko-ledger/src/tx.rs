@@ -85,19 +85,14 @@ impl Tx {
 
     /// Canonical bytes covered by the signature (everything but the signature).
     fn signing_bytes(&self) -> Vec<u8> {
-        let mut out = Vec::new();
-        for part in [
-            self.chain_id.as_bytes(),
-            &self.nonce.to_be_bytes(),
-            &self.fee.to_be_bytes(),
-            &self.module.to_be_bytes(),
+        teko_crypto::ledger::tx_signing_bytes(
+            &self.chain_id,
+            self.nonce,
+            self.fee,
+            self.module,
             &self.payload,
             &self.sender,
-        ] {
-            out.extend_from_slice(&(part.len() as u32).to_be_bytes());
-            out.extend_from_slice(part);
-        }
-        out
+        )
     }
 
     /// Cheap stateless checks: size and signature.

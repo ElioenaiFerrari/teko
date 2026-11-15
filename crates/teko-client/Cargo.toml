@@ -13,6 +13,8 @@ teko-election.workspace = true
 teko-ballot-crypto.workspace = true
 teko-transport.workspace = true
 teko-registration.workspace = true
+teko-ledger.workspace = true
+teko-coin.workspace = true
 prost.workspace = true
 rand.workspace = true
 sha3 = { workspace = true, features = ["std"] }

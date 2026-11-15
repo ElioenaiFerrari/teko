@@ -62,6 +62,7 @@ Legenda — **Confirma?**: exige confirmação física no dispositivo. Todas as 
 | `SetupWallet` → `ButtonRequest(WalletCreate, SeedWords×4, WalletPassphrase, WalletConfirm)` → `WalletReady{address, has_passphrase}` | Inicializado, desbloqueado, sem carteira | **Sim** (cada página + 3 posições digitadas no dispositivo) | Mostra 24 palavras em 4 páginas; pergunta passphrase; pede as palavras das posições sorteadas |
 | `RestoreWallet` → `ButtonRequest(WalletRestore…)` → `WalletReady` | Idem | **Sim** (24 palavras digitadas + conferir o endereço) | "Digite as 24 palavras AQUI"; mostra o endereço derivado |
 | `CheckWalletBackup` → `ButtonRequest(WalletCheck)` → `WalletBackupOk` ou `Failure` | Desbloqueado, com carteira | **Sim** (redigitar a frase) | "Verificar backup"; só diz se confere |
+| `SignTransfer{chain_id, to_address, amount, fee, nonce}` → `ButtonRequest(SignTransfer)` → `TransferSigned{signature, public_key}` | Desbloqueado, com carteira | **Sim** | "ENVIAR MOEDAS": destino, valor, taxa, total e rede (o dispositivo monta a transação e assina o que mostrou) |
 | `GetAddress` → `Address{address, public_key}` | Desbloqueado, com carteira | Não (dados públicos) | — |
 | `Wipe` → `ButtonRequest` → `WipeDone` | todos exceto Virgem | **Sim** (pressionar e segurar) | "APAGAR TUDO? Irreversível." |
 
@@ -132,6 +133,10 @@ Mensagens de erro **nunca** incluem material secreto nem diferenciam causas de f
 | SignBallot (stub) | ✖ | ✖ | ✖ | ✖ | ✖ | ✔(c) |
 | SetupWallet / RestoreWallet | ✖ | ✖ | ✖ | ✖ | ✖ | ✔(c)\* |
 | CheckWalletBackup / GetAddress | ✖ | ✖ | ✖ | ✖ | ✖ | ✔ (c) |
+| SignTransfer | ✖ | ✖ | ✖ | ✖ | ✖ | ✔(c)\*\* |
+
+\*\* Exige carteira pronta (`Features.wallet_ready`).
+
 | Wipe | ✖ | ✔(c) | ✔(c) | ✔(c) | ✔(c) | ✔(c) |
 
 \* Só em `Inicializado` (antes do ID Cívico) e uma única vez: `GetCivicId` e `GetIdentityRequest` respondem `InvalidState` enquanto não houver carteira pronta (`Features.wallet_ready`).

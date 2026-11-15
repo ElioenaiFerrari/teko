@@ -33,6 +33,8 @@ fn main() {
             commands::wallet_check_backup,
             commands::wallet_address,
             commands::wallet_balance,
+            commands::wallet_send,
+            commands::wallet_history,
             commands::dev_mode,
             commands::issue_credential,
             commands::revoke_credential,

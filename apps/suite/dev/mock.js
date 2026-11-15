@@ -18,6 +18,7 @@
     wallet: q === 'ready' || q === 'locked',
     retries: Number(new URLSearchParams(location.search).get('retries') || 8),
   };
+  let wbal = 4000; const whist = [{ height: 1, direction: 'received', counterparty: 'tekow1qqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqq9z3k', amount: 4000, fee: 0 }];
   const WADDR = 'tekow1qpzry9x8gf2tvdw0s3jn54khce6mua7lqpzry9x8gf2tvdw0s3jn54khce6muaw9z3k';
   const status = () => ({
     connected: dev.connected, busy: false, addr: '127.0.0.1:7878', trust_ok: true, error: null,
@@ -61,7 +62,9 @@
     wallet_restore: async () => { await prompt('wallet_restore', 1800); dev.wallet = true; return { address: WADDR, has_passphrase: false }; },
     wallet_check_backup: async () => { await prompt('wallet_check', 1800); },
     wallet_address: async () => ({ address: WADDR, public_key: '02' + 'cd'.repeat(32) }),
-    wallet_balance: async () => ({ available: true, amount: 4000, note: 'Alocação de gênese de TESTE da devnet (mock).' }),
+    wallet_send: async ({ to, amount }) => { await prompt('sign_transfer', 1800); wbal -= amount + 162; whist.unshift({ height: whist.length + 1, direction: 'sent', counterparty: to, amount, fee: 162 }); return { amount, fee: 162, to, balance_after: wbal }; },
+    wallet_history: async () => whist.slice(),
+    wallet_balance: async () => (wbal = wbal ?? 4000, { available: true, amount: wbal, note: 'Alocação de gênese de TESTE da devnet (mock).' }),
     unlock: async () => { await prompt('pin_entry', 1000); dev.locked = false; return { result: 'unlocked' }; },
     civic_id: async () => { if (dev.state === 'initialized') await prompt('confirm_civic_id'); return { id: ID, public_key: '02' + 'ab'.repeat(32) }; },
     dev_mode: async () => true,

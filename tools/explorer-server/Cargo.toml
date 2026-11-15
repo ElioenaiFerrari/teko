@@ -16,6 +16,7 @@ path = "src/main.rs"
 
 [dependencies]
 teko-explorer.workspace = true
+teko-assets.workspace = true
 teko-chain.workspace = true
 teko-node.workspace = true
 teko-economy.workspace = true

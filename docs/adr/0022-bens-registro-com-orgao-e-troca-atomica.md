@@ -16,3 +16,5 @@
 - Sem validade jurídica; sem ligação com cartórios, ONR ou SREI; metadados do bem são só um hash.
 - Não há ainda transferência por herança, usufruto, fração do bem ou leilão.
 - Quem ocupa cada chave de órgão no mundo real (e a custódia dessas chaves) é decisão institucional fora do código.
+
+**Atualização (ADR-0032):** o `metadata_hash` passou a ter 32 bytes (hash de um registro fora da chain) e entra no consentimento de transferência e venda; a devnet tem as classes `imovel` e `veiculo`, cada uma com o seu órgão.

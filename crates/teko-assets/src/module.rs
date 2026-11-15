@@ -13,7 +13,8 @@ pub const ASSETS_MODULE: u32 = 2;
 
 const MAX_CLASS: usize = 32;
 const MAX_ASSET: usize = 64;
-const MAX_META: usize = 64;
+/// Length of the metadata hash stored with every asset.
+pub const META_HASH_LEN: usize = 32;
 const MAX_APPROVALS: usize = 32;
 const MAX_REGISTRARS: usize = 16;
 const MAX_LIENS: usize = 16;
@@ -275,8 +276,12 @@ impl Module for AssetsModule {
 
 fn register(ctx: &mut Ctx<'_, '_>, chain: &str, op: RegisterOp) -> Result<(), ModuleError> {
     check_len(&op.approvals)?;
-    if op.asset.is_empty() || op.asset.len() > MAX_ASSET || op.metadata_hash.len() > MAX_META {
-        return Err(err("invalid asset id or metadata"));
+    if op.asset.is_empty() || op.asset.len() > MAX_ASSET {
+        return Err(err("invalid asset id"));
+    }
+    // the chain stores only a HASH of the off-chain metadata record (ADR-0032)
+    if op.metadata_hash.len() != META_HASH_LEN {
+        return Err(err("metadata hash must be 32 bytes"));
     }
     let class = load_class(ctx, &op.class)?;
     if ctx.get(&k_asset(&op.class, &op.asset)).is_some() {
@@ -341,7 +346,8 @@ fn transfer_checked(
             to,
             amount: price,
             version: a.version,
-            extra: Vec::new(),
+            // the consents cover WHICH asset (its metadata hash), not only its id
+            extra: a.metadata_hash.clone(),
         },
     );
     if !signed_by(&h, approvals, &owner) {

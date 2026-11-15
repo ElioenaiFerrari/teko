@@ -95,6 +95,7 @@ fn the_explorer_verifies_the_chain_of_three_real_nodes_and_decodes_a_transfer() 
     let client = NodeClient::new(load_network(&dir).unwrap().peers);
 
     let shared = Shared::new(Index::new(ec.genesis.clone()).unwrap(), "devnet")
+        .with_store(teko_assets::MetadataStore::new(dir.join("assets-metadata")))
         .with_votes(load_network(&dir).unwrap().profile);
     wait("a few blocks verified by the explorer", 30, || {
         sync_once(&shared, &client);
@@ -141,6 +142,48 @@ fn the_explorer_verifies_the_chain_of_three_real_nodes_and_decodes_a_transfer() 
     assert_eq!(blk["proposer_owner"], owner_text);
     let vals = get(&shared, "/api/v1/validators");
     assert_eq!(vals.as_array().unwrap().len(), 1);
+    // a vehicle registered by its own órgão: the explorer shows the chain's hash and,
+    // on a local devnet, the record VERIFIED against that hash
+    {
+        use teko_assets::devnet::{self, CLASSES, Cast, METADATA_DIR};
+        use teko_crypto::asset_meta;
+        use teko_node::{NodeWorld, load_class_registrar_keys};
+        let mut world = NodeWorld::open(&dir).unwrap();
+        let mut cast = Cast::load(&dir).unwrap().with_store(dir.join(METADATA_DIR));
+        for class in CLASSES {
+            cast = cast.with_registrars(class, load_class_registrar_keys(&dir, class));
+        }
+        let f = asset_meta::sample("veiculo", 21).unwrap();
+        let p: Vec<(&str, &str)> = f.iter().map(|(k, v)| (k.as_str(), v.as_str())).collect();
+        let rec = asset_meta::canonical("veiculo", &p).unwrap();
+        let chassis = devnet::register(&mut world, &cast, &owner, "veiculo", &rec).unwrap();
+        wait("the vehicle indexed", 30, || {
+            sync_once(&shared, &client);
+            shared.index().asset("veiculo", &chassis).is_some()
+        });
+        let a = get(&shared, &format!("/api/v1/assets/veiculo/{chassis}"));
+        assert_eq!(a["asset"]["owner"], owner_text);
+        assert_eq!(
+            a["asset"]["metadata_hash"],
+            teko_crypto::hex::encode(&asset_meta::hash("veiculo", &rec))
+        );
+        assert_eq!(a["metadata_verified"], true);
+        assert!(a["metadata"].to_string().contains("BRA1"), "{a}"); // the plate
+        let all = get(&shared, "/api/v1/assets");
+        assert_eq!(all["classes"].as_array().unwrap().len(), 2);
+        assert_eq!(all["assets"].as_array().unwrap().len(), 1);
+        // without the store (a public explorer) only the hash is shown
+        let public = Shared::new(Index::new(ec.genesis.clone()).unwrap(), "testnet");
+        sync_once(&public, &client);
+        let b = get(&public, &format!("/api/v1/assets/veiculo/{chassis}"));
+        assert_eq!(b["metadata_available"], false);
+        assert_eq!(b["metadata_verified"], false);
+        assert_eq!(b["metadata"].as_array().unwrap().len(), 0);
+        assert_eq!(
+            handle(&public, "GET", "/api/v1/assets/veiculo/nada").status,
+            404
+        );
+    }
     let votes = get(&shared, "/api/v1/votes");
     assert_eq!(votes["available"], true);
     assert_eq!(votes["validators"], 3);

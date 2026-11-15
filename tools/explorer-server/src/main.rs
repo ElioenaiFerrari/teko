@@ -14,10 +14,11 @@ const HELP: &str = "\
 teko-explorer: explorador da chain (somente leitura). PROTÓTIPO.
 
 USO:
-  teko-explorer [--dir dev/net] [--port 8545] [--bind 127.0.0.1] [--public]
+  teko-explorer [--dir dev/net] [--port 8545] [--bind 127.0.0.1] [--public] [--metadata-dir PASTA]
 
   --dir     pasta da rede (a mesma de `teko-node`)
   --bind    endereço de escuta; só loopback por padrão
+  --metadata-dir  pasta com os registros de metadados dos bens (padrão em devnet: <dir>/assets-metadata; fora da devnet, nenhum)
   --public  permite --bind fora de loopback (use atrás de um proxy com HTTPS: a API é só leitura, mas pública)
 A chain é baixada dos nós e VERIFICADA aqui (certificados e raízes de estado): o explorador não confia nos nós.
 ";
@@ -76,8 +77,16 @@ fn run() -> Result<(), String> {
         .map_err(|e| e.to_string())?
         .ok_or("esta rede não tem economia (rode `teko-node init`)")?;
     let index = Index::new(ec.genesis).map_err(|e| e.to_string())?;
-    let shared =
-        Arc::new(Shared::new(index, net.profile.kind.name()).with_votes(net.profile.clone()));
+    let mut shared = Shared::new(index, net.profile.kind.name()).with_votes(net.profile.clone());
+    // the records hold the owners' data: only a local devnet (or an explicit folder) shows them
+    let meta_dir = f
+        .get("metadata-dir")
+        .map(PathBuf::from)
+        .or_else(|| (shared.network == "devnet").then(|| dir.join("assets-metadata")));
+    if let Some(m) = meta_dir {
+        shared = shared.with_store(teko_assets::MetadataStore::new(m));
+    }
+    let shared = Arc::new(shared);
     let client = NodeClient::new(net.peers);
     sync_once(&shared, &client);
     spawn_sync(Arc::clone(&shared), client, Duration::from_secs(2));

@@ -1007,6 +1007,16 @@ impl<H: Hal, R: Rng + CryptoRng> Device<H, R> {
         let chain = clean(&m.chain_id, 48).ok_or_else(|| bad("rede inválida"))?;
         let class = clean(&m.class, 32).ok_or_else(|| bad("classe inválida"))?;
         let asset = clean(&m.asset, 64).ok_or_else(|| bad("identificador do bem inválido"))?;
+        // the metadata record: valid for the class, naming THIS asset (ADR-0032)
+        let record = m.metadata.as_slice();
+        let record_id =
+            teko_crypto::asset_meta::asset_id(&class, record).map_err(|e| bad(&e.to_string()))?;
+        if record_id != asset {
+            return Err(bad("o identificador do bem não confere com os metadados"));
+        }
+        let summary = teko_crypto::asset_meta::summary_lines(&class, record)
+            .map_err(|e| bad(&e.to_string()))?;
+        let meta_hash = teko_crypto::asset_meta::hash(&class, record);
         let from = teko_crypto::parse_wallet_address(&m.from_address)
             .map_err(|_| bad("endereço do vendedor inválido"))?;
         let to = teko_crypto::parse_wallet_address(&m.to_address)
@@ -1035,6 +1045,9 @@ impl<H: Hal, R: Rng + CryptoRng> Device<H, R> {
         };
         let mut lines = Vec::from([format!("Você é o {role}")]);
         lines.push(format!("Bem: {class}/{asset}"));
+        for l in &summary {
+            lines.extend(wrap(l, 28));
+        }
         lines.push(String::from("Vendedor:"));
         lines.extend(wrap(&m.from_address, 22));
         lines.push(String::from("Comprador:"));
@@ -1061,7 +1074,7 @@ impl<H: Hal, R: Rng + CryptoRng> Device<H, R> {
             &to,
             m.price,
             m.version,
-            &[],
+            &meta_hash,
         );
         let signature = sign_tagged(&sk, tags::ASSET_APPROVAL, &h);
         Ok(Response::AssetConsentSigned(AssetConsentSigned {

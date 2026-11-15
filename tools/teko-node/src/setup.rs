@@ -132,7 +132,7 @@ pub const ECONOMY_FILE: &str = "economy.txt";
 /// (the wallet address of the product owner). Without an owner the rewards go to the
 /// node's own account, which nobody can spend from (a warning for the caller).
 /// `founder_target` (ypy) overrides N (local devnet default: 1.000 TEKO).
-/// Also creates the TEST registrar keys of the asset class `imovel` (2 of 3).
+/// Also creates the TEST registrar keys of the asset classes `imovel` and `veiculo` (2 of 3 each).
 pub fn init_economy(
     dir: &Path,
     founder_owner: Option<teko_ledger::Address>,
@@ -163,23 +163,26 @@ pub fn init_economy(
         g.coin.founder_target = n;
     }
     let mut rng = UnwrapErr(rand::rngs::SysRng);
-    let mut regs = Vec::new();
-    for i in 0..3 {
-        let p = dir.join(format!("registrar-{i}.key"));
-        let k = if p.exists() {
-            load_key(&p)?
-        } else {
-            let k = generate_signing_key(&mut rng);
-            write_private(&p, &hex::encode(&k.to_bytes()))?;
-            k
-        };
-        regs.push(public_key_bytes(&k));
+    // one órgão (2-of-3, TEST keys) per asset class (ADR-0032)
+    for class in teko_assets::devnet::CLASSES {
+        let mut regs = Vec::new();
+        for i in 0..3 {
+            let p = dir.join(teko_assets::devnet::registrar_file(class, i));
+            let k = if p.exists() {
+                load_key(&p)?
+            } else {
+                let k = generate_signing_key(&mut rng);
+                write_private(&p, &hex::encode(&k.to_bytes()))?;
+                k
+            };
+            regs.push(public_key_bytes(&k));
+        }
+        g.classes.push(teko_economy::ClassSpec {
+            name: class.into(),
+            threshold: 2,
+            registrars: regs,
+        });
     }
-    g.classes.push(teko_economy::ClassSpec {
-        name: "imovel".into(),
-        threshold: 2,
-        registrars: regs,
-    });
     fs::write(&path, g.to_text())?;
     Ok(g)
 }
@@ -200,9 +203,14 @@ pub fn load_economy(dir: &Path) -> Result<Option<crate::EconomyConfig>, NodeErro
     }))
 }
 
-/// The TEST registrar keys of the asset classes (`registrar-<i>.key` next to the network).
-pub fn load_registrar_keys(dir: &Path) -> Vec<SigningKey> {
+/// The TEST registrar keys of the órgão of `class` (next to the network).
+pub fn load_class_registrar_keys(dir: &Path, class: &str) -> Vec<SigningKey> {
     (0..3)
-        .filter_map(|i| load_key(&dir.join(format!("registrar-{i}.key"))).ok())
+        .filter_map(|i| load_key(&dir.join(teko_assets::devnet::registrar_file(class, i))).ok())
         .collect()
+}
+
+/// The TEST registrar keys of the `imovel` class (kept for older callers).
+pub fn load_registrar_keys(dir: &Path) -> Vec<SigningKey> {
+    load_class_registrar_keys(dir, "imovel")
 }

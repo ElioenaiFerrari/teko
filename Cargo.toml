@@ -24,6 +24,7 @@ members = [
   "tools/election-admin-cli",
   "tools/teko-node",
   "tools/explorer-server",
+  "tools/devnet-sim",
   "apps/suite/src-tauri",
 ]
 

@@ -419,7 +419,10 @@ fn economy_open(dev: &std::path::Path) -> Result<EconCtx, String> {
     if net.join(teko_node::ECONOMY_FILE).exists()
         && let Ok(w) = teko_node::NodeWorld::open(&net)
     {
-        let cast = Cast::load(dev)?.with_registrars(teko_node::load_registrar_keys(&net));
+        let mut cast = Cast::load(dev)?.with_store(net.join(devnet::METADATA_DIR));
+        for class in devnet::CLASSES {
+            cast = cast.with_registrars(class, teko_node::load_class_registrar_keys(&net, class));
+        }
         return Ok(EconCtx {
             world: Box::new(w),
             cast,
@@ -573,6 +576,54 @@ pub struct AssetItem {
     class: String,
     version: u64,
     liens: usize,
+    /// What the metadata record says (plate, model...), when this computer holds a record
+    /// that matches the hash on the chain; empty otherwise.
+    summary: Vec<String>,
+    /// True when the record is here AND matches the chain (a sale needs it).
+    verified: bool,
+}
+
+/// One field of an asset class form.
+#[derive(serde::Serialize)]
+pub struct FormField {
+    key: &'static str,
+    label: &'static str,
+    help: &'static str,
+}
+
+/// What the register form of a class needs: its fields and a VALID example. The rules
+/// themselves stay in Rust (`teko_crypto::asset_meta`): the UI only shows the error.
+#[derive(serde::Serialize)]
+pub struct AssetForm {
+    class: String,
+    label: &'static str,
+    fields: Vec<FormField>,
+    sample: std::collections::BTreeMap<String, String>,
+}
+
+#[tauri::command]
+pub async fn asset_form(class: String, n: Option<u32>) -> Result<AssetForm, UiError> {
+    let spec = teko_crypto::asset_meta::schema(&class)
+        .ok_or_else(|| ui_err("InvalidArgument", "classe desconhecida"))?;
+    let sample = teko_crypto::asset_meta::sample(&class, n.unwrap_or(1))
+        .ok_or_else(|| ui_err("InvalidArgument", "classe desconhecida"))?;
+    Ok(AssetForm {
+        label: if class == "veiculo" {
+            "Veículo"
+        } else {
+            "Imóvel"
+        },
+        class,
+        fields: spec
+            .iter()
+            .map(|s| FormField {
+                key: s.key,
+                label: s.label,
+                help: s.help,
+            })
+            .collect(),
+        sample: sample.into_iter().collect(),
+    })
 }
 
 #[derive(serde::Serialize)]
@@ -624,11 +675,23 @@ fn assets_view_impl(address: &str) -> Result<AssetsView, UiError> {
     let items = |who: &teko_ledger::Address| {
         devnet::owned(&**econ, who)
             .into_iter()
-            .map(|(id, version, liens)| AssetItem {
-                id,
-                class: devnet::CLASS.into(),
-                version,
-                liens,
+            .map(|o| {
+                let hash = teko_assets::asset(econ.ledger(), o.class.as_bytes(), o.id.as_bytes())
+                    .map(|a| a.metadata_hash)
+                    .unwrap_or_default();
+                let record = cast.store.get_verified(&o.class, &o.id, &hash);
+                let summary = record
+                    .as_deref()
+                    .and_then(|r| teko_crypto::asset_meta::summary_lines(&o.class, r).ok())
+                    .unwrap_or_default();
+                AssetItem {
+                    id: o.id,
+                    class: o.class,
+                    version: o.version,
+                    liens: o.liens,
+                    summary,
+                    verified: record.is_some(),
+                }
             })
             .collect::<Vec<_>>()
     };
@@ -647,18 +710,30 @@ fn assets_view_impl(address: &str) -> Result<AssetsView, UiError> {
 #[tauri::command]
 pub async fn asset_register_test(
     address: String,
+    class: String,
+    fields: std::collections::HashMap<String, String>,
     for_counterparty: bool,
 ) -> Result<String, UiError> {
-    register_impl(&address, for_counterparty)
+    register_impl(&address, &class, fields, for_counterparty)
 }
 
 #[cfg(not(feature = "dev-simulation"))]
-fn register_impl(_a: &str, _c: bool) -> Result<String, UiError> {
+fn register_impl(
+    _a: &str,
+    _class: &str,
+    _fields: std::collections::HashMap<String, String>,
+    _c: bool,
+) -> Result<String, UiError> {
     Err(assets_unavailable())
 }
 
 #[cfg(feature = "dev-simulation")]
-fn register_impl(address: &str, for_counterparty: bool) -> Result<String, UiError> {
+fn register_impl(
+    address: &str,
+    class: &str,
+    fields: std::collections::HashMap<String, String>,
+    for_counterparty: bool,
+) -> Result<String, UiError> {
     use teko_assets::devnet;
     let me = teko_crypto::parse_wallet_address(address)
         .map_err(|_| ui_err("InvalidArgument", "endereço inválido"))?;
@@ -668,28 +743,34 @@ fn register_impl(address: &str, for_counterparty: bool) -> Result<String, UiErro
     } else {
         me
     };
-    let n = ctx.world.ledger().height() + 1;
-    let id = format!("matricula-{n:03}");
-    devnet::register(&mut *ctx.world, &ctx.cast, &owner, &id).map_err(|e| ui_err("Rejected", e))?;
-    Ok(id)
+    // the rules are Rust's (teko_crypto::asset_meta): a bad field comes back as a message
+    let pairs: Vec<(&str, &str)> = fields
+        .iter()
+        .map(|(k, v)| (k.as_str(), v.as_str()))
+        .collect();
+    let record = teko_crypto::asset_meta::canonical(class, &pairs)
+        .map_err(|e| ui_err("InvalidArgument", e.to_string()))?;
+    devnet::register(&mut *ctx.world, &ctx.cast, &owner, class, &record)
+        .map_err(|e| ui_err("Rejected", e))
 }
 
 /// The SIMULATED registrar places or releases a lien (penhora) on an asset.
 #[tauri::command]
-pub async fn asset_lien(asset: String, on: bool) -> Result<(), UiError> {
-    lien_impl(&asset, on)
+pub async fn asset_lien(class: String, asset: String, on: bool) -> Result<(), UiError> {
+    lien_impl(&class, &asset, on)
 }
 
 #[cfg(not(feature = "dev-simulation"))]
-fn lien_impl(_a: &str, _o: bool) -> Result<(), UiError> {
+fn lien_impl(_c: &str, _a: &str, _o: bool) -> Result<(), UiError> {
     Err(assets_unavailable())
 }
 
 #[cfg(feature = "dev-simulation")]
-fn lien_impl(asset: &str, on: bool) -> Result<(), UiError> {
+fn lien_impl(class: &str, asset: &str, on: bool) -> Result<(), UiError> {
     use teko_assets::devnet;
     let mut ctx = economy_open(&resolve_dev_dir()).map_err(|e| ui_err("Io", e))?;
-    devnet::set_lien(&mut *ctx.world, &ctx.cast, asset, on).map_err(|e| ui_err("Rejected", e))
+    devnet::set_lien(&mut *ctx.world, &ctx.cast, class, asset, on)
+        .map_err(|e| ui_err("Rejected", e))
 }
 
 /// Sells my asset to (or buys it from) the simulated counterparty. My consent is signed
@@ -698,17 +779,19 @@ fn lien_impl(asset: &str, on: bool) -> Result<(), UiError> {
 pub async fn asset_trade(
     app: AppHandle,
     suite: State<'_, Suite>,
+    class: String,
     asset: String,
     price: u64,
     selling: bool,
 ) -> Result<u64, UiError> {
-    trade_impl(app, suite, asset, price, selling).await
+    trade_impl(app, suite, class, asset, price, selling).await
 }
 
 #[cfg(not(feature = "dev-simulation"))]
 async fn trade_impl(
     _app: AppHandle,
     _suite: State<'_, Suite>,
+    _class: String,
     _asset: String,
     _price: u64,
     _selling: bool,
@@ -720,11 +803,12 @@ async fn trade_impl(
 async fn trade_impl(
     app: AppHandle,
     suite: State<'_, Suite>,
+    class: String,
     asset: String,
     price: u64,
     selling: bool,
 ) -> Result<u64, UiError> {
-    use teko_assets::devnet;
+    use teko_assets::devnet::{self, ConsentRequest};
     let dir = resolve_dev_dir();
     with_device(app, suite.inner().clone(), move |c| {
         let v = |m: String| ClientError::Verification(m);
@@ -736,25 +820,26 @@ async fn trade_impl(
         let chain = ctx.world.chain_id().to_string();
         let mut device_error: Option<ClientError> = None;
         let result = {
-            let mut consent = |kind: u8,
-                               id: &str,
-                               seller: &teko_ledger::Address,
-                               buyer: &teko_ledger::Address,
-                               price: u64,
-                               version: u64| {
-                let s = teko_crypto::wallet_address(seller).map_err(|_| "endereço".to_string())?;
-                let b = teko_crypto::wallet_address(buyer).map_err(|_| "endereço".to_string())?;
-                c.wallet_sign_asset_consent(&chain, kind, devnet::CLASS, id, &s, &b, price, version)
-                    .map_err(|e| {
-                        let msg = e.to_string();
-                        device_error = Some(e);
-                        msg
-                    })
+            // my device is handed the metadata record: it shows plate/model and signs
+            // the record's hash
+            let mut consent = |r: &ConsentRequest<'_>| {
+                let s =
+                    teko_crypto::wallet_address(r.seller).map_err(|_| "endereço".to_string())?;
+                let b = teko_crypto::wallet_address(r.buyer).map_err(|_| "endereço".to_string())?;
+                c.wallet_sign_asset_consent(
+                    &chain, r.kind, r.class, r.asset, &s, &b, r.price, r.version, r.metadata,
+                )
+                .map_err(|e| {
+                    let msg = e.to_string();
+                    device_error = Some(e);
+                    msg
+                })
             };
             devnet::trade_with_counterparty(
                 &mut *ctx.world,
                 &ctx.cast,
                 &me,
+                &class,
                 &asset,
                 price,
                 selling,

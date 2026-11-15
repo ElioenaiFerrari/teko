@@ -10,6 +10,8 @@ use teko_ledger::{Address, Ledger, LedgerError, Tx, TxError, address_of};
 
 const CHAIN: &str = "teko-devnet";
 const P: Address = [9; 32];
+/// Stand-in for the hash of a metadata record (32 bytes).
+const META: [u8; 32] = [7; 32];
 const CLASS: &[u8] = b"imovel";
 
 struct W {
@@ -71,7 +73,7 @@ fn sig(keys: &[&SigningKey], i: &Intent) -> Vec<Approval> {
 }
 
 fn register(w: &mut W, owner: &SigningKey, id: &[u8], with: &[usize]) -> Result<(), String> {
-    let i = Intent::register(CLASS, id, addr(owner), b"meta");
+    let i = Intent::register(CLASS, id, addr(owner), &META);
     let ks: Vec<&SigningKey> = with.iter().map(|n| &w.regs[*n]).collect();
     let approvals = sig(&ks, &i);
     run(
@@ -80,7 +82,7 @@ fn register(w: &mut W, owner: &SigningKey, id: &[u8], with: &[usize]) -> Result<
             class: CLASS.to_vec(),
             asset: id.to_vec(),
             owner: addr(owner).to_vec(),
-            metadata_hash: b"meta".to_vec(),
+            metadata_hash: META.to_vec(),
             approvals,
         }),
     )
@@ -97,7 +99,7 @@ fn transfer(
     id: &[u8],
     signers: &[&SigningKey],
 ) -> Result<(), String> {
-    let i = Intent::transfer(CLASS, id, addr(from), addr(to), version(w, id));
+    let i = Intent::transfer(CLASS, id, addr(from), addr(to), version(w, id), &META);
     let approvals = sig(signers, &i);
     run(
         w,
@@ -119,7 +121,7 @@ fn registration_needs_the_registrar_quorum() {
         Err("registrar quorum missing".into())
     );
     // the same member signing twice still counts once
-    let i = Intent::register(CLASS, b"casa-1", addr(&owner), b"meta");
+    let i = Intent::register(CLASS, b"casa-1", addr(&owner), &META);
     let two = vec![
         Approval::sign(&w.regs[0], CHAIN, &i),
         Approval::sign(&w.regs[0], CHAIN, &i),
@@ -130,7 +132,7 @@ fn registration_needs_the_registrar_quorum() {
             class: CLASS.to_vec(),
             asset: b"casa-1".to_vec(),
             owner: addr(&owner).to_vec(),
-            metadata_hash: b"meta".to_vec(),
+            metadata_hash: META.to_vec(),
             approvals: two,
         }),
     );
@@ -144,7 +146,7 @@ fn registration_needs_the_registrar_quorum() {
             class: CLASS.to_vec(),
             asset: b"casa-1".to_vec(),
             owner: addr(&owner).to_vec(),
-            metadata_hash: b"meta".to_vec(),
+            metadata_hash: META.to_vec(),
             approvals,
         }),
     );
@@ -171,7 +173,7 @@ fn unknown_class_is_refused() {
             class: b"nave".to_vec(),
             asset: b"a".to_vec(),
             owner: addr(&owner).to_vec(),
-            metadata_hash: vec![],
+            metadata_hash: META.to_vec(),
             approvals: vec![],
         }),
     );
@@ -238,7 +240,14 @@ fn consents_cannot_be_replayed_after_a_change() {
     let mut w = world(&[]);
     register(&mut w, &a, b"casa", &[0, 1]).unwrap();
     let (r0, r1) = (w.regs[0].clone(), w.regs[1].clone());
-    let old = Intent::transfer(CLASS, b"casa", addr(&a), addr(&b), version(&w, b"casa"));
+    let old = Intent::transfer(
+        CLASS,
+        b"casa",
+        addr(&a),
+        addr(&b),
+        version(&w, b"casa"),
+        &META,
+    );
     let stale = sig(&[&a, &b, &r0, &r1], &old);
     transfer(&mut w, &a, &b, b"casa", &[&a, &b, &r0, &r1]).unwrap();
     // b sells back to a, then the old (a -> b) approvals are submitted again
@@ -254,7 +263,14 @@ fn consents_cannot_be_replayed_after_a_change() {
     );
     assert_eq!(r, Err("owner consent missing".into())); // version moved on
     // approvals for another chain do not count either
-    let other = Intent::transfer(CLASS, b"casa", addr(&a), addr(&c), version(&w, b"casa"));
+    let other = Intent::transfer(
+        CLASS,
+        b"casa",
+        addr(&a),
+        addr(&c),
+        version(&w, b"casa"),
+        &META,
+    );
     let foreign: Vec<Approval> = [&a, &c, &r0, &r1]
         .iter()
         .map(|k| Approval::sign(k, "other-chain", &other))
@@ -277,7 +293,7 @@ fn a_transfer_consent_cannot_be_used_as_a_swap() {
     let mut w = world(&[(&b, 5000)]);
     register(&mut w, &a, b"casa", &[0, 1]).unwrap();
     let (r0, r1) = (w.regs[0].clone(), w.regs[1].clone());
-    let as_transfer = Intent::transfer(CLASS, b"casa", addr(&a), addr(&b), 0);
+    let as_transfer = Intent::transfer(CLASS, b"casa", addr(&a), addr(&b), 0, &META);
     let approvals = sig(&[&a, &b, &r0, &r1], &as_transfer);
     let r = run(
         &mut w,
@@ -341,7 +357,7 @@ fn liens_block_transfers_until_released() {
 
 fn swap(w: &mut W, a: &SigningKey, b: &SigningKey, id: &[u8], price: u64) -> Result<(), String> {
     let (r0, r1) = (w.regs[0].clone(), w.regs[1].clone());
-    let i = Intent::swap(CLASS, id, addr(a), addr(b), price, version(w, id));
+    let i = Intent::swap(CLASS, id, addr(a), addr(b), price, version(w, id), &META);
     run(
         w,
         Op::Swap(SwapOp {
@@ -388,6 +404,7 @@ fn swap_is_atomic_delivery_versus_payment() {
         addr(&seller),
         3000,
         version(&w, b"casa"),
+        &META,
     );
     let r = run(
         &mut w,
@@ -501,4 +518,58 @@ proptest! {
             prop_assert_eq!(count, 3);
         }
     }
+}
+
+#[test]
+fn registration_needs_a_32_byte_metadata_hash() {
+    let owner = key(1);
+    let mut w = world(&[]);
+    for bad in [vec![], b"meta".to_vec(), vec![1u8; 33]] {
+        let i = Intent::register(CLASS, b"casa-1", addr(&owner), &bad);
+        let approvals = sig(&[&w.regs[0].clone(), &w.regs[1].clone()], &i);
+        let r = run(
+            &mut w,
+            Op::Register(RegisterOp {
+                class: CLASS.to_vec(),
+                asset: b"casa-1".to_vec(),
+                owner: addr(&owner).to_vec(),
+                metadata_hash: bad,
+                approvals,
+            }),
+        );
+        assert_eq!(r, Err("metadata hash must be 32 bytes".into()));
+    }
+}
+
+#[test]
+fn a_consent_over_another_metadata_hash_is_refused() {
+    // the seller consents to sell "the asset with hash X"; the swap targets the asset
+    // registered with hash META: the signatures do not verify
+    let (a, b) = (key(1), key(2));
+    let mut w = world(&[(&b, 5000)]);
+    register(&mut w, &a, b"casa", &[0, 1]).unwrap();
+    let (r0, r1) = (w.regs[0].clone(), w.regs[1].clone());
+    let other_hash = [9u8; 32];
+    let i = Intent::swap(
+        CLASS,
+        b"casa",
+        addr(&a),
+        addr(&b),
+        100,
+        version(&w, b"casa"),
+        &other_hash,
+    );
+    let r = run(
+        &mut w,
+        Op::Swap(SwapOp {
+            class: CLASS.to_vec(),
+            asset: b"casa".to_vec(),
+            buyer: addr(&b).to_vec(),
+            price: 100,
+            approvals: sig(&[&a, &b, &r0, &r1], &i),
+        }),
+    );
+    assert_eq!(r, Err("owner consent missing".into()));
+    // with the right hash it works
+    swap(&mut w, &a, &b, b"casa", 100).unwrap();
 }

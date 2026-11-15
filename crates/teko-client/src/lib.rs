@@ -504,8 +504,8 @@ impl<T: Transport> DeviceClient<T> {
     }
 
     /// Asks the device for this wallet's CONSENT (as seller or buyer) to move an asset.
-    /// The device shows the asset, parties, price and version and signs only after the
-    /// physical confirmation. `kind`: 2 = transfer, 3 = swap. The client checks the
+    /// The device shows the asset, a summary of its metadata record, parties, price and
+    /// version and signs only after the physical confirmation. `kind`: 2 = transfer, 3 = swap. The client checks the
     /// signature before returning it.
     #[allow(clippy::too_many_arguments)]
     pub fn wallet_sign_asset_consent(
@@ -518,6 +518,7 @@ impl<T: Transport> DeviceClient<T> {
         to_address: &str,
         price: u64,
         version: u64,
+        metadata: &[u8],
     ) -> Result<teko_assets::Approval, ClientError> {
         let from = parse_wallet_address(from_address)
             .map_err(|_| ClientError::Verification("endereço do vendedor inválido".into()))?;
@@ -533,6 +534,7 @@ impl<T: Transport> DeviceClient<T> {
                 to_address: to_address.to_string(),
                 price,
                 version,
+                metadata: metadata.to_vec(),
             }),
             |r| match r {
                 Response::AssetConsentSigned(a) => Ok(a),
@@ -548,7 +550,7 @@ impl<T: Transport> DeviceClient<T> {
             &to,
             price,
             version,
-            &[],
+            &teko_crypto::asset_meta::hash(class, metadata),
         );
         teko_crypto::verify_tagged(
             &signed.public_key,

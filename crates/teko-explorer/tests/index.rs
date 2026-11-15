@@ -261,3 +261,24 @@ fn validators_and_the_founder_phase_are_visible() {
     );
     assert_eq!(ix.status().validators, 1);
 }
+
+#[test]
+fn an_incompatible_saved_chain_is_explained_with_the_steps_to_recreate_it() {
+    let e = ExplorerError::Block {
+        height: 7,
+        why: "BadTx(\"Tx { index: 0, error: Module(\\\"metadata hash must be 32 bytes\\\") }\")"
+            .into(),
+    };
+    let text = e.to_string();
+    assert!(
+        text.contains("bloco 7") && text.contains("make devnet-founder"),
+        "{text}"
+    );
+    // other failures keep the plain message
+    let plain = ExplorerError::Block {
+        height: 1,
+        why: "Commit".into(),
+    }
+    .to_string();
+    assert!(!plain.contains("make devnet-founder"));
+}

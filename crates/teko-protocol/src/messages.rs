@@ -194,6 +194,11 @@ pub struct SignAssetConsent {
     /// Asset version the consent is bound to.
     #[prost(uint64, tag = "8")]
     pub version: u64,
+    /// The asset's canonical metadata RECORD (ADR-0032). The device validates it,
+    /// checks that it names this asset, SHOWS a summary (plate, model...) and signs
+    /// its hash, so the consent covers WHICH asset it is, not only its id.
+    #[prost(bytes = "vec", tag = "9")]
+    pub metadata: Vec<u8>,
 }
 /// Asks the device to sign a coin transfer. The device BUILDS the transaction itself
 /// from these fields, shows it on its screen (destination, amount, fee, network) and

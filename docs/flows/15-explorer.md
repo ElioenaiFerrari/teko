@@ -17,12 +17,13 @@ Os nós da rede (`teko-node`), o `NodeClient` que baixa blocos, o índice verifi
 1. Suba a rede e o explorador: `make devnet FOUNDER=tekow1…` e, em outro terminal, `make explorer` (abre em `http://127.0.0.1:8545`).
 2. A cada 2 s o servidor pede aos nós **só os blocos novos** e entrega ao índice. O índice reexecuta cada bloco: confere o certificado de commit (> 2/3 do poder do conjunto daquela altura), o proponente da rodada, a execução das transações e a **raiz do estado**.
 3. Um bloco que não fecha é **recusado**; o índice segue com o que já verificou, tenta o próximo nó e o selo da página mostra o motivo.
-4. A API serve as visões (`GET /api/v1/status`, `blocks`, `blocks/{altura ou hash}`, `txs`, `txs/{id}`, `accounts/{tekow1…}`, `validators`, `assets`, `events`, `search?q=`, `votes`). Todo valor vem em **ypy** (inteiro) e em **TEKO** exato ([ADR-0029](../adr/0029-unidade-teko-e-ypy.md)).
+4. A API serve as visões (`GET /api/v1/status`, `blocks`, `blocks/{altura ou hash}`, `txs`, `txs/{id}`, `accounts/{tekow1…}`, `validators`, `assets`, `assets/{classe}/{id}`, `events`, `search?q=`, `votes`). Todo valor vem em **ypy** (inteiro) e em **TEKO** exato ([ADR-0029](../adr/0029-unidade-teko-e-ypy.md)).
 5. A página busca por altura, hash de bloco, id de transação, endereço `tekow1…` ou chave de validador, e se atualiza sozinha.
 
 ## O que é verificado e por quem
 - **Pelo explorador:** certificado de cada bloco, proponente, execução e raiz do estado (o mesmo `EconomyChain::apply_decided_outcome` que os nós usam). Saldos, oferta e fase de fundador mostrados vêm do estado que **ele** reconstruiu.
 - **Livro de votos (PoA):** `NodeClient::sync_chain` verifica assinaturas M-de-N, encadeamento e o log Merkle; a página mostra só cabeçalhos e contagens por tipo de entrada.
+- **Metadados de bens:** a chain guarda só o hash. Em **devnet local** o explorador lê o armazém (`<dir>/assets-metadata`) e mostra o registro com o selo "verificado contra a chain" quando o hash confere; fora da devnet (ou sem o armazém) mostra apenas o hash, para não expor dados do dono ([ADR-0032](../adr/0032-classes-de-bens-e-metadados-amarrados.md)).
 - **Pelo navegador:** nada; todo texto vindo da API é escapado antes de virar HTML, e a CSP não permite script ou estilo inline.
 
 ## O que pode dar errado

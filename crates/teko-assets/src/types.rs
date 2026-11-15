@@ -96,17 +96,21 @@ impl Intent {
         }
     }
 
+    /// `metadata_hash` is the asset's on-chain metadata hash: the consent covers WHICH
+    /// asset it is (ADR-0032), not only its id.
     pub fn transfer(
         class: &[u8],
         asset: &[u8],
         from: Address,
         to: Address,
         version: u64,
+        metadata_hash: &[u8],
     ) -> Intent {
         Intent {
             from,
             to,
             version,
+            extra: metadata_hash.to_vec(),
             ..Self::base(IntentKind::Transfer, class, asset)
         }
     }
@@ -118,12 +122,14 @@ impl Intent {
         to: Address,
         price: u64,
         version: u64,
+        metadata_hash: &[u8],
     ) -> Intent {
         Intent {
             from,
             to,
             amount: price,
             version,
+            extra: metadata_hash.to_vec(),
             ..Self::base(IntentKind::Swap, class, asset)
         }
     }

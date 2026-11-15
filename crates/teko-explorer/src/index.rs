@@ -25,7 +25,13 @@ impl core::fmt::Display for ExplorerError {
         match self {
             ExplorerError::Genesis(w) => write!(f, "genesis inválida: {w}"),
             ExplorerError::Block { height, why } => {
-                write!(f, "bloco {height} recusado na verificação: {why}")
+                write!(f, "bloco {height} recusado na verificação: {why}")?;
+                if why.starts_with("BadTx(") {
+                    f.write_str(
+                        " — a cadeia não é compatível com esta versão do software (o formato mudou, por exemplo ADR-0032): recrie a economia de teste com `make devnet-stop`, `make devnet-founder FOUNDER=<seu tekow1…>` e `make devnet`",
+                    )?;
+                }
+                Ok(())
             }
         }
     }
@@ -359,23 +365,7 @@ impl Index {
         let idxs = self.by_account.get(&a).map_or(&[][..], Vec::as_slice);
         let assets = teko_assets::assets_of(l, &a)
             .into_iter()
-            .map(|(class, id)| {
-                let rec = teko_assets::asset(l, &class, &id);
-                AssetView {
-                    class: label(&class),
-                    id: label(&id),
-                    owner: address.to_string(),
-                    version: rec.as_ref().map_or(0, |r| r.version),
-                    liens: rec
-                        .map(|r| {
-                            r.liens
-                                .iter()
-                                .map(|x| format!("{}#{}", x.kind, x.id))
-                                .collect()
-                        })
-                        .unwrap_or_default(),
-                }
-            })
+            .map(|(class, id)| self.asset_view(&class, &id, &a))
             .collect();
         Some(AccountView {
             address: addr_text(&a),
@@ -441,27 +431,42 @@ impl Index {
             .collect()
     }
 
+    /// One asset by class and id (the chain keeps only the hash of its metadata).
+    pub fn asset(&self, class: &str, id: &str) -> Option<AssetView> {
+        let rec = teko_assets::asset(self.ledger(), class.as_bytes(), id.as_bytes())?;
+        let owner = to_address(&rec.owner)?;
+        Some(self.asset_view(class.as_bytes(), id.as_bytes(), &owner))
+    }
+
+    fn asset_view(&self, class: &[u8], id: &[u8], owner: &Address) -> AssetView {
+        let rec = teko_assets::asset(self.ledger(), class, id);
+        AssetView {
+            class: label(class),
+            id: label(id),
+            owner: addr_text(owner),
+            version: rec.as_ref().map_or(0, |r| r.version),
+            metadata_hash: rec
+                .as_ref()
+                .map(|r| hex::encode(&r.metadata_hash))
+                .unwrap_or_default(),
+            liens: rec
+                .map(|r| {
+                    r.liens
+                        .iter()
+                        .map(|x| format!("{}#{}", x.kind, x.id))
+                        .collect()
+                })
+                .unwrap_or_default(),
+        }
+    }
+
     /// Every asset owned by an address that appeared in the chain.
     pub fn assets(&self) -> Vec<AssetView> {
         let l = self.ledger();
         let mut out = Vec::new();
         for a in &self.known {
             for (class, id) in teko_assets::assets_of(l, a) {
-                let rec = teko_assets::asset(l, &class, &id);
-                out.push(AssetView {
-                    class: label(&class),
-                    id: label(&id),
-                    owner: addr_text(a),
-                    version: rec.as_ref().map_or(0, |r| r.version),
-                    liens: rec
-                        .map(|r| {
-                            r.liens
-                                .iter()
-                                .map(|x| format!("{}#{}", x.kind, x.id))
-                                .collect()
-                        })
-                        .unwrap_or_default(),
-                });
+                out.push(self.asset_view(&class, &id, a));
             }
         }
         out

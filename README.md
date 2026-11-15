@@ -25,6 +25,7 @@ O computador (Suite) **nunca** vê chaves nem PIN. O dispositivo cifra e assina 
 | `teko-registration` | registro anônimo por assinatura cega (RFC 9474) |
 | `teko-ballot-crypto` | ElGamal de limiar P-256, provas 0/1 e soma, DKG de Feldman |
 | `teko-explorer` | índice do explorador: reexecuta e verifica a cadeia de economia e responde blocos, transações, contas, validadores, bens e busca (sem I/O) |
+| `devnet-sim` | simuladores só para a rede de teste local; hoje, a equivocação de um validador para ver a penalidade (`make devnet-equivocate`); nunca em validador ou release |
 | `explorer-server` | explorador da chain: página web local + API JSON somente leitura sobre uma cadeia verificada (`make explorer`) |
 | `teko-economy` | economia sobre consenso BFT: blocos com certificado de commit, conjunto de validadores por stake com fase de fundador, verificação por clientes |
 | `teko-bulletin` | quadro de avisos: log Merkle append-only, provas e head assinado |
@@ -32,7 +33,7 @@ O computador (Suite) **nunca** vê chaves nem PIN. O dispositivo cifra e assina 
 | `teko-bft` | consenso BFT estilo Tendermint ponderado por stake (ainda fora do nó) |
 | `teko-ledger` | livro-razão genérico: transações assinadas, módulos, blocos atômicos e raiz de estado (base da moeda e dos bens) |
 | `teko-coin` | moeda de teto fixo: recompensa com *halving*, taxa por byte, stake, penalidade por equivocação e faucet de teste (só devnet) |
-| `teko-assets` | bens: classes governadas por órgão M-de-N, transferência com dono + comprador + órgão, gravames e venda contra pagamento atômica |
+| `teko-assets` | bens: classes (imóvel e veículo) governadas por órgão M-de-N, metadados fora da chain com hash amarrado ao consentimento, transferência com dono + comprador + órgão, gravames e venda contra pagamento atômica |
 | `teko-transport` | trait de transporte e implementação local |
 | `teko-client` | cliente da Suite: onboarding, assinatura, eleição |
 | `device-emulator` | "tela e botões" do dispositivo, em processo separado |
@@ -61,6 +62,7 @@ make tally          # apuração no terminal
 make close          # encerra a votação; depois a Suite mostra os gráficos
 make devnet-stop    # para os validadores
 make fund ADDR=tekow1… AMOUNT=1000   # TEKO de TESTE para a sua carteira, aparecem em "Carteira" na Suite (aceita decimais: AMOUNT=0,5; 1 TEKO = 1.000.000 ypy, ADR-0029)
+make devnet-equivocate  # SIMULA a equivocação do validador de teste e mostra a penalidade (trave stake na Suite antes)
 make coin-demo      # demonstração da moeda em memória: teto, halving, taxa, stake e slash
 make assets-demo    # demonstração dos bens: registro com quórum, gravame, venda contra pagamento
 ```

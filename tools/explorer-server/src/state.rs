@@ -4,6 +4,7 @@ use std::thread;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use serde::Serialize;
+use teko_assets::MetadataStore;
 use teko_chain::NetworkProfile;
 use teko_explorer::Index;
 
@@ -36,6 +37,9 @@ pub struct Shared {
     /// Profile of the vote ledger (PoA), when this network has one to show.
     pub profile: Option<NetworkProfile>,
     pub votes: Mutex<VotesSnapshot>,
+    /// Off-chain metadata records of assets (ADR-0032). Only a LOCAL devnet has them;
+    /// they hold the owners' data, so a public explorer shows just the chain's hash.
+    pub store: Option<MetadataStore>,
 }
 
 fn lock<T>(m: &Mutex<T>) -> MutexGuard<'_, T> {
@@ -50,7 +54,14 @@ impl Shared {
             network: network.to_string(),
             profile: None,
             votes: Mutex::new(VotesSnapshot::default()),
+            store: None,
         }
+    }
+
+    /// Also shows (and verifies against the chain) the metadata records in `store`.
+    pub fn with_store(mut self, store: MetadataStore) -> Self {
+        self.store = Some(store);
+        self
     }
 
     /// Also follows the vote ledger described by `profile`.

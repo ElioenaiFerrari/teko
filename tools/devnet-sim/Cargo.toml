@@ -1,0 +1,32 @@
+[package]
+name = "devnet-sim"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+description = "Development-only simulators for the local test network (equivocation penalty). Never part of a validator or a release."
+
+[lib]
+name = "devnet_sim"
+path = "src/lib.rs"
+
+[[bin]]
+name = "devnet-sim"
+path = "src/main.rs"
+
+[dependencies]
+teko-node.workspace = true
+teko-bft.workspace = true
+teko-coin.workspace = true
+teko-economy.workspace = true
+teko-crypto.workspace = true
+teko-ledger.workspace = true
+prost.workspace = true
+rand.workspace = true
+
+[dev-dependencies]
+teko-chain.workspace = true
+p256.workspace = true
+
+[lints]
+workspace = true

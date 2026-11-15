@@ -10,6 +10,7 @@
 extern crate alloc;
 
 pub mod amount;
+pub mod asset_meta;
 pub mod credential;
 mod error;
 pub mod hex;

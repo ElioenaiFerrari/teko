@@ -24,7 +24,7 @@ pub use economy::EconomyConfig;
 pub use error::NodeError;
 pub use node::{Node, NodeConfig, NodeHandle};
 pub use setup::{
-    ECONOMY_FILE, NetFiles, init_economy, init_network, load_economy, load_network,
-    load_registrar_keys, load_validator_key, node_dir,
+    ECONOMY_FILE, NetFiles, init_economy, init_network, load_class_registrar_keys, load_economy,
+    load_network, load_registrar_keys, load_validator_key, node_dir,
 };
 pub use world::NodeWorld;

@@ -11,6 +11,8 @@ use teko_ledger::{Address, Ledger, LedgerError, Tx, TxError, address_of};
 
 const CHAIN: &str = "teko-devnet";
 const CLASSE: &[u8] = b"imovel";
+/// Hash de brinquedo dos metadados do imóvel (32 bytes; o real vem de `teko_crypto::asset_meta`).
+const META: [u8; 32] = [7; 32];
 const ATIVO: &[u8] = b"matricula-123";
 const PROP: Address = [0xAA; 32];
 
@@ -150,13 +152,13 @@ fn main() {
     );
 
     println!("1) Registrar a matrícula para a Ana");
-    let reg = Intent::register(CLASSE, ATIVO, addr(&ana), b"escritura-v1");
+    let reg = Intent::register(CLASSE, ATIVO, addr(&ana), &META);
     let op = |ap| {
         Op::Register(RegisterOp {
             class: CLASSE.to_vec(),
             asset: ATIVO.to_vec(),
             owner: addr(&ana).to_vec(),
-            metadata_hash: b"escritura-v1".to_vec(),
+            metadata_hash: META.to_vec(),
             approvals: ap,
         })
     };
@@ -179,7 +181,15 @@ fn main() {
         }),
     );
     let sw = |w: &Mundo, buyer: &SigningKey, price: u64, quem: &[&SigningKey]| {
-        let i = Intent::swap(CLASSE, ATIVO, addr(&ana), addr(buyer), price, w.versao());
+        let i = Intent::swap(
+            CLASSE,
+            ATIVO,
+            addr(&ana),
+            addr(buyer),
+            price,
+            w.versao(),
+            &META,
+        );
         Op::Swap(SwapOp {
             class: CLASSE.to_vec(),
             asset: ATIVO.to_vec(),
@@ -224,7 +234,15 @@ fn main() {
     w.estado(&[&ana, &beto, &carla]);
 
     println!("\n7) Beto revende o imóvel para a Ana por 3000 (o bem muda de versão de novo)");
-    let volta = Intent::swap(CLASSE, ATIVO, addr(&beto), addr(&ana), 3000, w.versao());
+    let volta = Intent::swap(
+        CLASSE,
+        ATIVO,
+        addr(&beto),
+        addr(&ana),
+        3000,
+        w.versao(),
+        &META,
+    );
     w.enviar(
         "revenda Beto → Ana",
         Op::Swap(SwapOp {

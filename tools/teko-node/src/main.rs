@@ -95,7 +95,7 @@ fn run(args: Vec<String>) -> Result<(), String> {
                     teko_crypto::amount::format_amount(g.coin.founder_target)
                 ),
                 None => println!(
-                    "AVISO: sem --founder, as recompensas vão para uma conta do nó que ninguém movimenta. Use: make devnet-reset FOUNDER=<seu endereço tekow1…> e make devnet."
+                    "AVISO: sem --founder, as recompensas vão para uma conta do nó que ninguém movimenta. Use: make devnet-founder FOUNDER=<seu endereço tekow1…> e make devnet."
                 ),
             }
             println!(

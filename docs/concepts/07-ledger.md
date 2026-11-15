@@ -13,6 +13,8 @@ Peças:
 
 ![Um bloco de economia: transação assinada, proposta, votos, certificado e reexecução conferindo a raiz](../diagrams/economy-block.png)
 
+> Os bens têm dados que não devem ficar públicos (placa, endereço): ficam **fora da chain** e só o hash vai para ela, amarrado ao consentimento de venda ([ADR-0032](../adr/0032-classes-de-bens-e-metadados-amarrados.md)).
+>
 > Para **ver** tudo isso na prática, use o [explorador da chain](../flows/15-explorer.md) (`make explorer`).
 
 ## Onde ficam taxa e valor na chain

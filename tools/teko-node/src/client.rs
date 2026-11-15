@@ -343,9 +343,7 @@ impl NodeClient {
             for raw in reply.blocks {
                 let d = teko_economy::DecidedBlock::decode(raw.as_slice())
                     .map_err(|_| NodeError::Protocol("malformed block".into()))?;
-                chain
-                    .apply_decided(d)
-                    .map_err(|e| NodeError::Economy(format!("{e:?}")))?;
+                chain.apply_decided(d).map_err(|e| NodeError::replay(&e))?;
             }
         }
     }

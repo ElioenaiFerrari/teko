@@ -212,7 +212,7 @@ impl EconomyGenesis {
             }
         }
         if !saw_units {
-            return Err("economy.txt na escala antiga (sem `units=ypy6`, ADR-0029): recrie a rede com `make devnet-reset FOUNDER=tekow1…` e `make devnet`".into());
+            return Err("economy.txt na escala antiga (sem `units=ypy6`, ADR-0029): recrie a economia de teste com `make devnet-stop`, `make devnet-founder FOUNDER=<seu tekow1…>` e `make devnet`".into());
         }
         if g.chain_id.is_empty() {
             return Err("falta chain_id".into());

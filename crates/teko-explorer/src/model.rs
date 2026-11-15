@@ -120,6 +120,8 @@ pub struct AssetView {
     pub owner: String,
     pub version: u64,
     pub liens: Vec<String>,
+    /// Hex of the 32-byte hash of the asset's off-chain metadata record (ADR-0032).
+    pub metadata_hash: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]

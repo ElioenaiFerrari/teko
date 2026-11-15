@@ -963,6 +963,7 @@ fn an_asset_consent_is_signed_on_the_device_and_verified_by_the_client() {
             &buyer,
             750,
             2,
+            &teko_assets::devnet::sample_record("imovel", "matricula-9").unwrap(),
         )
         .unwrap();
     assert_eq!(prompts.load(Ordering::SeqCst), 1);
@@ -986,13 +987,14 @@ fn an_asset_consent_is_signed_on_the_device_and_verified_by_the_client() {
         &buyer,
         750,
         2,
+        &teko_assets::devnet::sample_record("imovel", "matricula-9").unwrap(),
     );
     assert_eq!(device_code(r.unwrap_err()), ErrorCode::UserRejected);
 }
 
 #[test]
 fn selling_and_buying_an_asset_with_my_device_consent_in_the_devnet_world() {
-    use teko_assets::devnet::{self, CLASS};
+    use teko_assets::devnet::{self, ConsentRequest, sample_record};
     use teko_coin::devnet::{CHAIN_ID, ECONOMY_FILE, append_allocation};
 
     let rig = start();
@@ -1017,7 +1019,14 @@ fn selling_and_buying_an_asset_with_my_device_consent_in_the_devnet_world() {
     )
     .unwrap();
     let (mut econ, cast) = devnet::open(&dir).unwrap();
-    devnet::register(&mut econ, &cast, &me, "casa-7").unwrap();
+    devnet::register(
+        &mut econ,
+        &cast,
+        &me,
+        "imovel",
+        &sample_record("imovel", "casa-7").unwrap(),
+    )
+    .unwrap();
 
     // The consent goes through MY DEVICE (screen + physical confirmation).
     let consents = Arc::new(AtomicUsize::new(0));
@@ -1027,21 +1036,19 @@ fn selling_and_buying_an_asset_with_my_device_consent_in_the_devnet_world() {
             cc.fetch_add(1, Ordering::SeqCst);
         }
     });
-    let mut device_consent = |kind: u8,
-                              id: &str,
-                              seller: &teko_ledger::Address,
-                              buyer: &teko_ledger::Address,
-                              price: u64,
-                              version: u64| {
-        let s = teko_crypto::wallet_address(seller).unwrap();
-        let b = teko_crypto::wallet_address(buyer).unwrap();
-        c.wallet_sign_asset_consent(CHAIN_ID, kind, CLASS, id, &s, &b, price, version)
-            .map_err(|e| e.to_string())
+    let mut device_consent = |r: &ConsentRequest<'_>| {
+        let s = teko_crypto::wallet_address(r.seller).unwrap();
+        let b = teko_crypto::wallet_address(r.buyer).unwrap();
+        c.wallet_sign_asset_consent(
+            CHAIN_ID, r.kind, r.class, r.asset, &s, &b, r.price, r.version, r.metadata,
+        )
+        .map_err(|e| e.to_string())
     };
     let after = devnet::trade_with_counterparty(
         &mut econ,
         &cast,
         &me,
+        "imovel",
         "casa-7",
         3_000,
         true,
@@ -1055,6 +1062,8 @@ fn selling_and_buying_an_asset_with_my_device_consent_in_the_devnet_world() {
         s.title == "VENDA DE BEM"
             && s.lines.iter().any(|l| l.contains("VENDEDOR"))
             && s.lines.iter().any(|l| l.contains("Preço: 0,003 TEKO"))
+            // the metadata summary is on the device screen too (ADR-0032)
+            && s.lines.iter().any(|l| l.contains("Matrícula: casa-7"))
     }));
 
     // Buying it back: my device signs as the BUYER.
@@ -1062,6 +1071,7 @@ fn selling_and_buying_an_asset_with_my_device_consent_in_the_devnet_world() {
         &mut econ,
         &cast,
         &me,
+        "imovel",
         "casa-7",
         2_000,
         false,
@@ -1078,6 +1088,7 @@ fn selling_and_buying_an_asset_with_my_device_consent_in_the_devnet_world() {
         &mut econ,
         &cast,
         &me,
+        "imovel",
         "casa-7",
         500,
         true,
@@ -1085,12 +1096,40 @@ fn selling_and_buying_an_asset_with_my_device_consent_in_the_devnet_world() {
     );
     assert!(r.is_err());
     assert_eq!(devnet::owned(&econ, &me).len(), 1);
+
+    // A VEHICLE: the órgão of its own class registers it with the chassis as id, and my
+    // device shows the plate and the model before I consent to the sale.
+    let car = sample_record("veiculo", "9BWZZZ377VT000031").unwrap();
+    let car_id = devnet::register(&mut econ, &cast, &me, "veiculo", &car).unwrap();
+    assert_eq!(car_id, "9BWZZZ377VT000031");
+    devnet::trade_with_counterparty(
+        &mut econ,
+        &cast,
+        &me,
+        "veiculo",
+        &car_id,
+        1_000,
+        true,
+        &mut device_consent,
+    )
+    .unwrap();
+    assert!(rig.hal.screens().iter().any(|s| {
+        s.title == "VENDA DE BEM"
+            && s.lines.iter().any(|l| l.contains("Placa: BRA1A01"))
+            && s.lines
+                .iter()
+                .any(|l| l.contains("Veículo: Volkswagen Gol 1.0"))
+            && s.lines
+                .iter()
+                .any(|l| l.contains("veiculo/9BWZZZ377VT000031"))
+    }));
+    assert_eq!(devnet::owned(&econ, &me).len(), 1); // only the house is left
     teko_coin::audit(econ.ledger()).unwrap();
 }
 
 #[test]
 fn staking_is_signed_on_the_device_and_the_wallet_becomes_a_validator_in_the_devnet_world() {
-    use teko_assets::devnet;
+    use teko_assets::devnet::{self, sample_record};
     use teko_coin::devnet::{CHAIN_ID, ECONOMY_FILE, append_allocation};
 
     let rig = start();
@@ -1147,7 +1186,8 @@ fn staking_is_signed_on_the_device_and_the_wallet_becomes_a_validator_in_the_dev
             &mut econ,
             &cast,
             &cast.counterparty_address(),
-            &format!("x-{i}"),
+            "imovel",
+            &sample_record("imovel", &format!("x-{i}")).unwrap(),
         )
         .unwrap();
     }

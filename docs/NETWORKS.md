@@ -36,7 +36,8 @@ make publish           # a eleição entra por blocos
 make simulate-live     # votos sintéticos via rede
 make devnet-status     # altura, mempool, pares de cada nó
 make devnet-blocks     # blocos verificados no terminal
-make explorer          # explorador web (blocos, transações, carteiras, validadores) em http://127.0.0.1:8545
+make devnet-equivocate  # SIMULAÇÃO: o validador de teste assina 2 votos conflitantes e leva Slash (trave stake na Suite antes)
+make explorer          # explorador web (inclui a página de cada bem, com os metadados verificados em devnet) (blocos, transações, carteiras, validadores) em http://127.0.0.1:8545
 make devnet-economy    # economia BFT: altura, fase de fundador, validadores (cadeia verificada)
 make devnet-stop | devnet-reset
 ```

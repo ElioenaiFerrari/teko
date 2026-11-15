@@ -29,6 +29,14 @@ Assinaturas dos votos e o quórum (> 2/3). Votos conflitantes do mesmo validador
 ## O que pode dar errado
 Partição de rede, mensagens perdidas, validadores parados ou desonestos: cobertos pelo simulador (atrasos, perda, partição, equivocador, pesos de stake; teste de estresse com 3000 redes, marcado `ignored`).
 
+## Penalidade por equivocação e como simulá-la
+
+![Penalidade por equivocação: o validador assina dois votos conflitantes, a evidência vira uma transação Slash, o livro confere e queima parte do stake do dono](../diagrams/equivocation-slash.png)
+
+Um validador que assina **dois votos conflitantes** (mesma altura, rodada e tipo, blocos diferentes) deixa uma **evidência**: os dois votos assinados. Qualquer um pode enviá-la em uma transação `Slash` (os nós honestos fazem isso sozinhos, [ADR-0030](../adr/0030-slash-automatico-e-bloqueio-persistido.md)). O livro confere que as assinaturas valem para esta rede, que os blocos diferem, que a altura é recente (até o prazo de desvinculação) e que a ofensa ainda não foi penalizada; então **queima** `slash_bps` do stake em risco (travado mais o que está saindo) do **dono** da chave de consenso. Ficar offline ou propor bloco inválido não é penalizado.
+
+**Para ver acontecer na devnet:** trave stake na aba Validadores da Suite e rode `make devnet-equivocate` (opcional `VALIDATOR=0`). O comando assina dois votos com a chave do validador de teste, envia o `Slash` e mostra o stake e o queimado antes e depois; o explorador mostra o evento `slashed`. Limite honesto: o simulador exercita a **penalidade do livro**; a detecção ao vivo pelo motor BFT é coberta pelos testes (com um só validador a altura se decide no mesmo instante em que começa, então não dá para forjar votos pela rede de forma confiável).
+
 ## Onde está no código
 `crates/teko-bft` (`engine.rs`, `types.rs`, `tests/sim.rs`).
 

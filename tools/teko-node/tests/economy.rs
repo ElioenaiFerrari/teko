@@ -231,3 +231,52 @@ fn staking_ends_the_founder_phase_new_validators_join_and_a_restarted_node_catch
         n.stop();
     }
 }
+
+#[test]
+fn each_asset_class_has_its_own_organ_and_a_vehicle_registers_through_the_nodes() {
+    use teko_assets::devnet::{self, CLASSES, Cast, METADATA_DIR};
+    use teko_crypto::asset_meta;
+    use teko_node::{NodeWorld, load_class_registrar_keys};
+
+    let owner = key(40);
+    let owner_addr = address_of(&public_key_bytes(&owner));
+    let net = boot("assets", &owner_addr, |_| {});
+
+    // the genesis has one class per órgão, each with its own keys
+    let names: Vec<&str> = net
+        .genesis
+        .classes
+        .iter()
+        .map(|c| c.name.as_str())
+        .collect();
+    assert_eq!(names, vec!["imovel", "veiculo"]);
+    assert_ne!(
+        net.genesis.classes[0].registrars,
+        net.genesis.classes[1].registrars
+    );
+
+    let mut world = NodeWorld::open(&net.dir).unwrap();
+    let mut cast = Cast::load(&net.dir)
+        .unwrap()
+        .with_store(net.dir.join(METADATA_DIR));
+    for class in CLASSES {
+        cast = cast.with_registrars(class, load_class_registrar_keys(&net.dir, class));
+    }
+    let f = asset_meta::sample("veiculo", 12).unwrap();
+    let p: Vec<(&str, &str)> = f.iter().map(|(k, v)| (k.as_str(), v.as_str())).collect();
+    let rec = asset_meta::canonical("veiculo", &p).unwrap();
+    let id = devnet::register(&mut world, &cast, &owner_addr, "veiculo", &rec).unwrap();
+    assert_eq!(id, "9BWZZZ377VT000012");
+
+    // a client that trusts nobody sees the vehicle with the hash of the record
+    let c = client(&net);
+    wait("the vehicle on the verified chain", 30, || {
+        c.econ_sync(&net.genesis).is_ok_and(|ch| {
+            teko_assets::asset(ch.ledger(), b"veiculo", id.as_bytes())
+                .is_some_and(|a| a.metadata_hash == asset_meta::hash("veiculo", &rec))
+        })
+    });
+    for n in net.nodes.into_iter().flatten() {
+        n.stop();
+    }
+}

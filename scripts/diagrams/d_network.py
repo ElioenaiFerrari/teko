@@ -211,3 +211,46 @@ def explorer_pages():
     d.text(30, 430, "Qualquer método que não seja GET recebe 405. Entrada inválida recebe 400 com a explicação; o que não existe recebe 404.", 11, MUTED)
     d.legend([(MUTED, "página → rota", False)])
     return d
+
+
+def asset_metadata_binding():
+    d = D("asset-metadata-binding", 1100, 500, "Metadados do bem e consentimento amarrado", "Os dados ficam fora da chain; o hash vai à chain; o dispositivo mostra e assina o hash", "BENS")
+    d.arrow([(240, 178), (320, 178)], "default", label="valida", at=(280, 164))
+    d.arrow([(540, 178), (620, 178)], "ok", label="hash", at=(580, 164))
+    d.arrow([(840, 178), (920, 178)], "link", label="registra", at=(880, 164))
+    d.arrow([(430, 216), (430, 300)], "default", label="registro", at=(470, 258))
+    d.arrow([(540, 338), (620, 338)], "onca", label="envia", at=(580, 324))
+    d.arrow([(840, 338), (920, 338)], "link", label="assinatura", at=(880, 324))
+    d.node(20, 140, 220, 76, "Registro do bem", "placa · RENAVAM · modelo…", "input", "fora da chain")
+    d.node(320, 140, 220, 76, "Esquema da classe", "teko_crypto::asset_meta", "plain", "uma só regra")
+    d.node(620, 140, 220, 76, "Hash de 32 bytes", "tag teko/v2/asset-metadata", "focal")
+    d.node(920, 140, 160, 76, "Chain", "só o hash", "boto", "registro")
+    d.node(320, 300, 220, 76, "Suite", "entrega o registro", "plain", "não confiável")
+    d.node(620, 300, 220, 76, "Dispositivo", "valida · mostra · assina o hash", "onca", "confirma")
+    d.node(920, 300, 160, 76, "Livro de bens", "recusa se o hash diferir", "ok", "verifica")
+    d.text(20, 420, "A Suite pode errar ou mentir sobre qual veículo é: o consentimento só vale para o hash que o dispositivo viu e que está na chain.", 11, MUTED)
+    d.text(20, 440, "O id do veículo na chain é o chassi; placa, RENAVAM e dados do dono não saem do computador (proteção dos dados pessoais).", 11, MUTED)
+    d.legend([(MUTED, "fluxo", False), (GREEN, "hash", False), (ONCA, "dispositivo", False), (LINK, "chain", False)])
+    return d
+
+
+def equivocation_slash():
+    d = D("equivocation-slash", 1100, 540, "Penalidade por equivocação", "Dois votos conflitantes viram evidência; o livro queima parte do stake do dono", "CONSENSO")
+    d.arrow([(250, 178), (320, 178)], "bad", label="assina 2x", at=(285, 164))
+    d.arrow([(540, 178), (610, 178)], "default", label="Slash", at=(575, 164))
+    d.arrow([(830, 178), (900, 178)], "default", label="confere", at=(865, 164))
+    d.arrow([(1000, 216), (1000, 300)], "bad", label="queima", at=(1030, 258))
+    d.arrow([(430, 216), (430, 300)], "default", label="detecta", at=(465, 258))
+    d.arrow([(720, 300), (720, 216)], "onca", dashed=True, label="envia", at=(755, 258))
+    d.node(30, 140, 220, 76, "Validador", "dois votos, mesma altura e rodada", "bad", "traidor")
+    d.node(320, 140, 220, 76, "Evidência", "os dois votos assinados", "focal", "prova portátil")
+    d.node(610, 140, 220, 76, "Transação Slash", "qualquer um pode enviar", "plain")
+    d.node(900, 140, 180, 76, "Livro", "só aceita se…", "ok", "verifica")
+    d.node(900, 300, 180, 76, "Dono perde", "10% do stake em risco", "bad", "queimado")
+    d.node(320, 300, 220, 76, "Nós honestos", "detectam e enviam sozinhos", "plain", "ADR-0030")
+    d.node(610, 300, 220, 76, "devnet-sim", "make devnet-equivocate", "onca", "só dev")
+    d.text(30, 420, "O livro só aceita se: as duas assinaturas valem para esta rede, os blocos diferem, a altura é recente (até o prazo de desvinculação) e a ofensa ainda não foi penalizada.", 11, MUTED)
+    d.text(30, 442, "A penalidade recai sobre o DONO da chave de consenso. Ficar offline ou propor bloco inválido não é penalizado: o bloco só é recusado.", 11, MUTED)
+    d.text(30, 464, "O simulador assina os dois votos com a chave do validador de teste e envia a evidência como Slash: exercita a penalidade do livro; a detecção ao vivo é coberta pelos testes.", 11, MUTED)
+    d.legend([(MUTED, "fluxo", False), (RED, "traição e efeito", False), (ONCA, "simulação", True)])
+    return d

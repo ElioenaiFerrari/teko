@@ -164,6 +164,8 @@
     prompt: null,
     promptTimer: null,
     lastKey: '',
+    // formulário de registro de bem de teste (as regras de validação ficam no Rust)
+    reg: { class: 'veiculo', form: null, values: {}, error: '', loading: false },
   };
 
   // Moeda TEKO (ADR-0029): o livro guarda inteiros em ypy (1 TEKO = 1.000.000 ypy);
@@ -1247,17 +1249,26 @@
     async stakebond() { await stakeAct(1); },
     async stakeunbond() { await stakeAct(2); },
     async stakeclaim() { await stakeAct(3); },
+    regsample() {
+      if (S.reg.form) { S.reg.values = { ...S.reg.form.sample }; S.reg.error = ''; S.lastKey = ''; render(); }
+    },
     async assetreg(b) {
       const cp = b.dataset.cp === '1';
-      await guarded(async () => { const id = await call('asset_register_test', { address: S.walletAddr.address, forCounterparty: cp }); toast(`Órgão simulado registrou ${id} ${cp ? 'para a contraparte' : 'para você'}.`, 'ok'); });
-      S.assetsTried = false; S.lastKey = ''; render(); loadAssets();
+      document.querySelectorAll('[data-reg]').forEach((i) => { S.reg.values[i.dataset.reg] = i.value; });
+      try {
+        const id = await invoke('asset_register_test', { address: S.walletAddr.address, class: S.reg.class, fields: S.reg.values, forCounterparty: cp });
+        toast(`Órgão simulado registrou ${id} ${cp ? 'para a contraparte' : 'para você'}.`, 'ok');
+        S.reg.values = {}; S.reg.error = ''; S.reg.form = null; S.assetsTried = false; S.lastKey = ''; render(); loadAssets();
+      } catch (e) {
+        S.reg.error = asErr(e).message; S.lastKey = ''; render();
+      }
     },
     async assetlien(b) {
-      await guarded(async () => { await call('asset_lien', { asset: b.dataset.id, on: b.dataset.on === '1' }); toast(b.dataset.on === '1' ? 'Órgão simulado registrou a penhora.' : 'Órgão simulado liberou o gravame.', 'ok'); });
+      await guarded(async () => { await call('asset_lien', { class: b.dataset.class, asset: b.dataset.id, on: b.dataset.on === '1' }); toast(b.dataset.on === '1' ? 'Órgão simulado registrou a penhora.' : 'Órgão simulado liberou o gravame.', 'ok'); });
       S.assetsTried = false; S.lastKey = ''; render(); loadAssets();
     },
-    async assetsell(b) { await trade(b.dataset.id, true); },
-    async assetbuy(b) { await trade(b.dataset.id, false); },
+    async assetsell(b) { await trade(b.dataset.class, b.dataset.id, true); },
+    async assetbuy(b) { await trade(b.dataset.class, b.dataset.id, false); },
     async walletcheck() {
       await guarded(async () => { await call('wallet_check_backup'); toast('Backup conferido: a frase confere com esta carteira.', 'ok'); });
     },
@@ -1381,11 +1392,11 @@
     if (S.election) { S.lastKey = ''; render(); }
   }
 
-  async function trade(id, selling) {
+  async function trade(cls, id, selling) {
     const price = parseTeko((document.getElementById(`px-${id}`) || {}).value);
     if (!price || price <= 0) { toast('Informe um preço válido maior que zero (até 6 casas decimais).'); return; }
     let bal = null;
-    await guarded(async () => { bal = await call('asset_trade', { asset: id, price, selling }, { delay: 300 }); });
+    await guarded(async () => { bal = await call('asset_trade', { class: cls, asset: id, price, selling }, { delay: 300 }); });
     if (bal !== null) {
       toast(selling ? `Vendido por ${money(price)} TEKO. Seu saldo: ${money(bal)} TEKO.` : `Comprado por ${money(price)} TEKO. Seu saldo: ${money(bal)} TEKO.`, 'ok');
       S.assetsTried = false; S.walletTried = false; S.balance = null; S.history = null; S.lastKey = ''; render(); loadAssets();
@@ -1548,16 +1559,44 @@
     S.lastKey = ''; render();
   }
 
+  const CLASS_LABEL = { veiculo: 'Veículo', imovel: 'Imóvel' };
+
+  async function loadRegForm(cls) {
+    if (S.reg.loading) return;
+    S.reg.loading = true; S.reg.class = cls;
+    try {
+      S.reg.form = await invoke('asset_form', { class: cls, n: 1 + Math.floor(Math.random() * 900) });
+      S.reg.values = {}; S.reg.error = '';
+    } catch (e) { S.reg.error = asErr(e).message; }
+    S.reg.loading = false; S.lastKey = ''; render();
+  }
+
+  function regForm() {
+    const f = S.reg.form;
+    const opts = Object.entries(CLASS_LABEL).map(([k, v]) => `<option value="${k}"${k === S.reg.class ? ' selected' : ''}>${v}</option>`).join('');
+    const fields = f ? f.fields.map((x) => `<div class="field"><label for="rf-${esc(x.key)}">${esc(x.label)}</label><input class="input" id="rf-${esc(x.key)}" data-reg="${esc(x.key)}" autocomplete="off" value="${esc(S.reg.values[x.key] ?? '')}" aria-describedby="rh-${esc(x.key)}"><div class="muted" id="rh-${esc(x.key)}" style="font-size:.8rem">${esc(x.help)}</div></div>`).join('') : '<p class="muted">Carregando o formulário…</p>';
+    return `<div class="field"><label for="reg-class">Classe do bem</label><select class="input" id="reg-class">${opts}</select></div>
+      <p class="muted">O órgão simulado da classe registra o bem. Na chain vai só o <strong>hash</strong> destes dados; os dados ficam neste computador e o seu dispositivo os mostra antes de você vender.</p>
+      ${fields}
+      ${S.reg.error ? `<p role="alert">${chip(S.reg.error, 'bad', 'alert')}</p>` : ''}
+      <div class="row"><button class="btn btn--ghost" data-act="regsample">${ico('badge')}Preencher exemplo</button>
+        <button class="btn" data-act="assetreg" data-cp="0">${ico('badge')}Órgão: registrar para mim</button>
+        <button class="btn btn--ghost" data-act="assetreg" data-cp="1">${ico('badge')}Órgão: registrar para a contraparte</button></div>`;
+  }
+
   function assetCard(a, mine) {
     const price = `<input class="input" style="max-width:120px" id="px-${esc(a.id)}" type="text" inputmode="decimal" autocomplete="off" placeholder="preço em TEKO" aria-label="preço em TEKO">`;
+    const data = `data-class="${esc(a.class)}" data-id="${esc(a.id)}"`;
+    const off = a.verified ? '' : ' disabled title="os metadados deste bem não estão neste computador"';
     return `<div class="fw__item"><div>
-        <h3>${esc(a.class)} / ${esc(a.id)} ${a.liens ? chip('PENHORADO', 'bad', 'lock') : ''}</h3>
+        <h3>${esc(CLASS_LABEL[a.class] || a.class)} · ${esc(a.id)} ${a.liens ? chip('PENHORADO', 'bad', 'lock') : ''}</h3>
+        ${a.summary && a.summary.length ? `<p>${a.summary.map(esc).join(' · ')} ${chip('metadados verificados', 'ok', 'check')}</p>` : `<p class="muted">metadados indisponíveis neste computador (só o hash está na chain)</p>`}
         <p class="muted">versão ${esc(String(a.version))} · ${a.liens ? `${a.liens} gravame(s): não pode ser vendido` : 'sem gravames'}</p>
       </div>
       <div class="row" style="flex-wrap:wrap;gap:8px">
-        ${mine ? `${price}<button class="btn" data-act="assetsell" data-id="${esc(a.id)}">${ico('upload')}Vender à contraparte</button>
-          <button class="btn btn--ghost btn--sm" data-act="assetlien" data-id="${esc(a.id)}" data-on="${a.liens ? '0' : '1'}">${ico('lock')}${a.liens ? 'Órgão: liberar gravame' : 'Órgão: penhorar'}</button>`
-        : `${price}<button class="btn" data-act="assetbuy" data-id="${esc(a.id)}">${ico('wallet')}Comprar da contraparte</button>`}
+        ${mine ? `${price}<button class="btn" data-act="assetsell" ${data}${off}>${ico('upload')}Vender à contraparte</button>
+          <button class="btn btn--ghost btn--sm" data-act="assetlien" ${data} data-on="${a.liens ? '0' : '1'}">${ico('lock')}${a.liens ? 'Órgão: liberar gravame' : 'Órgão: penhorar'}</button>`
+        : `${price}<button class="btn" data-act="assetbuy" ${data}${off}>${ico('wallet')}Comprar da contraparte</button>`}
       </div></div>`;
   }
 
@@ -1572,7 +1611,10 @@
         <div class="card__head"><div class="card__ico card__ico--onca">${ico('home')}</div><h2>Meu patrimônio</h2></div>
         <p class="muted">Seu saldo: <strong>${esc(money(a.balance))}</strong> TEKO de teste.</p>
         ${a.mine.length ? `<div class="fw">${a.mine.map((x) => assetCard(x, true)).join('')}</div>` : '<p class="muted">Você ainda não tem bens. Peça ao órgão simulado para registrar um bem de teste.</p>'}
-        <div class="row"><button class="btn btn--ghost" data-act="assetreg" data-cp="0">${ico('badge')}Órgão: registrar bem de teste para mim</button></div>
+      </article>
+      <article class="card">
+        <div class="card__head"><div class="card__ico card__ico--onca">${ico('badge')}</div><h2>Registrar bem de teste</h2></div>
+        ${regForm()}
       </article>
       <article class="card">
         <div class="card__head"><div class="card__ico card__ico--boto">${ico('users')}</div><h2>Contraparte simulada</h2></div>
@@ -1580,7 +1622,6 @@
         <div class="screen"><div class="screen__label">Endereço da contraparte</div><div class="id-big" style="font-size:.8rem">${esc(a.counterparty_address)}</div></div>
         <div class="row"><button class="btn btn--ghost btn--sm" data-act="copy" data-text="${esc(a.counterparty_address)}">${ico('copy')}Copiar</button></div>
         ${a.counterparty_assets.length ? `<div class="fw">${a.counterparty_assets.map((x) => assetCard(x, false)).join('')}</div>` : '<p class="muted">A contraparte ainda não tem bens.</p>'}
-        <div class="row"><button class="btn btn--ghost" data-act="assetreg" data-cp="1">${ico('badge')}Órgão: registrar bem de teste para a contraparte</button></div>
         <p class="muted">Para comprar, a contraparte precisa ter bem; para ela comprar de você, ela precisa de moedas (<code>make fund ADDR=&lt;endereço acima&gt; AMOUNT=1000</code>).</p>
       </article>`;
   }
@@ -1608,7 +1649,13 @@
     if (S.route === 'home') loadHome();
     if (S.route === 'identity') loadId();
     if (S.route === 'wallet') loadWallet();
-    if (S.route === 'assets') loadAssets();
+    if (S.route === 'assets') {
+      loadAssets();
+      if (!S.reg.form && !S.reg.loading && S.assets && S.assets.available) loadRegForm(S.reg.class);
+      const sel = $('#reg-class');
+      if (sel) sel.addEventListener('change', () => { S.reg.values = {}; S.reg.form = null; loadRegForm(sel.value); });
+      document.querySelectorAll('[data-reg]').forEach((i) => i.addEventListener('input', () => { S.reg.values[i.dataset.reg] = i.value; }));
+    }
     if (S.route === 'stake') loadStake();
     if (S.route === 'vote') loadElec();
     if (S.route === 'explorer') loadExplorer();

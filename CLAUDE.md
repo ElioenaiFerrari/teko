@@ -25,6 +25,7 @@ crates/teko-wallet/        (Fase 2, M5a) carteira: BIP-39 24 palavras (só na te
 crates/teko-economy/       (Fase 2, M6a) economia sobre BFT: blocos com certificado, validadores por stake, fase de fundador (ADR-0028)
 crates/teko-chain/         (Fase 2) rede federada PoA: perfis devnet/testnet (mainnet TRAVADA), blocos M-de-N, réplica verificada
 crates/teko-explorer/      (Fase 2) índice verificado da cadeia de economia: blocos, txs, contas, validadores, busca (ADR-0031)
+tools/devnet-sim/           (Fase 2) simuladores SÓ de dev: equivocação do validador de teste (`make devnet-equivocate`)
 tools/explorer-server/     (Fase 2) explorador: web local + API JSON somente leitura (`make explorer`)
 tools/teko-node/           (Fase 2) validador (gossip, rodízio, troca de turno) + cliente que não confia em nós
 crates/teko-bulletin/      (Fase 2) log Merkle append-only, provas, head assinado, leitor tolerante
@@ -84,6 +85,7 @@ make docs-check                        # confere links, imagens e crates no READ
 make fund ADDR=tekow1… AMOUNT=1000    # TEKO de TESTE na carteira (devnet local; decimais ok; 1 TEKO = 1.000.000 ypy, ADR-0029)
 make diagrams                         # regenera os diagramas (docs/diagrams)
 make devnet FOUNDER=tekow1…            # (1ª vez) FOUNDER = sua carteira: recebe as recompensas do fundador (ADR-0028)
+make devnet-equivocate                 # SIMULA a equivocação do validador de teste (penalidade/Slash); só dev
 make explorer                          # explorador da chain em http://127.0.0.1:8545 (precisa de make devnet)
 make devnet-economy                    # economia BFT: altura, fase de fundador, validadores
 make devnet                            # blockchain de TESTE local: 3 validadores PoA (docs/NETWORKS.md)

@@ -2363,17 +2363,55 @@ fn transfers_need_the_wallet_and_the_unlocked_device() {
 
 // ───────────────────────── asset consents (M5c, ADR-0025) ─────────────────────────
 
-fn consent_req(kind: u32, from: &str, to: &str, price: u64, version: u64) -> Request {
+/// Canonical metadata record of the test asset of `class` whose id is `id`.
+fn asset_record(class: &str, id: &str) -> Vec<u8> {
+    use teko_crypto::asset_meta;
+    let mut f = asset_meta::sample(class, 1).unwrap();
+    let key = asset_meta::id_field(class).unwrap();
+    for (k, v) in &mut f {
+        if k == key {
+            *v = id.to_string();
+        }
+    }
+    let p: Vec<(&str, &str)> = f.iter().map(|(k, v)| (k.as_str(), v.as_str())).collect();
+    asset_meta::canonical(class, &p).unwrap()
+}
+
+#[allow(clippy::too_many_arguments)]
+fn consent_req_for(
+    class: &str,
+    asset: &str,
+    record: Vec<u8>,
+    kind: u32,
+    from: &str,
+    to: &str,
+    price: u64,
+    version: u64,
+) -> Request {
     Request::SignAssetConsent(SignAssetConsent {
         chain_id: "teko-devnet".into(),
         kind,
-        class: "imovel".into(),
-        asset: "matricula-1".into(),
+        class: class.into(),
+        asset: asset.into(),
         from_address: from.into(),
         to_address: to.into(),
         price,
         version,
+        metadata: record,
     })
+}
+
+fn consent_req(kind: u32, from: &str, to: &str, price: u64, version: u64) -> Request {
+    consent_req_for(
+        "imovel",
+        "matricula-1",
+        asset_record("imovel", "matricula-1"),
+        kind,
+        from,
+        to,
+        price,
+        version,
+    )
 }
 
 #[test]
@@ -2425,8 +2463,10 @@ fn a_swap_signed_on_the_device_moves_the_asset_and_the_coin_in_the_real_ledger()
         let h = l.height() + 1;
         l.apply_block(h, &[9; 32], &[t])
     };
-    // registrars register the asset to the device wallet
-    let reg = Intent::register(b"imovel", b"matricula-1", seller_addr, b"m");
+    // registrars register the asset to the device wallet; the chain keeps the HASH of
+    // the metadata record
+    let mh = teko_crypto::asset_meta::hash("imovel", &asset_record("imovel", "matricula-1"));
+    let reg = Intent::register(b"imovel", b"matricula-1", seller_addr, &mh);
     let approvals = vec![
         Approval::sign(&regs[0], "teko-devnet", &reg),
         Approval::sign(&regs[1], "teko-devnet", &reg),
@@ -2437,7 +2477,7 @@ fn a_swap_signed_on_the_device_moves_the_asset_and_the_coin_in_the_real_ledger()
             class: b"imovel".to_vec(),
             asset: b"matricula-1".to_vec(),
             owner: seller_addr.to_vec(),
-            metadata_hash: b"m".to_vec(),
+            metadata_hash: mh.to_vec(),
             approvals,
         }),
     )
@@ -2458,12 +2498,27 @@ fn a_swap_signed_on_the_device_moves_the_asset_and_the_coin_in_the_real_ledger()
     assert!(sc.lines.iter().any(|l| l.contains("VENDEDOR")));
     assert!(sc.lines.iter().any(|l| l.contains("Preço: 0,004 TEKO")));
     assert!(sc.lines.iter().any(|l| l.contains("imovel/matricula-1")));
+    // the summary of the metadata record is on the screen (ADR-0032)
+    assert!(
+        sc.lines
+            .iter()
+            .any(|l| l.contains("Matrícula: matricula-1"))
+    );
+    assert!(sc.lines.iter().any(|l| l.starts_with("Endereço:")));
     let seller_consent = Approval {
         key: c.public_key.clone(),
         signature: c.signature.clone(),
     };
     // The buyer and two registrars consent in software; the ledger executes the swap.
-    let sw = Intent::swap(b"imovel", b"matricula-1", seller_addr, buyer_addr, 4000, 0);
+    let sw = Intent::swap(
+        b"imovel",
+        b"matricula-1",
+        seller_addr,
+        buyer_addr,
+        4000,
+        0,
+        &mh,
+    );
     let approvals = vec![
         seller_consent,
         Approval::sign(&buyer, "teko-devnet", &sw),
@@ -2529,6 +2584,118 @@ fn consent_requests_are_validated_and_need_a_physical_confirmation() {
         .screens()
         .iter()
         .any(|s| s.title == "TRANSFERIR BEM" && s.lines.iter().any(|l| l.contains("COMPRADOR"))));
+}
+
+#[test]
+fn a_vehicle_consent_shows_plate_and_model_and_refuses_records_that_do_not_match() {
+    let (_w, hal, mut dev) = fresh_initialized();
+    let created = create_wallet(&mut dev, &hal);
+    let other = teko_crypto::wallet_address(&[5u8; 32]).unwrap();
+    let chassi = "9BWZZZ377VT000001";
+    let rec = asset_record("veiculo", chassi);
+    hal.clear_screens();
+    let Response::AssetConsentSigned(_) = dev.handle(consent_req_for(
+        "veiculo",
+        chassi,
+        rec.clone(),
+        3,
+        &created.address,
+        &other,
+        5000,
+        0,
+    )) else {
+        panic!("not signed")
+    };
+    let sc = hal
+        .screens()
+        .into_iter()
+        .find(|s| s.title == "VENDA DE BEM")
+        .unwrap();
+    for needle in [
+        "Placa: BRA1A01",
+        "Veículo: Volkswagen Gol 1.0",
+        "Ano: 2020/2021",
+        "Cor: Prata",
+    ] {
+        assert!(
+            sc.lines.iter().any(|l| l.contains(needle)),
+            "{needle}: {:?}",
+            sc.lines
+        );
+    }
+    // what the device refuses, before showing anything
+    let shown = hal.confirms_requested();
+    let other_chassi = asset_record("veiculo", "9BWZZZ377VT000002");
+    let bad = [
+        // a record that names ANOTHER vehicle than the asset id
+        consent_req_for(
+            "veiculo",
+            chassi,
+            other_chassi,
+            3,
+            &created.address,
+            &other,
+            5000,
+            0,
+        ),
+        // no record at all
+        consent_req_for(
+            "veiculo",
+            chassi,
+            vec![],
+            3,
+            &created.address,
+            &other,
+            5000,
+            0,
+        ),
+        // a record of another class
+        consent_req_for(
+            "veiculo",
+            chassi,
+            asset_record("imovel", "matricula-1"),
+            3,
+            &created.address,
+            &other,
+            5000,
+            0,
+        ),
+        // a class with no schema
+        consent_req_for(
+            "barco",
+            "b-1",
+            rec.clone(),
+            3,
+            &created.address,
+            &other,
+            5000,
+            0,
+        ),
+        // not the canonical encoding
+        consent_req_for(
+            "veiculo",
+            chassi,
+            [rec.as_slice(), b"\n"].concat(),
+            3,
+            &created.address,
+            &other,
+            5000,
+            0,
+        ),
+    ];
+    for r in bad {
+        let resp = dev.handle(r);
+        assert_eq!(
+            failure_code(&resp),
+            Some(ErrorCode::InvalidArgument),
+            "{resp:?}"
+        );
+    }
+    assert_eq!(
+        hal.confirms_requested(),
+        shown,
+        "nothing shown for a bad record"
+    );
 }
 
 // ───────────────────────── staking (ADR-0027) ─────────────────────────

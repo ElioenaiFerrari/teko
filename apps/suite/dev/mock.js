@@ -18,7 +18,8 @@
     wallet: q === 'ready' || q === 'locked',
     retries: Number(new URLSearchParams(location.search).get('retries') || 8),
   };
-  const mine = [{ id: 'matricula-001', version: 0, liens: 0 }], theirs = [{ id: 'matricula-002', version: 0, liens: 0 }];
+  const SUM = { imovel: ['Matrícula: matricula-001', 'Endereço: Rua das Palmeiras, 100, São Paulo/SP', 'Área: 72,5 m²'], veiculo: ['Placa: BRA1A01', 'Veículo: Volkswagen Gol 1.0', 'Ano: 2020/2021', 'Cor: Prata'] };
+  const mine = [{ id: 'matricula-001', class: 'imovel', version: 0, liens: 0, summary: SUM.imovel, verified: true }], theirs = [{ id: 'matricula-002', class: 'imovel', version: 0, liens: 0, summary: SUM.imovel, verified: true }];
   let mstake = 0, mheight = 5, munb = [];
   let wbal = 4000 * 1000000; const whist = [{ height: 1, direction: 'received', counterparty: 'tekow1qqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqq9z3k', amount: 4000 * 1000000, fee: 0 }];
   const WADDR = 'tekow1qpzry9x8gf2tvdw0s3jn54khce6mua7lqpzry9x8gf2tvdw0s3jn54khce6muaw9z3k';
@@ -68,8 +69,20 @@
     wallet_history: async () => whist.slice(),
     stake_view: async () => ({ available: true, reason: null, balance: wbal - mstake - 0, my_stake: mstake, unbonding: munb.map((u) => [u.rel, u.amt]), height: mheight, unbonding_period: 3, slash_bps: 1000, mode: 'node', founder_phase_active: mstake < 1000 * 1000000, founder_target: 1000 * 1000000, total_stake: mstake, validators: mstake ? [['03ab12cd…9f00e1', mstake, true], ['02ff98aa…11b2c3', 9 * 1000000, false]] : [['02ff98aa…11b2c3', 9 * 1000000, false]] }),
     stake_action: async ({ action, amount }) => { await prompt('sign_stake', 1500); mheight += 1; if (action === 1) { if (wbal - mstake < amount) throw { code: 'Verification', message: 'saldo insuficiente', retry_after_ms: 0, remaining: 0 }; mstake += amount; } else if (action === 2) { if (amount > mstake) throw { code: 'Verification', message: 'stake insuficiente', retry_after_ms: 0, remaining: 0 }; mstake -= amount; munb.push({ rel: mheight + 3, amt: amount }); } else { const ok = munb.filter((u) => u.rel <= mheight); if (!ok.length) throw { code: 'Verification', message: 'nada para resgatar ainda', retry_after_ms: 0, remaining: 0 }; munb = munb.filter((u) => u.rel > mheight); } return wbal; },
-    assets_view: async () => ({ available: true, reason: null, balance: wbal, mine: mine.map((a) => ({ ...a, class: 'imovel' })), counterparty_address: 'tekow1qpzry9x8gf2tvdw0s3jn54khce6mua7lqpzry9x8gf2tvdw0s3jn54khce6muaw9z3q', counterparty_balance: 6000 * 1000000, counterparty_assets: theirs.map((a) => ({ ...a, class: 'imovel' })) }),
-    asset_register_test: async ({ forCounterparty }) => { const id = 'matricula-' + String(mine.length + theirs.length + 1).padStart(3, '0'); (forCounterparty ? theirs : mine).push({ id, version: 0, liens: 0 }); return id; },
+    assets_view: async () => ({ available: true, reason: null, balance: wbal, mine: mine.map((a) => ({ ...a })), counterparty_address: 'tekow1qpzry9x8gf2tvdw0s3jn54khce6mua7lqpzry9x8gf2tvdw0s3jn54khce6muaw9z3q', counterparty_balance: 6000 * 1000000, counterparty_assets: theirs.map((a) => ({ ...a })) }),
+    asset_form: async ({ class: cls, n }) => ({ class: cls, label: cls === 'veiculo' ? 'Veículo' : 'Imóvel',
+      fields: cls === 'veiculo'
+        ? [['chassi', 'Chassi', '17 caracteres, sem I, O ou Q'], ['placa', 'Placa', 'AAA0A00 ou AAA0000'], ['renavam', 'RENAVAM', '11 dígitos, com dígito verificador'], ['marca', 'Marca', 'ex.: Volkswagen'], ['modelo', 'Modelo', 'ex.: Gol 1.0'], ['ano_fabricacao', 'Ano de fabricação', '4 dígitos'], ['ano_modelo', 'Ano do modelo', 'o mesmo ano ou o seguinte'], ['cor', 'Cor', 'ex.: Prata']].map(([key, label, help]) => ({ key, label, help }))
+        : [['matricula', 'Matrícula', 'número da matrícula'], ['cartorio', 'Cartório', 'ex.: 1º Registro de Imóveis'], ['endereco', 'Endereço', 'rua, número, cidade/UF'], ['area_m2', 'Área (m²)', 'ex.: 72,5']].map(([key, label, help]) => ({ key, label, help })),
+      sample: cls === 'veiculo'
+        ? { chassi: '9BWZZZ377VT' + String(n || 1).padStart(6, '0'), placa: 'BRA1A01', renavam: '00639884962', marca: 'Volkswagen', modelo: 'Gol 1.0', ano_fabricacao: '2020', ano_modelo: '2021', cor: 'Prata' }
+        : { matricula: 'matricula-' + String(n || 1).padStart(3, '0'), cartorio: '1º Registro de Imóveis de São Paulo', endereco: 'Rua das Palmeiras, 100, São Paulo/SP', area_m2: '72,5' } }),
+    asset_register_test: async ({ class: cls, fields, forCounterparty }) => {
+      if (cls === 'veiculo' && fields.renavam !== '00639884962') throw { code: 'InvalidArgument', message: 'renavam inválido: dígito verificador não confere', retry_after_ms: 0, remaining: 0 };
+      const id = cls === 'veiculo' ? fields.chassi : fields.matricula;
+      if ([...mine, ...theirs].some((x) => x.id === id)) throw { code: 'Rejected', message: `este bem já está registrado (${cls}: ${id})`, retry_after_ms: 0, remaining: 0 };
+      (forCounterparty ? theirs : mine).push({ id, class: cls, version: 0, liens: 0, summary: SUM[cls], verified: true }); return id;
+    },
     asset_lien: async ({ asset, on }) => { const a = mine.find((x) => x.id === asset); if (a) { a.liens = on ? 1 : 0; a.version += 1; } },
     asset_trade: async ({ asset, price, selling }) => { await prompt('sign_asset_consent', 1800); const from = selling ? mine : theirs, to = selling ? theirs : mine; const i = from.findIndex((x) => x.id === asset); if (i < 0) throw { code: 'Verification', message: 'bem desconhecido', retry_after_ms: 0, remaining: 0 }; if (from[i].liens) throw { code: 'Verification', message: 'o bem tem gravame (penhora)', retry_after_ms: 0, remaining: 0 }; const [a] = from.splice(i, 1); a.version += 1; to.push(a); wbal += selling ? price : -price; return wbal; },
     wallet_balance: async () => (wbal = wbal ?? 4000 * 1000000, { available: true, amount: wbal, note: 'Alocação de gênese de TESTE da devnet (mock).' }),

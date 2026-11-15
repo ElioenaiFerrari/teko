@@ -3,22 +3,24 @@
 //! It plays the institutions that do not exist yet on a real network, with TEST keys in
 //! the dev directory:
 //!
-//!   * a SIMULATED REGISTRAR (órgão): 3 keys, 2-of-3, that registers assets and places
-//!     or releases liens;
+//!   * a SIMULATED REGISTRAR (órgão) PER CLASS (`imovel`, `veiculo`): 3 keys, 2-of-3,
+//!     that registers assets and places or releases liens;
 //!   * a SIMULATED COUNTERPARTY: another citizen to sell to or buy from;
 //!   * a relayer that pays the fees of the órgão's own transactions.
 //!
 //! The citizen's consent always comes from THEIR device (closure `consent`).
 //! Nothing here exists in a production build.
 
+use std::collections::BTreeMap;
 use std::fs;
 use std::path::Path;
 
 use teko_coin::COIN_MODULE;
 use teko_coin::devnet::{CHAIN_ID, Economy, TransferRecord};
-use teko_crypto::{SigningKey, generate_signing_key, hex, public_key_bytes};
+use teko_crypto::{SigningKey, asset_meta, generate_signing_key, hex, public_key_bytes};
 use teko_ledger::{Address, Ledger, Tx, address_of};
 
+use crate::metadata::MetadataStore;
 use crate::{
     ASSETS_MODULE, Approval, Intent, LienOp, Op, RegisterOp, ReleaseOp, SwapOp, asset, assets_of,
     genesis_class, module,
@@ -76,13 +78,24 @@ impl World for Economy {
     }
 }
 
-/// The only asset class of the devnet world.
-pub const CLASS: &str = "imovel";
-const REGISTRAR_FILES: [&str; 3] = ["registrar-0.key", "registrar-1.key", "registrar-2.key"];
+/// The asset classes of the devnet world, each with its own órgão (ADR-0032).
+pub const CLASSES: [&str; 2] = ["imovel", "veiculo"];
 const COUNTERPARTY_FILE: &str = "counterparty.key";
 const RELAYER_FILE: &str = "relayer.key";
+/// Name of the off-chain metadata folder inside a network or dev directory.
+pub const METADATA_DIR: &str = "assets-metadata";
 /// Coins the relayer holds so the órgão's own transactions can pay fees.
 const RELAYER_FUNDS: u64 = 100_000_000;
+
+/// Key file of member `i` of the órgão of `class`. `imovel` keeps the original names
+/// (`registrar-0.key`), the others are `registrar-<class>-<i>.key`.
+pub fn registrar_file(class: &str, i: usize) -> String {
+    if class == "imovel" {
+        format!("registrar-{i}.key")
+    } else {
+        format!("registrar-{class}-{i}.key")
+    }
+}
 
 fn load_or_create(path: &Path) -> Result<SigningKey, String> {
     if let Ok(text) = fs::read_to_string(path) {
@@ -99,32 +112,53 @@ fn load_or_create(path: &Path) -> Result<SigningKey, String> {
 
 /// The simulated people and institutions of the devnet world (TEST keys in `dir`).
 pub struct Cast {
-    pub registrars: Vec<SigningKey>,
+    /// The órgão (3 keys) of each class.
+    pub registrars: BTreeMap<String, Vec<SigningKey>>,
     pub counterparty: SigningKey,
     pub relayer: SigningKey,
+    /// Where the off-chain metadata records live (`<dir>/assets-metadata`).
+    pub store: MetadataStore,
 }
 
 impl Cast {
     pub fn load(dir: &Path) -> Result<Cast, String> {
         fs::create_dir_all(dir).map_err(|e| format!("{}: {e}", dir.display()))?;
-        let registrars = REGISTRAR_FILES
-            .iter()
-            .map(|f| load_or_create(&dir.join(f)))
-            .collect::<Result<Vec<_>, _>>()?;
+        let mut registrars = BTreeMap::new();
+        for class in CLASSES {
+            let keys = (0..3)
+                .map(|i| load_or_create(&dir.join(registrar_file(class, i))))
+                .collect::<Result<Vec<_>, _>>()?;
+            registrars.insert(class.to_string(), keys);
+        }
         Ok(Cast {
             registrars,
             counterparty: load_or_create(&dir.join(COUNTERPARTY_FILE))?,
             relayer: load_or_create(&dir.join(RELAYER_FILE))?,
+            store: MetadataStore::new(dir.join(METADATA_DIR)),
         })
     }
 
-    /// The same people, with the registrar keys of a real node network (so the órgão
-    /// simulado signs for the class that network's genesis defined).
-    pub fn with_registrars(mut self, registrars: Vec<SigningKey>) -> Cast {
-        if !registrars.is_empty() {
-            self.registrars = registrars;
+    /// The same people, with the registrar keys of a real node network for `class` (so
+    /// the órgão simulado signs for the class that network's genesis defined).
+    pub fn with_registrars(mut self, class: &str, keys: Vec<SigningKey>) -> Cast {
+        if !keys.is_empty() {
+            self.registrars.insert(class.to_string(), keys);
         }
         self
+    }
+
+    /// Keeps the metadata records in `dir` (for example the network directory, where the
+    /// explorer looks for them).
+    pub fn with_store(mut self, dir: impl Into<std::path::PathBuf>) -> Cast {
+        self.store = MetadataStore::new(dir);
+        self
+    }
+
+    pub fn registrars_for(&self, class: &str) -> Result<&[SigningKey], String> {
+        self.registrars
+            .get(class)
+            .map(Vec::as_slice)
+            .ok_or_else(|| format!("classe sem órgão registrador: {class}"))
     }
 
     pub fn counterparty_address(&self) -> Address {
@@ -145,8 +179,14 @@ fn build(cast: &Cast, allocs: &[(Address, u64)]) -> Result<Ledger, String> {
         .map_err(|e| format!("{e:?}"))?;
     teko_coin::genesis(&mut l, teko_coin::devnet::devnet_config(), &all, true)
         .map_err(|e| format!("{e:?}"))?;
-    let keys: Vec<Vec<u8>> = cast.registrars.iter().map(public_key_bytes).collect();
-    genesis_class(&mut l, CLASS.as_bytes(), &keys, 2)?;
+    for class in CLASSES {
+        let keys: Vec<Vec<u8>> = cast
+            .registrars_for(class)?
+            .iter()
+            .map(public_key_bytes)
+            .collect();
+        genesis_class(&mut l, class.as_bytes(), &keys, 2)?;
+    }
     Ok(l)
 }
 
@@ -165,10 +205,22 @@ pub fn balance_of(dir: &Path, who: &Address) -> Result<Option<u64>, String> {
     Ok(Some(open(dir)?.0.balance(who)))
 }
 
+/// What my device is asked to consent to: the asset, the parties, the price, the version
+/// and the metadata RECORD (the device shows it and signs its hash).
+pub struct ConsentRequest<'a> {
+    /// 2 = transfer, 3 = swap.
+    pub kind: u8,
+    pub class: &'a str,
+    pub asset: &'a str,
+    pub seller: &'a Address,
+    pub buyer: &'a Address,
+    pub price: u64,
+    pub version: u64,
+    pub metadata: &'a [u8],
+}
+
 /// A consent supplier: the DEVICE of the person (shows and signs), or a software key.
-/// Arguments: kind (2 transfer, 3 swap), asset id, seller, buyer, price, version.
-pub type Consent<'a> =
-    dyn FnMut(u8, &str, &Address, &Address, u64, u64) -> Result<Approval, String> + 'a;
+pub type Consent<'a> = dyn FnMut(&ConsentRequest<'_>) -> Result<Approval, String> + 'a;
 
 fn submit_assets_op(econ: &mut dyn World, cast: &Cast, op: Op) -> Result<(), String> {
     let me = cast.relayer_address();
@@ -191,61 +243,91 @@ fn submit_assets_op(econ: &mut dyn World, cast: &Cast, op: Op) -> Result<(), Str
     econ.submit(tx)
 }
 
-fn quorum(cast: &Cast, chain_id: &str, i: &Intent) -> Vec<Approval> {
-    cast.registrars
+fn quorum(cast: &Cast, class: &str, chain_id: &str, i: &Intent) -> Result<Vec<Approval>, String> {
+    Ok(cast
+        .registrars_for(class)?
         .iter()
         .take(2)
         .map(|k| Approval::sign(k, chain_id, i))
-        .collect()
+        .collect())
 }
 
-/// The simulated registrar registers `asset_id` to `owner`.
+/// The simulated registrar of `class` registers the asset described by `record` (a
+/// canonical metadata record, see `teko_crypto::asset_meta`) to `owner`. The chain
+/// gets only the record's hash; the record is saved in the off-chain store. Returns the
+/// asset id (the chassis of a vehicle, the registration number of a property).
 pub fn register(
     econ: &mut dyn World,
     cast: &Cast,
     owner: &Address,
-    asset_id: &str,
-) -> Result<(), String> {
-    let meta = format!("escritura de {asset_id}");
-    let i = Intent::register(
-        CLASS.as_bytes(),
-        asset_id.as_bytes(),
-        *owner,
-        meta.as_bytes(),
-    );
-    let approvals = quorum(cast, econ.chain_id(), &i);
+    class: &str,
+    record: &[u8],
+) -> Result<String, String> {
+    let id = asset_meta::asset_id(class, record).map_err(|e| e.to_string())?;
+    if asset(econ.ledger(), class.as_bytes(), id.as_bytes()).is_some() {
+        return Err(format!("este bem já está registrado ({class}: {id})"));
+    }
+    let hash = asset_meta::hash(class, record);
+    let i = Intent::register(class.as_bytes(), id.as_bytes(), *owner, &hash);
+    let approvals = quorum(cast, class, econ.chain_id(), &i)?;
     submit_assets_op(
         econ,
         cast,
         Op::Register(RegisterOp {
-            class: CLASS.into(),
-            asset: asset_id.as_bytes().to_vec(),
+            class: class.into(),
+            asset: id.as_bytes().to_vec(),
             owner: owner.to_vec(),
-            metadata_hash: meta.into_bytes(),
+            metadata_hash: hash.to_vec(),
             approvals,
         }),
-    )
+    )?;
+    cast.store.put(class, record)?;
+    Ok(id)
 }
 
-/// The simulated registrar adds (`on`) or releases the first lien of `asset_id`.
-pub fn set_lien(econ: &mut dyn World, cast: &Cast, asset_id: &str, on: bool) -> Result<(), String> {
+/// Valid TEST record for `class` whose asset id is `id` (a vehicle needs a valid chassis;
+/// for a property any registration number works). For tests and demos.
+pub fn sample_record(class: &str, id: &str) -> Result<Vec<u8>, String> {
+    let mut fields = asset_meta::sample(class, 1).ok_or("classe sem esquema")?;
+    let key = asset_meta::id_field(class).ok_or("classe sem esquema")?;
+    for (k, v) in &mut fields {
+        if k == key {
+            *v = id.to_string();
+        }
+    }
+    let pairs: Vec<(&str, &str)> = fields
+        .iter()
+        .map(|(k, v)| (k.as_str(), v.as_str()))
+        .collect();
+    asset_meta::canonical(class, &pairs).map_err(|e| e.to_string())
+}
+
+/// The simulated registrar of `class` adds (`on`) or releases the first lien of
+/// `asset_id`.
+pub fn set_lien(
+    econ: &mut dyn World,
+    cast: &Cast,
+    class: &str,
+    asset_id: &str,
+    on: bool,
+) -> Result<(), String> {
     let a =
-        asset(econ.ledger(), CLASS.as_bytes(), asset_id.as_bytes()).ok_or("bem desconhecido")?;
+        asset(econ.ledger(), class.as_bytes(), asset_id.as_bytes()).ok_or("bem desconhecido")?;
     let owner: Address = a.owner.as_slice().try_into().map_err(|_| "dono inválido")?;
     if on {
         let i = Intent::add_lien(
-            CLASS.as_bytes(),
+            class.as_bytes(),
             asset_id.as_bytes(),
             owner,
             a.version,
             "penhora",
         );
-        let ap = quorum(cast, econ.chain_id(), &i);
+        let ap = quorum(cast, class, econ.chain_id(), &i)?;
         submit_assets_op(
             econ,
             cast,
             Op::AddLien(LienOp {
-                class: CLASS.into(),
+                class: class.into(),
                 asset: asset_id.as_bytes().to_vec(),
                 kind: "penhora".into(),
                 approvals: ap,
@@ -254,18 +336,18 @@ pub fn set_lien(econ: &mut dyn World, cast: &Cast, asset_id: &str, on: bool) -> 
     } else {
         let lien = a.liens.first().ok_or("o bem não tem gravame")?.id;
         let i = Intent::release_lien(
-            CLASS.as_bytes(),
+            class.as_bytes(),
             asset_id.as_bytes(),
             owner,
             a.version,
             lien,
         );
-        let ap = quorum(cast, econ.chain_id(), &i);
+        let ap = quorum(cast, class, econ.chain_id(), &i)?;
         submit_assets_op(
             econ,
             cast,
             Op::ReleaseLien(ReleaseOp {
-                class: CLASS.into(),
+                class: class.into(),
                 asset: asset_id.as_bytes().to_vec(),
                 lien_id: lien,
                 approvals: ap,
@@ -275,13 +357,17 @@ pub fn set_lien(econ: &mut dyn World, cast: &Cast, asset_id: &str, on: bool) -> 
 }
 
 /// Sells (`me` is the owner) or buys (`me` is the buyer) `asset_id` against `price`
-/// coins with the simulated counterparty. MY consent comes from `consent` (my device);
-/// the counterparty and the registrar quorum sign in software; the ledger executes the
-/// atomic swap. Returns my coin balance afterwards.
+/// coins with the simulated counterparty. MY consent comes from `consent` (my device,
+/// which is handed the metadata record and signs its hash); the counterparty and the
+/// registrar quorum sign in software; the ledger executes the atomic swap. The record
+/// must be in the off-chain store AND match the hash on the chain, or the sale is
+/// blocked. Returns my coin balance afterwards.
+#[allow(clippy::too_many_arguments)]
 pub fn trade_with_counterparty(
     econ: &mut dyn World,
     cast: &Cast,
     me: &Address,
+    class: &str,
     asset_id: &str,
     price: u64,
     selling: bool,
@@ -291,7 +377,7 @@ pub fn trade_with_counterparty(
         return Err("informe um preço maior que zero".into());
     }
     let a =
-        asset(econ.ledger(), CLASS.as_bytes(), asset_id.as_bytes()).ok_or("bem desconhecido")?;
+        asset(econ.ledger(), class.as_bytes(), asset_id.as_bytes()).ok_or("bem desconhecido")?;
     let owner: Address = a.owner.as_slice().try_into().map_err(|_| "dono inválido")?;
     let cp = cast.counterparty_address();
     let (seller, buyer) = if selling { (*me, cp) } else { (cp, *me) };
@@ -305,6 +391,10 @@ pub fn trade_with_counterparty(
     if !a.liens.is_empty() {
         return Err("o bem tem gravame (penhora): peça a liberação ao órgão".into());
     }
+    let record = cast
+        .store
+        .get_verified(class, asset_id, &a.metadata_hash)
+        .ok_or("os metadados deste bem não estão neste computador (ou não conferem com a chain): venda bloqueada")?;
     if econ.balance(&buyer) < price {
         return Err(format!(
             "o comprador não tem saldo: precisa de {}, tem {} ({})",
@@ -314,23 +404,33 @@ pub fn trade_with_counterparty(
         ));
     }
     let i = Intent::swap(
-        CLASS.as_bytes(),
+        class.as_bytes(),
         asset_id.as_bytes(),
         seller,
         buyer,
         price,
         a.version,
+        &a.metadata_hash,
     );
     // 1) MY consent, on my device
-    let mine = consent(3, asset_id, &seller, &buyer, price, a.version)?;
+    let mine = consent(&ConsentRequest {
+        kind: 3,
+        class,
+        asset: asset_id,
+        seller: &seller,
+        buyer: &buyer,
+        price,
+        version: a.version,
+        metadata: &record,
+    })?;
     // 2) the counterparty (software) and the registrar quorum
     let mut approvals = vec![mine];
     let chain = econ.chain_id().to_string();
     approvals.push(Approval::sign(&cast.counterparty, &chain, &i));
-    approvals.extend(quorum(cast, econ.chain_id(), &i));
+    approvals.extend(quorum(cast, class, econ.chain_id(), &i)?);
     // the relayer submits (and pays the fee)
     let op = Op::Swap(SwapOp {
-        class: CLASS.into(),
+        class: class.into(),
         asset: asset_id.as_bytes().to_vec(),
         buyer: buyer.to_vec(),
         price,
@@ -340,17 +440,27 @@ pub fn trade_with_counterparty(
     Ok(econ.balance(me))
 }
 
-/// A wallet's assets: (asset id, version, number of liens).
-pub fn owned(econ: &dyn World, who: &Address) -> Vec<(String, u64, usize)> {
+/// An asset owned by a wallet.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct OwnedAsset {
+    pub class: String,
+    pub id: String,
+    pub version: u64,
+    pub liens: usize,
+}
+
+/// A wallet's assets, in key order.
+pub fn owned(econ: &dyn World, who: &Address) -> Vec<OwnedAsset> {
     assets_of(econ.ledger(), who)
         .into_iter()
         .filter_map(|(c, id)| {
             let a = asset(econ.ledger(), &c, &id)?;
-            Some((
-                String::from_utf8_lossy(&id).into_owned(),
-                a.version,
-                a.liens.len(),
-            ))
+            Some(OwnedAsset {
+                class: String::from_utf8_lossy(&c).into_owned(),
+                id: String::from_utf8_lossy(&id).into_owned(),
+                version: a.version,
+                liens: a.liens.len(),
+            })
         })
         .collect()
 }

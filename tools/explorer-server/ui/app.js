@@ -131,7 +131,19 @@
     async assets() {
       const a = await api('assets');
       return `<h1>Bens</h1><h2>Classes</h2>${a.classes.length ? `<table><thead><tr><th>Classe</th><th>Órgão (M-de-N)</th><th>Versão</th></tr></thead><tbody>${a.classes.map((c) => `<tr><td>${esc(c.name)}</td><td>${esc(c.threshold)} de ${esc(c.registrars)}</td><td>${esc(c.version)}</td></tr>`).join('')}</tbody></table>` : '<p class="muted">Nenhuma classe.</p>'}
-        <h2>Bens registrados</h2>${a.assets.length ? `<table><thead><tr><th>Classe</th><th>Id</th><th>Dono</th><th>Gravames</th></tr></thead><tbody>${a.assets.map((s) => `<tr><td>${esc(s.class)}</td><td>${esc(s.id)}</td><td>${A.addr(s.owner)}</td><td>${esc(s.liens.join(', ') || '—')}</td></tr>`).join('')}</tbody></table>` : '<p class="muted">Nenhum bem ainda.</p>'}`;
+        <h2>Bens registrados</h2>${a.assets.length ? `<table><thead><tr><th>Classe</th><th>Id</th><th>Dono</th><th>Gravames</th></tr></thead><tbody>${a.assets.map((s) => `<tr><td>${esc(s.class)}</td><td><a href="#/asset/${encodeURIComponent(s.class)}/${encodeURIComponent(s.id)}">${esc(s.id)}</a></td><td>${A.addr(s.owner)}</td><td>${esc(s.liens.join(', ') || '—')}</td></tr>`).join('')}</tbody></table>` : '<p class="muted">Nenhum bem ainda.</p>'}`;
+    },
+    async asset(arg) {
+      const [cls, ...rest] = arg.split('/');
+      const id = rest.join('/');
+      const d = await api(`assets/${encodeURIComponent(cls)}/${encodeURIComponent(id)}`);
+      const a = d.asset;
+      const meta = d.metadata_verified
+        ? `<h2>Metadados <span class="chip ok">verificados contra a chain</span></h2>${kv(d.metadata.map(([k, v]) => [k, esc(v)]))}`
+        : `<h2>Metadados</h2><p class="muted">${d.metadata_available ? 'O registro deste bem não está neste computador (ou não confere com o hash da chain).' : 'Este explorador não guarda os metadados: eles ficam fora da chain para proteger os dados do dono. Só o hash está na chain.'}</p>`;
+      return `<h1>${esc(a.class)} · ${esc(a.id)}</h1>${kv([
+        ['Dono', A.addr(a.owner)], ['Versão', esc(a.version)], ['Gravames', esc(a.liens.join(', ') || '—')],
+        ['Hash dos metadados (na chain)', `<span class="mono">${esc(a.metadata_hash)}</span>`]])}${meta}`;
     },
     async votes() {
       const v = await api('votes');

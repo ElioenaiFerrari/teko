@@ -99,7 +99,10 @@ fn load_blocks(path: &Path, chain: &mut EconomyChain) -> Result<(), NodeError> {
         // every block is RE-VERIFIED at startup (certificate, proposer, execution, root)
         chain
             .apply_decided(d)
-            .map_err(|e| NodeError::Economy(format!("economy.blocks: {e:?}")))?;
+            .map_err(|e| match NodeError::replay(&e) {
+                NodeError::Economy(m) => NodeError::Economy(format!("economy.blocks: {m}")),
+                other => other,
+            })?;
         at += 4 + n;
     }
     Ok(())

@@ -17,3 +17,5 @@ Os bens ([ADR-0022](0022-bens-registro-com-orgao-e-troca-atomica.md)) exigem tr�
 - A contraparte é uma só e automática; **não há negociação entre duas pessoas reais** nem ofertas pendentes. Isso exigiria o livro na rede (M6).
 - Uma única classe de bens (`imovel`) e uma única carteira por dispositivo.
 - Sem auditoria; sem valor real.
+
+**Atualização (ADR-0032):** a tela Bens registra imóvel ou veículo com formulário validado em Rust e a venda envia o registro de metadados ao dispositivo, que mostra o resumo e assina o hash.

@@ -48,3 +48,5 @@ pub const LEDGER_STATE_LEAF: &str = "teko/v2/ledger-state-leaf";
 pub const COIN_SLASH: &str = "teko/v2/coin-slash";
 pub const ASSET_INTENT: &str = "teko/v2/asset-intent";
 pub const ASSET_APPROVAL: &str = "teko/v2/asset-approval";
+/// Hash of the off-chain metadata record of an asset (ADR-0032).
+pub const ASSET_METADATA: &str = "teko/v2/asset-metadata";

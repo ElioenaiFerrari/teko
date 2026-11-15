@@ -71,3 +71,6 @@ Consulta rápida. Para **entender** cada conceito, com diagrama e código Rust, 
 | **zeroize** | Zerar a memória de um segredo ao descartá-lo. | [10](concepts/10-device-security.md) |
 | **Explorador** | Página e API somente leitura para ver blocos, transações e carteiras; verifica a cadeia sozinho, sem confiar nos nós. | [fluxo 15](flows/15-explorer.md) |
 | **Recibo / evento** | O que uma transação fez ao executar (por exemplo `slashed`); vem do `BlockOutcome` do livro. | [7](concepts/07-ledger.md) |
+| **Classe de bem** | Tipo de bem (`imovel`, `veiculo`) com o seu órgão registrador M-de-N e o seu esquema de metadados. | [fluxo 12](flows/12-ledger-coin-and-assets.md) |
+| **Metadados do bem** | Dados do bem (placa, RENAVAM, endereço) guardados fora da chain; só o hash vai à chain e entra no consentimento de venda. | [fluxo 12](flows/12-ledger-coin-and-assets.md) |
+| **Chassi / RENAVAM** | Chassi: identificador único do veículo (é o `id` do bem). RENAVAM: registro nacional, 11 dígitos com dígito verificador módulo 11. | [fluxo 12](flows/12-ledger-coin-and-assets.md) |

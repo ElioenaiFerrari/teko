@@ -189,6 +189,38 @@ fn api(shared: &Shared, segs: &[&str], q: &[(String, String)]) -> Response {
                 None => error(404, "bloco de votos não encontrado"),
             }
         }
+        ["assets", class, id] => {
+            #[derive(Serialize)]
+            struct D {
+                asset: teko_explorer::AssetView,
+                /// Does this server hold the record (only a local devnet does)?
+                metadata_available: bool,
+                /// The record matches the hash on the chain.
+                metadata_verified: bool,
+                metadata: Vec<(String, String)>,
+            }
+            let Some(asset) = shared.index().asset(class, id) else {
+                return error(404, "bem não encontrado");
+            };
+            let on_chain = teko_crypto::hex::decode(&asset.metadata_hash).unwrap_or_default();
+            let record = shared
+                .store
+                .as_ref()
+                .and_then(|s| s.get_verified(class, id, &on_chain));
+            let metadata = record
+                .as_deref()
+                .and_then(|r| teko_crypto::asset_meta::parse(class, r).ok())
+                .unwrap_or_default();
+            json(
+                200,
+                &D {
+                    asset,
+                    metadata_available: shared.store.is_some(),
+                    metadata_verified: record.is_some(),
+                    metadata,
+                },
+            )
+        }
         ["validators"] => json(200, &shared.index().validators()),
         ["assets"] => {
             #[derive(Serialize)]

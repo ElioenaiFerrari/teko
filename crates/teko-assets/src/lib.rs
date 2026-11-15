@@ -16,11 +16,13 @@
 #![cfg_attr(test, allow(clippy::unwrap_used, clippy::expect_used, clippy::panic))]
 
 pub mod devnet;
+mod metadata;
 mod module;
 mod query;
 mod types;
 
-pub use module::{ASSETS_MODULE, AssetsModule, genesis_class, module};
+pub use metadata::MetadataStore;
+pub use module::{ASSETS_MODULE, AssetsModule, META_HASH_LEN, genesis_class, module};
 pub use query::{asset, assets_of, class_info};
 pub use types::{
     Approval, AssetRec, ClassRec, Intent, IntentKind, Lien, LienOp, Op, RegisterOp, RegistrarsOp,

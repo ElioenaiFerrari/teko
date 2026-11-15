@@ -1,6 +1,6 @@
 # Teko — atalhos. Rode `make` (ou `make help`) para ver tudo.
 .DEFAULT_GOAL := help
-.PHONY: help setup emulator suite reset demo issuer-help preview fmt lint test check build clean-dev verify-fw release-check repro fund docs-check diagrams coin-demo assets-demo devnet close devnet-dkg devnet-economy explorer devnet-founder devnet-stop devnet-status devnet-reset devnet-blocks testnet-help election publish simulate simulate-live tally reset-board
+.PHONY: help setup emulator suite reset demo issuer-help preview fmt lint test check build clean-dev verify-fw release-check repro fund docs-check diagrams coin-demo assets-demo devnet close devnet-dkg devnet-economy explorer devnet-equivocate devnet-founder devnet-stop devnet-status devnet-reset devnet-blocks testnet-help election publish simulate simulate-live tally reset-board
 
 CARGO ?= cargo
 PIN   ?= 482913
@@ -44,6 +44,9 @@ devnet-stop: ## Para os 3 validadores (os blocos ficam em dev/net/node-*/blocks.
 devnet-founder: ## Define a carteira do fundador (recebe as recompensas) e zera a economia. Uso: make devnet-founder FOUNDER=tekow1…
 	@test -n "$(FOUNDER)" || { echo 'Uso: make devnet-founder FOUNDER=tekow1… (endereço da aba Carteira da Suite)'; exit 1; }
 	@$(NODE) stop --dir $(NET) >/dev/null 2>&1; $(NODE) founder --dir $(NET) --address $(FOUNDER)
+
+devnet-equivocate: ## SIMULAÇÃO (só dev): o validador de teste assina 2 votos conflitantes e leva Slash. Uso: make devnet-equivocate [VALIDATOR=0]. Antes, trave stake na Suite (Validadores)
+	$(CARGO) run -q -p devnet-sim -- equivocate --dir $(NET) --validator $(or $(VALIDATOR),0)
 
 explorer: ## Explorador da chain (web + API JSON somente leitura) em http://127.0.0.1:8545; precisa da rede: make devnet
 	$(CARGO) run -q -p explorer-server -- --dir $(NET)

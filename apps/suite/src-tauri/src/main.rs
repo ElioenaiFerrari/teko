@@ -39,6 +39,7 @@ fn main() {
             commands::stake_view,
             commands::economy_overview,
             commands::stake_action,
+            commands::asset_form,
             commands::asset_register_test,
             commands::asset_lien,
             commands::asset_trade,

@@ -14,6 +14,7 @@
     key: '<circle cx="8" cy="15" r="4"/><path d="M11 12l9-9M16 7l3 3"/>',
     wallet: '<rect x="3" y="6" width="18" height="13" rx="2"/><path d="M3 10h18M16 14.5h2"/>',
     home: '<path d="M3 11l9-7 9 7v9H3z"/><path d="M9 20v-6h6v6"/>',
+    stake: '<path d="M12 3l8 4v5c0 4.5-3.2 7.5-8 9-4.8-1.5-8-4.5-8-9V7z"/><path d="M9 12l2 2 4-4"/>',
     pen: '<path d="M4 20h16"/><path d="M5 16l9-9 3 3-9 9H5v-3z"/>',
     badge: '<circle cx="12" cy="12" r="9"/><path d="M8 12l3 3 5-6"/>',
     ballot: '<rect x="4" y="9" width="16" height="11" rx="2"/><path d="M8 9V5h8v4M9 14h6"/>',
@@ -170,6 +171,7 @@
     { id: 'identity', label: 'Minha identidade', icon: 'id', need: 'ready' },
     { id: 'wallet', label: 'Carteira', icon: 'wallet', need: 'ready' },
     { id: 'assets', label: 'Bens', icon: 'home', need: 'ready' },
+    { id: 'stake', label: 'Validadores', icon: 'stake', need: 'ready' },
     { id: 'sign', label: 'Assinar documento', icon: 'pen', need: 'ready' },
     { id: 'prove', label: 'Provar atributo', icon: 'badge', need: 'ready' },
     { id: 'vote', label: 'Votar', icon: 'ballot', need: 'ready' },
@@ -222,6 +224,7 @@
     wallet_confirm: ['Confirme a sua anotação no dispositivo', 'O dispositivo vai pedir palavras de posições sorteadas. Digite-as no dispositivo, lendo do seu papel.'],
     wallet_passphrase: ['Escolha no dispositivo: usar passphrase?', 'Uma senha extra protege a frase, mas esquecê-la significa perder os fundos. Decida no dispositivo.'],
     wallet_restore: ['Restaure a carteira no dispositivo', 'Digite as 24 palavras NO DISPOSITIVO e confira o endereço mostrado. Esta janela nunca vê as palavras.'],
+    sign_stake: ['Confirme o stake no dispositivo', 'Confira a ação, o valor e a taxa que o dispositivo mostra. Quem trava stake pode ser penalizado se votar duas vezes.'],
     sign_asset_consent: ['Confirme o seu consentimento no dispositivo', 'Confira o BEM, o vendedor, o comprador, o preço e a versão que o dispositivo mostra. Só confirme se for exatamente o negócio combinado.'],
     sign_transfer: ['Confirme o envio no dispositivo', 'Confira o ENDEREÇO de destino, o valor e a taxa que o dispositivo mostra. Só confirme se for exatamente o que você quer enviar.'],
     wallet_check: ['Verifique o backup no dispositivo', 'Digite a frase do seu papel no dispositivo. Ele só diz se confere ou não.'],
@@ -383,7 +386,7 @@
 
   function renderMain() {
     const m = $('#main');
-    const views = { results: vResults, explorer: vExplorer, onboarding: vOnboarding, unlock: vUnlock, identity: vIdentity, wallet: vWallet, assets: vAssets, sign: vSign, prove: vProve, vote: vVote };
+    const views = { results: vResults, explorer: vExplorer, onboarding: vOnboarding, unlock: vUnlock, identity: vIdentity, wallet: vWallet, assets: vAssets, stake: vStake, sign: vSign, prove: vProve, vote: vVote };
     m.innerHTML = `<div class="view">${(views[S.route] || vExplorer)()}</div>`;
     afterRender();
   }
@@ -1142,6 +1145,7 @@
       if (id === 'explorer') { S.explorerTried = false; S.inclusion = null; }
       if (id === 'results') { S.resultsShape = null; setTimeout(pollResults, 0); }
       if (id === 'identity') S.idTried = false;
+      if (id === 'stake') { S.stakeTried = false; S.stake = null; }
       if (id === 'assets') { S.assetsTried = false; S.assets = null; }
       if (id === 'wallet') { S.walletTried = false; S.walletAddr = null; S.balance = null; S.history = null; }
       if (id === 'identity') loadId();
@@ -1203,6 +1207,9 @@
         S.walletTried = false; S.balance = null; S.history = null; S.lastKey = ''; render(); loadWallet();
       }
     },
+    async stakebond() { await stakeAct(1); },
+    async stakeunbond() { await stakeAct(2); },
+    async stakeclaim() { await stakeAct(3); },
     async assetreg(b) {
       const cp = b.dataset.cp === '1';
       await guarded(async () => { const id = await call('asset_register_test', { address: S.walletAddr.address, forCounterparty: cp }); toast(`Órgão simulado registrou ${id} ${cp ? 'para a contraparte' : 'para você'}.`, 'ok'); });
@@ -1359,6 +1366,58 @@
     S.lastKey = ''; render();
   }
 
+  async function loadStake() {
+    if (S.stakeTried || phase() !== 'ready') return;
+    S.stakeTried = true;
+    if (!S.walletAddr) await guarded(async () => { S.walletAddr = await call('wallet_address', {}, { delay: 5000 }); }, { silent: true });
+    if (S.walletAddr) {
+      try { S.stake = await invoke('stake_view', { address: S.walletAddr.address }); } catch (e) { S.stake = { available: false, reason: asErr(e).message }; }
+    }
+    S.lastKey = ''; render();
+  }
+
+  function vStake() {
+    const k = S.stake;
+    const h0 = head('Validadores', 'Stake e rede', 'Quem trava moeda como stake ajuda a validar a rede e pode ser penalizado se agir de má-fé. Cada ação é confirmada no dispositivo.');
+    if (!k) return `${h0}<article class="card"><div class="row">${ico('spin', 'spin')}<span>Lendo…</span></div></article>`;
+    if (!k.available) return `${h0}<article class="card">${callout('info', 'shield', 'Indisponível nesta versão', `<p>${esc(k.reason || 'O livro de economia ainda não está na rede.')}</p>`)}</article>`;
+    const unb = k.unbonding.map(([rel, amt]) => `<dt>${esc(String(amt))} moedas</dt><dd>${k.height >= rel ? chip('pronto para resgatar', 'ok', 'check') : chip(`libera no bloco ${rel} (faltam ${rel - k.height})`, 'warn')}</dd>`).join('');
+    const total = k.validators.reduce((a, v) => a + v[1], 0);
+    return `${h0}
+      ${callout('warn', 'alert', 'Ambiente de teste', '<p>O livro é local e as moedas são de <strong>teste</strong> (<code>make fund</code>). Em desenvolvimento cada transação é um bloco, por isso o prazo de saída é curto (3 blocos).</p>')}
+      <div class="kpis">
+        <div class="kpi"><div class="kpi__label">Saldo livre</div><div class="kpi__val">${esc(String(k.balance))}</div></div>
+        <div class="kpi"><div class="kpi__label">Meu stake</div><div class="kpi__val">${esc(String(k.my_stake))}</div><div class="kpi__sub">${k.my_stake ? 'você é validador' : 'ainda não é validador'}</div></div>
+        <div class="kpi"><div class="kpi__label">Penalidade</div><div class="kpi__val">${esc(String(k.slash_bps / 100))}%</div><div class="kpi__sub">por voto duplo comprovado</div></div>
+      </div>
+      <article class="card">
+        <div class="card__head"><div class="card__ico card__ico--onca">${ico('stake')}</div><h2>Travar e sair</h2></div>
+        <div class="fields">
+          <div class="field"><label for="f-stk">Valor</label><input class="input" id="f-stk" type="number" min="1" step="1" placeholder="ex.: 1000"></div>
+        </div>
+        <div class="row" style="flex-wrap:wrap">
+          <button class="btn" data-act="stakebond">${ico('lock')}Travar stake</button>
+          <button class="btn btn--ghost" data-act="stakeunbond">${ico('unlock')}Sair do stake</button>
+          <button class="btn btn--ghost" data-act="stakeclaim">${ico('check')}Resgatar o que venceu</button>
+        </div>
+        <p class="muted">Ao sair, o valor espera ${esc(String(k.unbonding_period))} blocos antes do resgate e ainda pode ser penalizado nesse período.</p>
+        ${unb ? `<dl class="kv">${unb}</dl>` : ''}
+      </article>
+      <article class="card">
+        <div class="card__head"><div class="card__ico card__ico--boto">${ico('users')}</div><h2>Validadores por stake</h2></div>
+        ${k.validators.length ? `<dl class="kv">${k.validators.map(([key, st, mine]) => `<dt class="mono">${esc(key)} ${mine ? chip('você', 'ok') : ''}</dt><dd><strong>${esc(String(st))}</strong> <span class="muted">(${total ? Math.round((st * 100) / total) : 0}% do poder de voto)</span></dd>`).join('')}</dl>` : '<p class="muted">Ninguém travou stake ainda.</p>'}
+        <p class="muted">O poder de voto de cada validador no consenso (BFT) é proporcional ao stake; mais de 2/3 do stake precisa concordar para fechar um bloco.</p>
+      </article>`;
+  }
+
+  async function stakeAct(action) {
+    const amount = Number(($('#f-stk') || {}).value || 0);
+    if (action !== 3 && (!Number.isInteger(amount) || amount <= 0)) { toast('Informe um valor inteiro maior que zero.'); return; }
+    let r = null;
+    await guarded(async () => { r = await call('stake_action', { action, amount: action === 3 ? 0 : amount }, { delay: 300 }); });
+    if (r !== null) { toast(['', 'Stake travado.', 'Saída iniciada: aguarde o prazo.', 'Resgate concluído.'][action], 'ok'); S.stakeTried = false; S.assetsTried = false; S.walletTried = false; S.lastKey = ''; render(); loadStake(); }
+  }
+
   async function loadAssets() {
     if (S.assetsTried || phase() !== 'ready') return;
     S.assetsTried = true;
@@ -1429,6 +1488,7 @@
     if (S.route === 'identity') loadId();
     if (S.route === 'wallet') loadWallet();
     if (S.route === 'assets') loadAssets();
+    if (S.route === 'stake') loadStake();
     if (S.route === 'vote') loadElec();
     if (S.route === 'explorer') loadExplorer();
     if (S.route === 'results') renderResults();

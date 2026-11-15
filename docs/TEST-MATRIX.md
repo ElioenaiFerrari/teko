@@ -230,6 +230,9 @@ Legenda: **P** = `proptest` (muitos casos), **U** = unitário, **E** = ponta a p
 | Ponta a ponta: consentimento assinado, mostrado na tela e **verificado pelo cliente**; recusa no botão | e2e: `an_asset_consent_is_signed_on_the_device_and_verified_by_the_client` |
 | **Bens no mundo de teste:** o órgão simulado registra (quórum 2-de-3), penhora e libera; a venda/compra com a contraparte move bem e moeda; gravame, bem alheio, preço zero e comprador sem saldo são recusados; tudo sobrevive ao reinício e a oferta se conserva | assets: `devnet::the_simulated_registrar_and_counterparty_trade_with_me`, `a_consent_from_the_wrong_person_does_not_move_the_asset` |
 | **Ponta a ponta com o dispositivo:** vender e comprar um bem com o consentimento assinado no dispositivo (tela "VENDA DE BEM", papel vendedor/comprador), recusa no botão não move nada | e2e: `selling_and_buying_an_asset_with_my_device_consent_in_the_devnet_world` |
+| **Stake assinado no dispositivo vira validador no livro real:** o dispositivo mostra a ação, a assinatura é uma `Tx` válida, travar cria o validador, sair exige a espera e resgatar antes do prazo é recusado | device: `a_stake_is_shown_on_the_device_and_becomes_a_validator_in_the_real_ledger` |
+| Pedido de stake inválido (ação desconhecida, valor zero, resgate com valor, estouro, rede ruim) é recusado **antes de qualquer tela**; recusar no botão não assina | device: `bad_stake_requests_are_refused_before_any_prompt_and_rejection_signs_nothing` |
+| **Ponta a ponta:** travar, sair, resgatar cedo (recusado), esperar blocos, resgatar; o mundo de teste unificado continua servindo saldo após tráfego de bens e stake; recusa no botão | e2e: `staking_is_signed_on_the_device_and_the_wallet_becomes_a_validator_in_the_devnet_world` |
 | Saldo de teste da devnet (arquivo de alocações) | coin: `devnet::tests::allocations_roundtrip_and_balance`, `bad_input_is_refused` |
 
 ## O que **não** está coberto por teste automático (honestidade)

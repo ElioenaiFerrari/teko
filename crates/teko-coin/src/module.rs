@@ -87,9 +87,9 @@ impl Op {
     pub fn encode(&self) -> Vec<u8> {
         match self {
             Op::Transfer { to, amount } => teko_crypto::ledger::coin_transfer_payload(to, *amount),
-            Op::Stake { amount } => [&[1u8][..], &amount.to_be_bytes()].concat(),
-            Op::Unstake { amount } => [&[2u8][..], &amount.to_be_bytes()].concat(),
-            Op::Claim => vec![3],
+            Op::Stake { amount } => teko_crypto::ledger::coin_stake_payload(1, *amount),
+            Op::Unstake { amount } => teko_crypto::ledger::coin_stake_payload(2, *amount),
+            Op::Claim => teko_crypto::ledger::coin_stake_payload(3, 0),
             Op::Slash { evidence } => [&[4u8][..], evidence].concat(),
             Op::Faucet => vec![5],
         }

@@ -465,6 +465,44 @@ impl<T: Transport> DeviceClient<T> {
         Ok(tx)
     }
 
+    /// Asks the device to sign a staking action: 1 = bond, 2 = unbond, 3 = claim. The
+    /// device builds and shows the transaction; the client checks the signature.
+    pub fn wallet_sign_stake(
+        &mut self,
+        chain_id: &str,
+        action: u8,
+        amount: u64,
+        fee: u64,
+        nonce: u64,
+    ) -> Result<teko_ledger::Tx, ClientError> {
+        let signed = self.expect(
+            Request::SignStake(SignStake {
+                chain_id: chain_id.to_string(),
+                action: u32::from(action),
+                amount,
+                fee,
+                nonce,
+            }),
+            |r| match r {
+                Response::TransferSigned(t) => Ok(t),
+                o => Err(o),
+            },
+        )?;
+        let tx = teko_ledger::Tx {
+            chain_id: chain_id.to_string(),
+            nonce,
+            module: teko_coin::COIN_MODULE,
+            payload: teko_crypto::ledger::coin_stake_payload(action, amount),
+            sender: signed.public_key,
+            signature: signed.signature,
+            fee,
+        };
+        tx.verify().map_err(|_| {
+            ClientError::Verification("a assinatura devolvida não confere com a transação".into())
+        })?;
+        Ok(tx)
+    }
+
     /// Asks the device for this wallet's CONSENT (as seller or buyer) to move an asset.
     /// The device shows the asset, parties, price and version and signs only after the
     /// physical confirmation. `kind`: 2 = transfer, 3 = swap. The client checks the

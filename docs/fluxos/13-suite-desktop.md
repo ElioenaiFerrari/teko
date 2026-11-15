@@ -28,6 +28,9 @@ Interface, comandos Tauri, `teko-client`, dispositivo, quadro e rede.
 
 Mostra os bens em nome da sua carteira e permite **vender** ou **comprar** de uma contraparte simulada, além de pedir ao **órgão simulado** que registre um bem de teste, penhore ou libere. O **seu consentimento** é assinado no dispositivo; o resto é simulado e só existe com `dev-simulation`. Decisão: [ADR-0026](../adr/0026-bens-na-suite-com-orgao-e-contraparte-simulados.md).
 
+## Tela Validadores (ambiente de teste)
+Mostra saldo livre, **seu stake**, saídas pendentes e a lista de validadores com a **parcela do poder de voto**; permite **travar**, **sair** e **resgatar**, sempre com a confirmação no dispositivo ([ADR-0027](../adr/0027-stake-assinado-no-dispositivo.md)). O livro é o mesmo mundo de teste local da tela Bens; a ligação com o conjunto de validadores do consenso é o M6.
+
 ## O que é verificado e por quem
 A Suite confere atestação, firmware e a cadeia do nó; as confirmações sensíveis são do dispositivo.
 

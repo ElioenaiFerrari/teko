@@ -96,6 +96,14 @@ pub fn open(dir: &Path) -> Result<(Economy, Cast), String> {
     Ok((econ, cast))
 }
 
+/// Coin balance of `who` in the devnet world stored in `dir` (None = no economy file).
+pub fn balance_of(dir: &Path, who: &Address) -> Result<Option<u64>, String> {
+    if !dir.join(teko_coin::devnet::ECONOMY_FILE).exists() {
+        return Ok(None);
+    }
+    Ok(Some(open(dir)?.0.balance(who)))
+}
+
 /// A consent supplier: the DEVICE of the person (shows and signs), or a software key.
 /// Arguments: kind (2 transfer, 3 swap), asset id, seller, buyer, price, version.
 pub type Consent<'a> =

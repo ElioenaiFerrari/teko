@@ -34,6 +34,8 @@ Validadores (stake + histórico), emissor (elegibilidade de eleitores), órgão 
 - **Penalidade:** a evidência de equivocação do BFT queima uma parte do stake, uma vez por ofensa.
 - **Conservação:** criado − queimado = saldos + stake + em desvinculação (`audit`), testado com proptest. Decisão e **ponto pendente** (quem valida no início da rede): [ADR-0021](../adr/0021-moeda-teto-fixo-stake-e-taxas.md).
 
+****Stake:** a tela **Validadores** da Suite trava, sai e resgata com assinatura no dispositivo ([ADR-0027](../adr/0027-stake-assinado-no-dispositivo.md)), contra o livro local de teste.
+
 **Para ver funcionando:** `make coin-demo` roda alguns blocos em memória e imprime saldos, stake, recompensa, taxa, penalidade e a conservação da oferta. Ainda não há moeda na devnet nem na Suite (M5 e M6).
 
 ## Os bens (implementados)

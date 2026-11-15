@@ -2524,3 +2524,116 @@ fn consent_requests_are_validated_and_need_a_physical_confirmation() {
         .iter()
         .any(|s| s.title == "TRANSFERIR BEM" && s.lines.iter().any(|l| l.contains("COMPRADOR"))));
 }
+
+// ───────────────────────── staking (ADR-0027) ─────────────────────────
+
+fn stake_req(action: u32, amount: u64, fee: u64, nonce: u64) -> Request {
+    Request::SignStake(SignStake {
+        chain_id: "teko-devnet".into(),
+        action,
+        amount,
+        fee,
+        nonce,
+    })
+}
+
+#[test]
+fn a_stake_is_shown_on_the_device_and_becomes_a_validator_in_the_real_ledger() {
+    use teko_coin::{COIN_MODULE, CoinConfig};
+    use teko_ledger::{Ledger, address_of};
+
+    let (_w, hal, mut dev) = fresh_initialized();
+    let created = create_wallet(&mut dev, &hal);
+    let me = teko_crypto::parse_wallet_address(&created.address).unwrap();
+    let mut l = Ledger::new("teko-devnet", vec![teko_coin::module()])
+        .unwrap()
+        .with_fee_module(COIN_MODULE)
+        .unwrap();
+    let cfg = CoinConfig {
+        cap: 1_000_000,
+        initial_reward: 0,
+        halving_interval: 10,
+        fee_per_byte: 0,
+        unbonding_period: 2,
+        slash_bps: 1000,
+        faucet_amount: 0,
+        faucet_cooldown: 0,
+    };
+    teko_coin::genesis(&mut l, cfg, &[(me, 5000)], true).unwrap();
+    let run = |l: &mut Ledger, dev: &mut Dev, action: u32, amount: u64| {
+        let nonce = l.nonce_of(&me);
+        let Response::TransferSigned(s) = dev.handle(stake_req(action, amount, 0, nonce)) else {
+            panic!("not signed")
+        };
+        assert_eq!(address_of(&s.public_key), me);
+        let tx = teko_ledger::Tx {
+            chain_id: "teko-devnet".into(),
+            nonce,
+            module: COIN_MODULE,
+            payload: teko_crypto::ledger::coin_stake_payload(action as u8, amount),
+            sender: s.public_key,
+            signature: s.signature,
+            fee: 0,
+        };
+        let h = l.height() + 1;
+        l.apply_block(h, &[9; 32], &[tx])
+    };
+    hal.clear_screens();
+    run(&mut l, &mut dev, 1, 3000).unwrap();
+    let sc = hal
+        .screens()
+        .into_iter()
+        .find(|s| s.title == "TRAVAR STAKE")
+        .unwrap();
+    assert!(sc.lines.iter().any(|x| x.contains("Travar: 3000")));
+    assert_eq!(teko_coin::stake_of(&l, &me), 3000);
+    assert_eq!(teko_coin::validators(&l).len(), 1);
+    // unbond, then claim too early fails, later works
+    run(&mut l, &mut dev, 2, 1000).unwrap();
+    assert!(hal.screens().iter().any(|s| s.title == "SAIR DO STAKE"));
+    assert!(run(&mut l, &mut dev, 3, 0).is_err()); // not matured yet
+    for _ in 0..2 {
+        l.apply_block(l.height() + 1, &[9; 32], &[]).unwrap();
+    }
+    run(&mut l, &mut dev, 3, 0).unwrap();
+    assert!(hal.screens().iter().any(|s| s.title == "RESGATAR STAKE"));
+    assert_eq!(teko_coin::balance(&l, &me), 5000 - 3000 + 1000);
+    teko_coin::audit(&l).unwrap();
+}
+
+#[test]
+fn bad_stake_requests_are_refused_before_any_prompt_and_rejection_signs_nothing() {
+    let (_w, hal, mut dev) = fresh_initialized();
+    assert_eq!(
+        failure_code(&dev.handle(stake_req(1, 5, 0, 0))),
+        Some(ErrorCode::InvalidState)
+    ); // no wallet yet
+    create_wallet(&mut dev, &hal);
+    let before = hal.confirms_requested();
+    for r in [
+        stake_req(0, 5, 0, 0),
+        stake_req(9, 5, 0, 0),
+        stake_req(1, 0, 0, 0),
+        stake_req(2, 0, 0, 0),
+        stake_req(3, 5, 0, 0),
+        stake_req(1, u64::MAX, 1, 0),
+        Request::SignStake(SignStake {
+            chain_id: "x\ny".into(),
+            action: 1,
+            amount: 5,
+            fee: 0,
+            nonce: 0,
+        }),
+    ] {
+        let resp = dev.handle(r);
+        assert_eq!(
+            failure_code(&resp),
+            Some(ErrorCode::InvalidArgument),
+            "{resp:?}"
+        );
+    }
+    assert_eq!(hal.confirms_requested(), before);
+    hal.push_decision(Decision::Reject);
+    let r = dev.handle(stake_req(1, 5, 0, 0));
+    assert_eq!(failure_code(&r), Some(ErrorCode::UserRejected));
+}

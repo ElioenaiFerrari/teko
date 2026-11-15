@@ -1087,3 +1087,92 @@ fn selling_and_buying_an_asset_with_my_device_consent_in_the_devnet_world() {
     assert_eq!(devnet::owned(&econ, &me).len(), 1);
     teko_coin::audit(econ.ledger()).unwrap();
 }
+
+#[test]
+fn staking_is_signed_on_the_device_and_the_wallet_becomes_a_validator_in_the_devnet_world() {
+    use teko_assets::devnet;
+    use teko_coin::devnet::{CHAIN_ID, ECONOMY_FILE, append_allocation};
+
+    let rig = start();
+    let mut c = connect(&rig);
+    let (m, b) = firmware(&rig, 1);
+    c.install_firmware(&rig.trust, &m, &b, &mut |_, _| {})
+        .unwrap();
+    c.setup_pin().unwrap();
+    let w = c.wallet_setup().unwrap();
+    let info = c.wallet_address().unwrap();
+    let pk = teko_crypto::hex::decode(&info.public_key).unwrap();
+    let me = teko_crypto::ledger_address(&pk);
+
+    let dir = scratch_dir("e2e-stake");
+    append_allocation(&dir.join(ECONOMY_FILE), &w.address, 50_000).unwrap();
+    let (mut econ, cast) = devnet::open(&dir).unwrap();
+    let price = teko_coin::config(econ.ledger()).unwrap().fee_per_byte;
+    let fee_for = |amount: u64| {
+        price
+            * (teko_crypto::ledger::coin_stake_payload(1, amount).len() as u64
+                + pk.len() as u64
+                + 160)
+    };
+
+    // bond 20_000 (the device shows "TRAVAR STAKE")
+    let nonce = econ.nonce(&me);
+    let tx = c
+        .wallet_sign_stake(CHAIN_ID, 1, 20_000, fee_for(20_000), nonce)
+        .unwrap();
+    econ.submit(tx).unwrap();
+    assert!(rig.hal.screens().iter().any(|s| s.title == "TRAVAR STAKE"));
+    assert_eq!(teko_coin::stake_of(econ.ledger(), &me), 20_000);
+    assert_eq!(
+        teko_coin::validators(econ.ledger()),
+        vec![(pk.clone(), 20_000)]
+    );
+
+    // unbond 5_000; claiming right away is refused by the ledger
+    let nonce = econ.nonce(&me);
+    let tx = c
+        .wallet_sign_stake(CHAIN_ID, 2, 5_000, fee_for(5_000), nonce)
+        .unwrap();
+    econ.submit(tx).unwrap();
+    assert!(rig.hal.screens().iter().any(|s| s.title == "SAIR DO STAKE"));
+    let nonce = econ.nonce(&me);
+    let early = c
+        .wallet_sign_stake(CHAIN_ID, 3, 0, fee_for(0), nonce)
+        .unwrap();
+    assert!(econ.submit(early).is_err());
+
+    // time passes (other blocks of the devnet world), then the claim works
+    for i in 0..4 {
+        devnet::register(
+            &mut econ,
+            &cast,
+            &cast.counterparty_address(),
+            &format!("x-{i}"),
+        )
+        .unwrap();
+    }
+    let nonce = econ.nonce(&me);
+    let tx = c
+        .wallet_sign_stake(CHAIN_ID, 3, 0, fee_for(0), nonce)
+        .unwrap();
+    econ.submit(tx).unwrap();
+    assert!(
+        rig.hal
+            .screens()
+            .iter()
+            .any(|s| s.title == "RESGATAR STAKE")
+    );
+    assert!(teko_coin::unbonding_of(econ.ledger(), &me).is_empty());
+    assert_eq!(teko_coin::stake_of(econ.ledger(), &me), 15_000);
+
+    // the unified world also still serves plain coin queries after asset/stake traffic
+    let who = devnet::balance_of(&dir, &me).unwrap().unwrap();
+    assert!(who > 30_000);
+    teko_coin::audit(econ.ledger()).unwrap();
+
+    // the user rejects on the device: no signature
+    rig.hal.push_decision(Decision::Reject);
+    let nonce = econ.nonce(&me);
+    let r = c.wallet_sign_stake(CHAIN_ID, 1, 100, fee_for(100), nonce);
+    assert_eq!(device_code(r.unwrap_err()), ErrorCode::UserRejected);
+}

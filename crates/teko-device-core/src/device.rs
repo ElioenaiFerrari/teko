@@ -399,6 +399,9 @@ impl<H: Hal, R: Rng + CryptoRng> Device<H, R> {
             Request::CheckWalletBackup(_) => self.check_wallet_backup(),
             Request::GetAddress(_) => self.get_address(),
             Request::SignAssetConsent(m) => self.sign_asset_consent(&m),
+            Request::SignStake(m) => {
+                self.sign_stake(&m.chain_id, m.action, m.amount, m.fee, m.nonce)
+            }
             Request::SignTransfer(m) => {
                 self.sign_transfer(&m.chain_id, &m.to_address, m.amount, m.fee, m.nonce)
             }
@@ -899,6 +902,76 @@ impl<H: Hal, R: Rng + CryptoRng> Device<H, R> {
             Screen::new("ENVIAR MOEDAS", lines),
         )?;
         let payload = teko_crypto::ledger::coin_transfer_payload(&to, amount);
+        let msg = teko_crypto::ledger::tx_signing_bytes(
+            &chain,
+            nonce,
+            fee,
+            teko_crypto::ledger::MODULE_COIN,
+            &payload,
+            &sender,
+        );
+        let signature = sign_tagged(&sk, tags::LEDGER_TX, &msg);
+        Ok(Response::TransferSigned(TransferSigned {
+            signature,
+            public_key: sender,
+        }))
+    }
+
+    /// Builds, SHOWS and signs a staking action (bond / unbond / claim) of this wallet.
+    fn sign_stake(
+        &mut self,
+        chain_id: &str,
+        action: u32,
+        amount: u64,
+        fee: u64,
+        nonce: u64,
+    ) -> Result<Response, Failure> {
+        use teko_crypto::ledger::{STAKE_BOND, STAKE_CLAIM, STAKE_UNBOND, coin_stake_payload};
+        self.require_unlocked_initialized()?;
+        self.require_wallet()?;
+        let bad = |m: &str| fail(ErrorCode::InvalidArgument, m);
+        let chain = sanitize(chain_id, 48)
+            .filter(|c| !c.trim().is_empty() && c.as_str() == chain_id)
+            .ok_or_else(|| bad("rede inválida"))?;
+        let act = u8::try_from(action).map_err(|_| bad("ação inválida"))?;
+        let (title, what) = match act {
+            STAKE_BOND => ("TRAVAR STAKE", "Travar"),
+            STAKE_UNBOND => ("SAIR DO STAKE", "Iniciar saída de"),
+            STAKE_CLAIM => ("RESGATAR STAKE", "Resgatar o que já venceu"),
+            _ => return Err(bad("ação inválida")),
+        };
+        if act == STAKE_CLAIM {
+            if amount != 0 {
+                return Err(bad("resgatar não leva valor"));
+            }
+        } else if amount == 0 {
+            return Err(bad("valor deve ser positivo"));
+        }
+        amount
+            .checked_add(fee)
+            .ok_or_else(|| bad("valor + taxa excede o limite"))?;
+        let sk = self
+            .master()?
+            .signing_key(0)
+            .map_err(|_| fail(ErrorCode::Internal, "chave da carteira"))?;
+        let sender = public_key_bytes(&sk);
+        let mut lines = Vec::new();
+        if act == STAKE_CLAIM {
+            lines.push(String::from(what));
+        } else {
+            lines.push(format!("{what}: {amount}"));
+        }
+        lines.push(format!("Taxa: {fee}"));
+        lines.push(format!("Rede: {chain}"));
+        if act == STAKE_BOND {
+            lines.push(String::from("Sujeito a penalidade se"));
+            lines.push(String::from("você votar duas vezes."));
+        } else if act == STAKE_UNBOND {
+            lines.push(String::from("Espera antes do resgate;"));
+            lines.push(String::from("ainda sujeito a penalidade."));
+        }
+        self.confirm(ButtonKind::SignStake, Screen::new(title, lines))?;
+        let payload = coin_stake_payload(act, amount);
         let msg = teko_crypto::ledger::tx_signing_bytes(
             &chain,
             nonce,

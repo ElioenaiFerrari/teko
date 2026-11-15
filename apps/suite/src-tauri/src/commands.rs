@@ -89,6 +89,7 @@ fn prompt_name(kind: ButtonKind) -> &'static str {
         ButtonKind::WalletPassphrase => "wallet_passphrase",
         ButtonKind::SignTransfer => "sign_transfer",
         ButtonKind::SignAssetConsent => "sign_asset_consent",
+        ButtonKind::SignStake => "sign_stake",
         ButtonKind::Unspecified => "unknown",
     }
 }
@@ -454,7 +455,7 @@ async fn send_impl(
     to: String,
     amount: u64,
 ) -> Result<SendResult, UiError> {
-    use teko_coin::devnet::{CHAIN_ID, Economy};
+    use teko_coin::devnet::CHAIN_ID;
     let dir = resolve_dev_dir();
     with_device(app, suite.inner().clone(), move |c| {
         let v = |m: String| ClientError::Verification(m);
@@ -470,7 +471,7 @@ async fn send_impl(
         if mine == dest {
             return Err(v("o destino é a sua própria carteira".into()));
         }
-        let mut econ = Economy::open(&dir).map_err(v)?;
+        let (mut econ, _cast) = teko_assets::devnet::open(&dir).map_err(v)?;
         let nonce = econ.nonce(&mine);
         let fee = econ.estimate_fee(&pk, nonce, &dest, amount);
         let needed = amount.saturating_add(fee);
@@ -508,7 +509,7 @@ fn history_impl(address: &str) -> Vec<HistoryItem> {
     let Ok(who) = teko_crypto::parse_wallet_address(address) else {
         return Vec::new();
     };
-    let Ok(econ) = teko_coin::devnet::Economy::open(&resolve_dev_dir()) else {
+    let Ok((econ, _cast)) = teko_assets::devnet::open(&resolve_dev_dir()) else {
         return Vec::new();
     };
     econ.history(&who)
@@ -738,6 +739,141 @@ async fn trade_impl(
     .await
 }
 
+/// Staking screen data. DEVELOPMENT ONLY (local devnet economy).
+#[derive(serde::Serialize)]
+pub struct StakeView {
+    available: bool,
+    reason: Option<String>,
+    balance: u64,
+    my_stake: u64,
+    /// (release height, amount)
+    unbonding: Vec<(u64, u64)>,
+    height: u64,
+    unbonding_period: u64,
+    slash_bps: u32,
+    /// (short key, stake, is me)
+    validators: Vec<(String, u64, bool)>,
+}
+
+#[tauri::command]
+pub async fn stake_view(address: String) -> Result<StakeView, UiError> {
+    stake_view_impl(&address)
+}
+
+#[cfg(not(feature = "dev-simulation"))]
+fn stake_view_impl(_a: &str) -> Result<StakeView, UiError> {
+    Ok(StakeView {
+        available: false,
+        reason: Some(
+            "O livro de economia ainda não está na rede: o stake funcionará com ele.".into(),
+        ),
+        balance: 0,
+        my_stake: 0,
+        unbonding: Vec::new(),
+        height: 0,
+        unbonding_period: 0,
+        slash_bps: 0,
+        validators: Vec::new(),
+    })
+}
+
+#[cfg(feature = "dev-simulation")]
+fn stake_view_impl(address: &str) -> Result<StakeView, UiError> {
+    let me = teko_crypto::parse_wallet_address(address)
+        .map_err(|_| ui_err("InvalidArgument", "endereço inválido"))?;
+    let (econ, _cast) =
+        teko_assets::devnet::open(&resolve_dev_dir()).map_err(|e| ui_err("Io", e))?;
+    let l = econ.ledger();
+    let cfg = teko_coin::config(l);
+    let hex_short = |pk: &[u8]| {
+        let h = teko_crypto::hex::encode(pk);
+        format!(
+            "{}…{}",
+            &h[..8.min(h.len())],
+            &h[h.len().saturating_sub(6)..]
+        )
+    };
+    Ok(StakeView {
+        available: true,
+        reason: None,
+        balance: econ.balance(&me),
+        my_stake: teko_coin::stake_of(l, &me),
+        unbonding: teko_coin::unbonding_of(l, &me),
+        height: l.height(),
+        unbonding_period: cfg.as_ref().map_or(0, |c| c.unbonding_period),
+        slash_bps: cfg.as_ref().map_or(0, |c| c.slash_bps),
+        validators: teko_coin::validators(l)
+            .into_iter()
+            .map(|(pk, stake)| {
+                let mine = teko_ledger::address_of(&pk) == me;
+                (hex_short(&pk), stake, mine)
+            })
+            .collect(),
+    })
+}
+
+/// Bond, unbond or claim stake. The DEVICE builds, shows and signs the transaction.
+#[tauri::command]
+pub async fn stake_action(
+    app: AppHandle,
+    suite: State<'_, Suite>,
+    action: u8,
+    amount: u64,
+) -> Result<u64, UiError> {
+    stake_action_impl(app, suite, action, amount).await
+}
+
+#[cfg(not(feature = "dev-simulation"))]
+async fn stake_action_impl(
+    _app: AppHandle,
+    _suite: State<'_, Suite>,
+    _action: u8,
+    _amount: u64,
+) -> Result<u64, UiError> {
+    Err(ui_err(
+        "NotAvailable",
+        "O livro de economia ainda não está na rede: o stake funcionará com ele.",
+    ))
+}
+
+#[cfg(feature = "dev-simulation")]
+async fn stake_action_impl(
+    app: AppHandle,
+    suite: State<'_, Suite>,
+    action: u8,
+    amount: u64,
+) -> Result<u64, UiError> {
+    use teko_coin::devnet::CHAIN_ID;
+    let dir = resolve_dev_dir();
+    with_device(app, suite.inner().clone(), move |c| {
+        let v = |m: String| ClientError::Verification(m);
+        let info = c.wallet_address()?;
+        let pk = teko_crypto::hex::decode(&info.public_key)
+            .map_err(|_| v("chave pública inválida".into()))?;
+        let me = teko_crypto::ledger_address(&pk);
+        let (mut econ, _cast) = teko_assets::devnet::open(&dir).map_err(v)?;
+        let nonce = econ.nonce(&me);
+        let payload = teko_crypto::ledger::coin_stake_payload(action, amount);
+        // same fee rule as any transaction: price per byte over a generous envelope
+        let price = teko_coin::config(econ.ledger()).map_or(0, |c| c.fee_per_byte);
+        let fee = price.saturating_mul(payload.len() as u64 + pk.len() as u64 + 160);
+        let have = econ.balance(&me);
+        if action == 1 && have < amount.saturating_add(fee) {
+            return Err(v(format!(
+                "saldo insuficiente: precisa de {} (valor + taxa), tem {have}",
+                amount.saturating_add(fee)
+            )));
+        }
+        if action != 1 && have < fee {
+            return Err(v(format!("saldo insuficiente para a taxa ({fee})")));
+        }
+        let tx = c.wallet_sign_stake(CHAIN_ID, action, amount, fee, nonce)?;
+        econ.submit(tx).map_err(v)?;
+        Ok(econ.balance(&me))
+    })
+    .await
+}
+
 /// What the wallet screen shows as balance.
 #[derive(serde::Serialize)]
 pub struct BalanceInfo {
@@ -757,8 +893,9 @@ pub async fn wallet_balance(address: String) -> Result<BalanceInfo, UiError> {
 
 #[cfg(feature = "dev-simulation")]
 fn balance_impl(address: &str) -> BalanceInfo {
-    let path = resolve_dev_dir().join(teko_coin::devnet::ECONOMY_FILE);
-    match teko_coin::devnet::balance_of(&path, address) {
+    let who =
+        teko_crypto::parse_wallet_address(address).map_err(|_| "endereço inválido".to_string());
+    match who.and_then(|w| teko_assets::devnet::balance_of(&resolve_dev_dir(), &w)) {
         Ok(Some(amount)) => BalanceInfo {
             available: true,
             amount,

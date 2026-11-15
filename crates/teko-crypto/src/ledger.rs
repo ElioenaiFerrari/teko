@@ -41,6 +41,21 @@ pub fn coin_transfer_payload(to: &[u8; 32], amount: u64) -> Vec<u8> {
     p
 }
 
+/// Coin staking actions (values match the coin module op codes).
+pub const STAKE_BOND: u8 = 1;
+pub const STAKE_UNBOND: u8 = 2;
+pub const STAKE_CLAIM: u8 = 3;
+
+/// Payload of a coin `Stake` / `Unstake` / `Claim` operation (`Claim` carries no amount).
+pub fn coin_stake_payload(action: u8, amount: u64) -> Vec<u8> {
+    let mut p = Vec::with_capacity(9);
+    p.push(action);
+    if action != STAKE_CLAIM {
+        p.extend_from_slice(&amount.to_be_bytes());
+    }
+    p
+}
+
 /// Intent kinds that a wallet owner or buyer signs (values match `teko-assets`).
 pub const INTENT_TRANSFER: u8 = 2;
 pub const INTENT_SWAP: u8 = 3;

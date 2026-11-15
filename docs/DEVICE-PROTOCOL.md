@@ -64,6 +64,7 @@ Legenda — **Confirma?**: exige confirmação física no dispositivo. Todas as 
 | `CheckWalletBackup` → `ButtonRequest(WalletCheck)` → `WalletBackupOk` ou `Failure` | Desbloqueado, com carteira | **Sim** (redigitar a frase) | "Verificar backup"; só diz se confere |
 | `SignTransfer{chain_id, to_address, amount, fee, nonce}` → `ButtonRequest(SignTransfer)` → `TransferSigned{signature, public_key}` | Desbloqueado, com carteira | **Sim** | "ENVIAR MOEDAS": destino, valor, taxa, total e rede (o dispositivo monta a transação e assina o que mostrou) |
 | `SignAssetConsent{chain_id, kind, class, asset, from_address, to_address, price, version}` → `ButtonRequest(SignAssetConsent)` → `AssetConsentSigned{signature, public_key}` | Desbloqueado, com carteira; a carteira precisa ser o vendedor ou o comprador | **Sim** | "VENDA DE BEM"/"TRANSFERIR BEM": papel, bem, partes, preço, versão e rede |
+| `SignStake{chain_id, action, amount, fee, nonce}` → `ButtonRequest(SignStake)` → `TransferSigned{signature, public_key}` | Desbloqueado, com carteira | **Sim** | "TRAVAR STAKE"/"SAIR DO STAKE"/"RESGATAR STAKE": ação, valor, taxa, rede e aviso de penalidade |
 | `GetAddress` → `Address{address, public_key}` | Desbloqueado, com carteira | Não (dados públicos) | — |
 | `Wipe` → `ButtonRequest` → `WipeDone` | todos exceto Virgem | **Sim** (pressionar e segurar) | "APAGAR TUDO? Irreversível." |
 
@@ -134,7 +135,7 @@ Mensagens de erro **nunca** incluem material secreto nem diferenciam causas de f
 | SignBallot (stub) | ✖ | ✖ | ✖ | ✖ | ✖ | ✔(c) |
 | SetupWallet / RestoreWallet | ✖ | ✖ | ✖ | ✖ | ✖ | ✔(c)\* |
 | CheckWalletBackup / GetAddress | ✖ | ✖ | ✖ | ✖ | ✖ | ✔ (c) |
-| SignTransfer / SignAssetConsent | ✖ | ✖ | ✖ | ✖ | ✖ | ✔(c)\*\* |
+| SignTransfer / SignAssetConsent / SignStake | ✖ | ✖ | ✖ | ✖ | ✖ | ✔(c)\*\* |
 
 \*\* Exige carteira pronta (`Features.wallet_ready`).
 

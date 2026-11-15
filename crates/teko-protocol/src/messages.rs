@@ -52,6 +52,8 @@ pub enum ButtonKind {
     SignTransfer = 21,
     /// "Consent to sell/buy asset X?" prompt.
     SignAssetConsent = 22,
+    /// "Bond / unbond / claim stake?" prompt.
+    SignStake = 23,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, prost::Enumeration)]
@@ -150,6 +152,22 @@ pub struct RestoreWallet {}
 pub struct CheckWalletBackup {}
 #[derive(Clone, PartialEq, prost::Message)]
 pub struct GetAddress {}
+/// Asks the device to sign a staking action of this wallet (become/stop being a
+/// validator). The device builds the transaction, shows it and signs after the button.
+#[derive(Clone, PartialEq, prost::Message)]
+pub struct SignStake {
+    #[prost(string, tag = "1")]
+    pub chain_id: String,
+    /// 1 = bond (lock coins), 2 = unbond (start the waiting period), 3 = claim matured coins.
+    #[prost(uint32, tag = "2")]
+    pub action: u32,
+    #[prost(uint64, tag = "3")]
+    pub amount: u64,
+    #[prost(uint64, tag = "4")]
+    pub fee: u64,
+    #[prost(uint64, tag = "5")]
+    pub nonce: u64,
+}
 /// Asks the device to sign the CONSENT of one party (seller or buyer) to move an asset.
 /// The device shows the asset, parties, price and version and signs only after the
 /// physical confirmation; it refuses if the wallet is neither the seller nor the buyer.
@@ -598,6 +616,7 @@ define_messages! {
         GetAddress(GetAddress) = 0x001C,
         SignTransfer(SignTransfer) = 0x001D,
         SignAssetConsent(SignAssetConsent) = 0x001E,
+        SignStake(SignStake) = 0x001F,
     }
 }
 

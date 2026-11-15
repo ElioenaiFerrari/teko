@@ -28,7 +28,7 @@ pub fn devnet_config() -> CoinConfig {
         initial_reward: 0,
         halving_interval: 1_000_000,
         fee_per_byte: 1,
-        unbonding_period: 100,
+        unbonding_period: 3,
         slash_bps: 1000,
         faucet_amount: 0,
         faucet_cooldown: 0,

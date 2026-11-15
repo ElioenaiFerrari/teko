@@ -33,3 +33,4 @@ Regra: decisões de produto/segurança só passam a `Aceito` pela aprovação do
 | [0024](0024-assinar-transferencias-no-dispositivo.md) | Assinar transferências de moeda no dispositivo (`SignTransfer`) | Aceito provisoriamente (M5b) | confirmar |
 | [0025](0025-consentimentos-de-bens-no-dispositivo.md) | Consentimentos de bens assinados no dispositivo (`SignAssetConsent`) | Aceito provisoriamente (M5c) | confirmar |
 | [0026](0026-bens-na-suite-com-orgao-e-contraparte-simulados.md) | Bens na Suite com órgão e contraparte simulados (só desenvolvimento) | Aceito provisoriamente | confirmar |
+| [0027](0027-stake-assinado-no-dispositivo.md) | Stake assinado no dispositivo e tela Validadores | Aceito provisoriamente | confirmar (início da rede: ADR-0021) |

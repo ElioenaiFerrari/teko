@@ -168,6 +168,7 @@
 
   const NAV = [
     { id: 'onboarding', label: 'Configurar dispositivo', icon: 'usb', need: 'onboarding' },
+    { id: 'home', label: 'Início', icon: 'chart', need: 'ready' },
     { id: 'identity', label: 'Minha identidade', icon: 'id', need: 'ready' },
     { id: 'wallet', label: 'Carteira', icon: 'wallet', need: 'ready' },
     { id: 'assets', label: 'Bens', icon: 'home', need: 'ready' },
@@ -191,7 +192,7 @@
       case 'none': return 'explorer';
       case 'locked': return 'unlock';
       case 'onboarding': return 'onboarding';
-      default: return 'identity';
+      default: return 'home';
     }
   }
 
@@ -386,7 +387,7 @@
 
   function renderMain() {
     const m = $('#main');
-    const views = { results: vResults, explorer: vExplorer, onboarding: vOnboarding, unlock: vUnlock, identity: vIdentity, wallet: vWallet, assets: vAssets, stake: vStake, sign: vSign, prove: vProve, vote: vVote };
+    const views = { home: vHome, results: vResults, explorer: vExplorer, onboarding: vOnboarding, unlock: vUnlock, identity: vIdentity, wallet: vWallet, assets: vAssets, stake: vStake, sign: vSign, prove: vProve, vote: vVote };
     m.innerHTML = `<div class="view">${(views[S.route] || vExplorer)()}</div>`;
     afterRender();
   }
@@ -1145,6 +1146,7 @@
       if (id === 'explorer') { S.explorerTried = false; S.inclusion = null; }
       if (id === 'results') { S.resultsShape = null; setTimeout(pollResults, 0); }
       if (id === 'identity') S.idTried = false;
+      if (id === 'home') { S.homeTried = false; S.home = null; }
       if (id === 'stake') { S.stakeTried = false; S.stake = null; }
       if (id === 'assets') { S.assetsTried = false; S.assets = null; }
       if (id === 'wallet') { S.walletTried = false; S.walletAddr = null; S.balance = null; S.history = null; }
@@ -1241,7 +1243,7 @@
     },
     lastack(b) { S.lastAck = b.checked; S.lastKey = ''; render(); },
     dismisswipe() { S.wiped = false; S.lastKey = ''; render(); },
-    gohome() { S.route = 'identity'; S.userPicked = true; S.lastKey = ''; loadId(); render(); },
+    gohome() { S.route = 'home'; S.userPicked = true; S.homeTried = false; S.home = null; S.lastKey = ''; render(); },
     async unlock() {
       S.lockMsg = null; S.lastAck = false;
       await guarded(async () => {
@@ -1366,6 +1368,71 @@
     S.lastKey = ''; render();
   }
 
+  // Resumo: junta o que as outras telas mostram (cada parte falha sozinha, sem derrubar o resto).
+  async function loadHome() {
+    if (S.homeTried || phase() !== 'ready') return;
+    S.homeTried = true;
+    const h = { civic: null, addr: null, balance: null, assets: null, stake: null, election: null };
+    S.home = h;
+    S.lastKey = ''; render();
+    const safe = async (f) => { try { return await f(); } catch { return null; } };
+    h.civic = await safe(() => call('civic_id', {}, { delay: 5000 }));
+    h.addr = await safe(() => call('wallet_address', {}, { delay: 5000 }));
+    S.lastKey = ''; render();
+    if (h.addr) {
+      const a = h.addr.address;
+      [h.balance, h.assets, h.stake] = await Promise.all([
+        safe(() => invoke('wallet_balance', { address: a })),
+        safe(() => invoke('assets_view', { address: a })),
+        safe(() => invoke('stake_view', { address: a })),
+      ]);
+    }
+    h.election = await safe(() => call('election_get', {}, { delay: 5000 }));
+    h.done = true;
+    S.lastKey = ''; render();
+  }
+
+  function vHome() {
+    const h = S.home || {};
+    const wait = `<div class="row">${ico('spin', 'spin')}<span>Lendo…</span></div>`;
+    const go = (id, label) => `<button class="btn btn--ghost btn--sm" data-act="nav" data-id="${id}">${esc(label)}</button>`;
+    const short = (t) => (t && t.length > 22 ? `${t.slice(0, 12)}…${t.slice(-6)}` : t || '');
+    const open = h.election ? h.election.contests.filter((c) => c.phase === 'voting_open' && c.eligible) : [];
+    const pending = open.filter((c) => !c.voted);
+    const kpi = (label, val, sub) => `<div class="kpi"><div class="kpi__label">${esc(label)}</div><div class="kpi__val">${val}</div><div class="kpi__sub">${sub}</div></div>`;
+    const bal = h.balance && h.balance.available ? esc(String(h.balance.amount)) : '—';
+    const assets = h.assets && h.assets.available ? esc(String(h.assets.mine.length)) : '—';
+    const stk = h.stake && h.stake.available ? esc(String(h.stake.my_stake)) : '—';
+    const testNote = h.balance && h.balance.available ? 'moedas de teste' : 'indisponível aqui';
+    return `${head('Início', 'Tudo em um só lugar', 'Um resumo do que importa. Cada ação sensível continua sendo confirmada no dispositivo.')}
+      <div class="kpis">
+        ${kpi('Saldo', bal, testNote)}
+        ${kpi('Bens', assets, 'em seu nome')}
+        ${kpi('Stake', stk, 'travado como validador')}
+        ${kpi('Votos pendentes', h.election ? esc(String(pending.length)) : '—', h.election ? `${open.length} pleito(s) aberto(s) para você` : 'nenhuma eleição carregada')}
+      </div>
+      ${pending.length ? callout('info', 'ballot', `Você ainda não votou em ${pending.length} pleito(s)`, `<p>${esc(pending.slice(0, 3).map((c) => c.title).join(' · '))}${pending.length > 3 ? '…' : ''}</p><div class="row" style="margin-top:8px">${go('vote', 'Ir votar')}</div>`) : ''}
+      <article class="card">
+        <div class="card__head"><div class="card__ico">${ico('id')}</div><h2>Identidade</h2></div>
+        ${h.civic ? `<div class="screen"><div class="screen__label">ID Cívico</div><div class="id-big" style="font-size:.9rem">${esc(h.civic.id)}</div></div>` : wait}
+        <div class="row">${go('identity', 'Minha identidade')}${go('sign', 'Assinar documento')}${go('prove', 'Provar atributo')}</div>
+      </article>
+      <article class="card">
+        <div class="card__head"><div class="card__ico card__ico--boto">${ico('wallet')}</div><h2>Carteira</h2></div>
+        ${h.addr ? `<p class="muted">Endereço: <code>${esc(short(h.addr.address))}</code></p>` : wait}
+        <div class="row">${go('wallet', 'Carteira')}${go('assets', 'Bens')}${go('stake', 'Validadores')}</div>
+      </article>
+      <article class="card">
+        <div class="card__head"><div class="card__ico card__ico--arara">${ico('shield')}</div><h2>Segurança</h2></div>
+        <ul class="muted" style="margin:0;padding-left:18px;display:grid;gap:6px">
+          <li>Chaves e PIN ficam <strong>só no dispositivo</strong>; este computador não os vê.</li>
+          <li>Guarde a <strong>frase de 24 palavras</strong> em papel. Confira o backup na tela Carteira quando quiser.</li>
+          <li>Confirme <strong>endereço, valor e taxa na tela do dispositivo</strong> antes de aprovar um envio.</li>
+        </ul>
+        <div class="row">${go('wallet', 'Verificar meu backup')}</div>
+      </article>`;
+  }
+
   async function loadStake() {
     if (S.stakeTried || phase() !== 'ready') return;
     S.stakeTried = true;
@@ -1485,6 +1552,7 @@
     // Entrada nas telas que precisam de dados do dispositivo.
     if (S.route === 'onboarding' && onboardStep() === 'auth' && !S.genuine && !S.authRunning && !S.busy) act.auth();
     if (S.route === 'onboarding' && onboardStep() === 'firmware') loadFirmware();
+    if (S.route === 'home') loadHome();
     if (S.route === 'identity') loadId();
     if (S.route === 'wallet') loadWallet();
     if (S.route === 'assets') loadAssets();

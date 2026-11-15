@@ -20,6 +20,9 @@ Interface, comandos Tauri, `teko-client`, dispositivo, quadro e rede.
 3. Sem emulador ligado a Suite abre no Explorador público.
 4. Pré-visualização só visual: `make preview` (usa backend falso fora do pacote).
 
+## Tela Início
+É a tela de abertura depois de desbloquear. Reúne, sem repetir lógica das outras telas: **saldo**, **bens**, **stake**, **votos pendentes** (pleitos abertos em que você pode votar e ainda não votou), o **ID Cívico**, o **endereço da carteira** e lembretes de segurança, com atalhos para cada área. Cada bloco carrega sozinho: se um falhar (por exemplo, não há livro de economia na rede), os outros continuam. Não tem nenhuma ação sensível própria.
+
 ## Tela Bens (ambiente de teste)
 
 ![Bens na Suite: a tela chama o comando de negócio, o seu dispositivo mostra e assina o consentimento, o órgão e a contraparte simulados assinam e o livro local executa a troca atômica](../diagramas/bens-suite.png)

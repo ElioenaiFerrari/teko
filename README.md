@@ -6,13 +6,13 @@
 
 ## Arquitetura em uma imagem
 
-![Arquitetura do Teko: dispositivo, Suite, emissor, órgãos eleitorais, validadores, verificador independente e os livros de votos e de economia](docs/diagramas/arquitetura-macro.png)
+![Arquitetura do Teko: dispositivo, Suite, emissor, órgãos eleitorais, validadores, verificador independente e os livros de votos e de economia](docs/diagrams/architecture-overview.png)
 
-O computador (Suite) **nunca** vê chaves nem PIN. O dispositivo cifra e assina a cédula; a Suite só a repassa; os validadores conferem provas e gravam em blocos assinados M-de-N; qualquer um pode refazer a verificação. Fontes: [SVG](docs/diagramas/arquitetura-macro.svg) · [HTML](docs/diagramas/arquitetura-macro.html).
+O computador (Suite) **nunca** vê chaves nem PIN. O dispositivo cifra e assina a cédula; a Suite só a repassa; os validadores conferem provas e gravam em blocos assinados M-de-N; qualquer um pode refazer a verificação.
 
 ## Mapa de crates
 
-![Camadas dos crates, da fundação até os binários e apps](docs/diagramas/camadas-crates.png)
+![Camadas dos crates, da fundação até os binários e apps](docs/diagrams/crate-layers.png)
 
 | Crate | Papel |
 |---|---|
@@ -24,6 +24,8 @@ O computador (Suite) **nunca** vê chaves nem PIN. O dispositivo cifra e assina 
 | `teko-election` | manifesto da eleição, ciclo de vida dos pleitos, apuração |
 | `teko-registration` | registro anônimo por assinatura cega (RFC 9474) |
 | `teko-ballot-crypto` | ElGamal de limiar P-256, provas 0/1 e soma, DKG de Feldman |
+| `teko-explorer` | índice do explorador: reexecuta e verifica a cadeia de economia e responde blocos, transações, contas, validadores, bens e busca (sem I/O) |
+| `explorer-server` | explorador da chain: página web local + API JSON somente leitura sobre uma cadeia verificada (`make explorer`) |
 | `teko-economy` | economia sobre consenso BFT: blocos com certificado de commit, conjunto de validadores por stake com fase de fundador, verificação por clientes |
 | `teko-bulletin` | quadro de avisos: log Merkle append-only, provas e head assinado |
 | `teko-chain` | blocos M-de-N, perfis devnet/testnet (mainnet travada), réplica verificada |
@@ -73,9 +75,9 @@ Demo sem teclado (**nunca** em produção): `cargo run -p device-emulator --feat
 - **Fora de escopo**: hardware real, validade jurídica (ICP-Brasil), prova ZK de elegibilidade, explorador público (só placeholder).
 
 ## Documentação
-Comece por [docs/README.md](docs/README.md): um fluxo curto por assunto, todos em pt-BR e com diagramas ([visão geral](docs/fluxos/00-visao-geral.md), [assinatura](docs/fluxos/02-assinatura.md), [votação](docs/fluxos/05-votacao-cifrada.md), [blocos](docs/fluxos/09-blocos-e-validacao.md), [BFT](docs/fluxos/11-consenso-bft.md)...). Referência: [ARCHITECTURE](docs/ARCHITECTURE.md), [THREAT-MODEL](docs/THREAT-MODEL.md), [TEST-MATRIX](docs/TEST-MATRIX.md), [ADRs](docs/adr/README.md). Contexto para o assistente: [CLAUDE.md](CLAUDE.md).
+**Quer entender os conceitos** (hash, assinatura, HRP, consenso BFT, DKG, halving, M-de-N…)? Leia o [guia de conceitos](docs/concepts/README.md), com diagramas e código Rust. Comece por [docs/README.md](docs/README.md): um fluxo curto por assunto, todos em pt-BR e com diagramas ([visão geral](docs/flows/00-overview.md), [assinatura](docs/flows/02-signing.md), [votação](docs/flows/05-encrypted-voting.md), [blocos](docs/flows/09-blocks-and-validation.md), [BFT](docs/flows/11-bft-consensus.md)...). Referência: [ARCHITECTURE](docs/ARCHITECTURE.md), [THREAT-MODEL](docs/THREAT-MODEL.md), [TEST-MATRIX](docs/TEST-MATRIX.md), [ADRs](docs/adr/README.md). Contexto para o assistente: [CLAUDE.md](CLAUDE.md).
 
 ## Qualidade e documentação viva
-`make check` roda formato, clippy (`-D warnings`), testes e `make docs-check`. Também: `make verify-fw`, `make release-check` (o build normal não tem botões automáticos nem `dev-simulation`) e `make repro` (build reproduzível, [RELEASE](docs/RELEASE.md)). Os diagramas vêm de `scripts/diagramas/` (`make diagramas`; tema em [TEMA](docs/diagramas/TEMA.md)). **Regra:** mudou comportamento, comando, crate ou fluxo? Atualize este README e o fluxo correspondente no mesmo trabalho.
+`make check` roda formato, clippy (`-D warnings`), testes e `make docs-check`. Também: `make verify-fw`, `make release-check` (o build normal não tem botões automáticos nem `dev-simulation`) e `make repro` (build reproduzível, [RELEASE](docs/RELEASE.md)). Os diagramas vêm de `scripts/diagrams/` (`make diagrams`; tema em [TEMA](docs/diagrams/THEME.md)). **Regra:** mudou comportamento, comando, crate ou fluxo? Atualize este README e o fluxo correspondente no mesmo trabalho.
 
 > Chaves e PINs aqui são **de teste**. O emulador não tem isolamento de hardware (ver [THREAT-MODEL](docs/THREAT-MODEL.md)).

@@ -1,6 +1,6 @@
 # Teko — atalhos. Rode `make` (ou `make help`) para ver tudo.
 .DEFAULT_GOAL := help
-.PHONY: help setup emulator suite reset demo issuer-help preview fmt lint test check build clean-dev verify-fw release-check repro fund docs-check diagramas coin-demo assets-demo devnet close devnet-dkg devnet-economy devnet-founder devnet-stop devnet-status devnet-reset devnet-blocks testnet-help election publish simulate simulate-live tally reset-board
+.PHONY: help setup emulator suite reset demo issuer-help preview fmt lint test check build clean-dev verify-fw release-check repro fund docs-check diagrams coin-demo assets-demo devnet close devnet-dkg devnet-economy explorer devnet-founder devnet-stop devnet-status devnet-reset devnet-blocks testnet-help election publish simulate simulate-live tally reset-board
 
 CARGO ?= cargo
 PIN   ?= 482913
@@ -44,6 +44,9 @@ devnet-stop: ## Para os 3 validadores (os blocos ficam em dev/net/node-*/blocks.
 devnet-founder: ## Define a carteira do fundador (recebe as recompensas) e zera a economia. Uso: make devnet-founder FOUNDER=tekow1…
 	@test -n "$(FOUNDER)" || { echo 'Uso: make devnet-founder FOUNDER=tekow1… (endereço da aba Carteira da Suite)'; exit 1; }
 	@$(NODE) stop --dir $(NET) >/dev/null 2>&1; $(NODE) founder --dir $(NET) --address $(FOUNDER)
+
+explorer: ## Explorador da chain (web + API JSON somente leitura) em http://127.0.0.1:8545; precisa da rede: make devnet
+	$(CARGO) run -q -p explorer-server -- --dir $(NET)
 
 devnet-economy: ## Economia BFT: altura, fase de fundador, validadores e verificação da cadeia
 	@$(NODE) economy --dir $(NET)
@@ -123,8 +126,8 @@ coin-demo: ## Demonstração da moeda (teto, halving, taxa, stake, slash) rodand
 assets-demo: ## Demonstração dos bens (registro com quórum do órgão, gravame, venda contra pagamento atômica)
 	$(CARGO) run -q -p teko-assets --example demo
 
-diagramas: ## Regenera os diagramas (docs/diagramas/*.svg|html|png) a partir de scripts/diagramas (precisa do Brave)
-	python3 scripts/diagramas/gerar.py
+diagrams: ## Regenera os diagrams (docs/diagrams/*.png) a partir de scripts/diagrams (precisa do Brave)
+	python3 scripts/diagrams/generate.py
 
 verify-fw: ## Verifica firmware v1 e v2 de forma independente da Suite (M-de-N, hash, downgrade)
 	$(CARGO) run -q -p issuer-cli -- verify-firmware --manifest dev/firmware-v1.manifest --blob dev/firmware-v1.blob

@@ -1,0 +1,34 @@
+[package]
+name = "explorer-server"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+description = "Teko chain explorer: local web UI + read-only JSON API over a verified chain (ADR-0031)"
+
+[lib]
+name = "explorer_server"
+path = "src/lib.rs"
+
+[[bin]]
+name = "teko-explorer"
+path = "src/main.rs"
+
+[dependencies]
+teko-explorer.workspace = true
+teko-chain.workspace = true
+teko-node.workspace = true
+teko-economy.workspace = true
+teko-crypto.workspace = true
+teko-coin.workspace = true
+serde.workspace = true
+serde_json = "1"
+tiny_http = "0.12"
+
+[dev-dependencies]
+teko-ledger.workspace = true
+rand.workspace = true
+p256.workspace = true
+
+[lints]
+workspace = true

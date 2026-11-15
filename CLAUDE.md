@@ -24,6 +24,8 @@ crates/teko-assets/        (Fase 2, M4) bens: classes com órgão M-de-N, dono+c
 crates/teko-wallet/        (Fase 2, M5a) carteira: BIP-39 24 palavras (só na tela do dispositivo), SLIP-10 P-256, endereço tekow1…; independente da identidade (ADR-0023)
 crates/teko-economy/       (Fase 2, M6a) economia sobre BFT: blocos com certificado, validadores por stake, fase de fundador (ADR-0028)
 crates/teko-chain/         (Fase 2) rede federada PoA: perfis devnet/testnet (mainnet TRAVADA), blocos M-de-N, réplica verificada
+crates/teko-explorer/      (Fase 2) índice verificado da cadeia de economia: blocos, txs, contas, validadores, busca (ADR-0031)
+tools/explorer-server/     (Fase 2) explorador: web local + API JSON somente leitura (`make explorer`)
 tools/teko-node/           (Fase 2) validador (gossip, rodízio, troca de turno) + cliente que não confia em nós
 crates/teko-bulletin/      (Fase 2) log Merkle append-only, provas, head assinado, leitor tolerante
 tools/election-admin-cli/  (Fase 2) publicar no quadro, simular votos (rotulados), apurar
@@ -57,9 +59,9 @@ Cada etapa só começa com a anterior com testes passando. Ao fim de cada etapa,
 
 ## Documentação viva (regra permanente)
 
-- Toda mudança de **comportamento, comando `make`, crate, protocolo ou fluxo** atualiza, **no mesmo trabalho**, o `README.md` (estado atual, mapa de crates, início rápido) e o fluxo correspondente em `docs/fluxos/` (texto **e** diagrama). Quando couber, também `TEST-MATRIX`, `THREAT-MODEL` e ADR.
-- Tudo em **pt-BR** (código e identificadores em inglês). Fluxos seguem o molde: resumo; quem participa; diagramas; passo a passo; o que é verificado e por quem; o que pode dar errado; onde está no código; testes que cobrem; limites honestos. Funcionalidade só planejada leva o aviso "planejado".
-- **Diagramas sempre pela skill `diagram-design`**, no tema Teko (`docs/diagramas/TEMA.md`): edite o gerador em `scripts/diagramas/` e rode `make diagramas` (gera PNG + SVG + HTML). Não edite os arquivos gerados à mão. Embuta o PNG no markdown com texto alternativo em pt-BR e link para SVG/HTML.
+- Toda mudança de **comportamento, comando `make`, crate, protocolo ou fluxo** atualiza, **no mesmo trabalho**, o `README.md` (estado atual, mapa de crates, início rápido) e o fluxo correspondente em `docs/flows/` (texto **e** diagrama). Quando couber, também `TEST-MATRIX`, `THREAT-MODEL` e ADR.
+- Tudo em **pt-BR** (código e identificadores em inglês). **Nomes de pastas e de arquivos sempre em inglês** (`docs/flows`, `docs/diagrams`, `docs/concepts`, `scripts/diagrams`); em pt-BR fica **só o conteúdo** dos documentos. Fluxos seguem o molde: resumo; quem participa; diagramas; passo a passo; o que é verificado e por quem; o que pode dar errado; onde está no código; testes que cobrem; limites honestos. Funcionalidade só planejada leva o aviso "planejado".
+- **Diagramas sempre pela skill `diagram-design`**, no tema Teko (`docs/diagrams/THEME.md`): edite o gerador em `scripts/diagrams/` e rode `make diagrams` (gera só o PNG; SVG/HTML não são guardados). Não edite os arquivos gerados à mão. Embuta o PNG no markdown com texto alternativo em pt-BR.
 - `make docs-check` (links, imagens, texto alternativo, crates no README, títulos em pt-BR) faz parte de `make check` e do CI.
 
 ## Fluxo de trabalho
@@ -80,8 +82,9 @@ cargo run -p device-emulator           # terminal 1: tela e botões do dispositi
 cargo run -p teko-suite                # terminal 2: a Suite (Tauri v2)
 make docs-check                        # confere links, imagens e crates no README
 make fund ADDR=tekow1… AMOUNT=1000    # TEKO de TESTE na carteira (devnet local; decimais ok; 1 TEKO = 1.000.000 ypy, ADR-0029)
-make diagramas                         # regenera os diagramas (docs/diagramas)
+make diagrams                         # regenera os diagramas (docs/diagrams)
 make devnet FOUNDER=tekow1…            # (1ª vez) FOUNDER = sua carteira: recebe as recompensas do fundador (ADR-0028)
+make explorer                          # explorador da chain em http://127.0.0.1:8545 (precisa de make devnet)
 make devnet-economy                    # economia BFT: altura, fase de fundador, validadores
 make devnet                            # blockchain de TESTE local: 3 validadores PoA (docs/NETWORKS.md)
 make                                   # lista todos os atalhos (check, repro, release-check, verify-fw...)
@@ -92,7 +95,7 @@ make                                   # lista todos os atalhos (check, repro, r
 
 - [README](README.md) · [Índice da documentação e fluxos](docs/README.md)
 
-- [ARCHITECTURE](docs/ARCHITECTURE.md) · [THREAT-MODEL](docs/THREAT-MODEL.md) · [KEY-HIERARCHY](docs/KEY-HIERARCHY.md)
+- [Guia de conceitos](docs/concepts/README.md) (hash, assinatura, HRP, BFT, DKG, halving, M-de-N… com Rust) · [ARCHITECTURE](docs/ARCHITECTURE.md) · [THREAT-MODEL](docs/THREAT-MODEL.md) · [KEY-HIERARCHY](docs/KEY-HIERARCHY.md)
 - [DEVICE-PROTOCOL](docs/DEVICE-PROTOCOL.md) · [ONBOARDING-FLOW](docs/ONBOARDING-FLOW.md) · [GLOSSARY](docs/GLOSSARY.md)
 - [TEST-MATRIX](docs/TEST-MATRIX.md) (invariante → teste) · [RELEASE](docs/RELEASE.md) (build reproduzível, verificação de firmware/release)
 - [ADRs](docs/adr/README.md)

@@ -29,11 +29,9 @@ done > /tmp/docs-check-alt.$$
 while read -r l; do falha "imagem sem texto alternativo: ${l#ALT }"; done < <(cat /tmp/docs-check-alt.$$)
 rm -f /tmp/docs-check-alt.$$
 
-# 3) cada PNG tem SVG e HTML irmãos
-for p in docs/diagramas/*.png; do
-  b="${p%.png}"
-  [ -e "$b.svg" ] || falha "falta $b.svg"
-  [ -e "$b.html" ] || falha "falta $b.html"
+# 3) só PNG: SVG/HTML de diagramas não são guardados (o gerador os usa só como intermediário)
+for p in docs/diagrams/*.svg docs/diagrams/*.html; do
+  [ -e "$p" ] && falha "diagrama gerado não deve ser versionado: $p (guarde só o .png)"
 done
 
 # 4) todo crate do workspace aparece no README
@@ -43,7 +41,7 @@ for t in crates/*/Cargo.toml tools/*/Cargo.toml apps/suite/src-tauri/Cargo.toml;
 done
 
 # 5) fluxos: molde obrigatório e títulos em português
-for f in docs/fluxos/[0-9]*.md; do
+for f in docs/flows/[0-9]*.md; do
   for sec in "## Resumo" "## Passo a passo" "## Onde está no código" "## Limites honestos"; do
     grep -q "^$sec" "$f" || falha "$f sem a seção '$sec'"
   done

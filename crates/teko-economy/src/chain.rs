@@ -1,7 +1,7 @@
 use prost::Message;
 use teko_bft::{Commit, Validator, ValidatorSet, block_id};
 use teko_crypto::{tagged_hash, tags};
-use teko_ledger::{Address, Ledger, Tx};
+use teko_ledger::{Address, BlockOutcome, Ledger, Tx};
 
 use crate::genesis::EconomyGenesis;
 
@@ -229,6 +229,12 @@ impl EconomyChain {
     /// Accepts a FINAL block: the certificate must be valid for the validator set of
     /// this height, name the right proposer, and the block must execute to its root.
     pub fn apply_decided(&mut self, d: DecidedBlock) -> Result<(), EconError> {
+        self.apply_decided_outcome(d).map(|_| ())
+    }
+
+    /// Like `apply_decided`, returning what the block did (receipts and events), for
+    /// indexers such as the explorer.
+    pub fn apply_decided_outcome(&mut self, d: DecidedBlock) -> Result<BlockOutcome, EconError> {
         let block = d.block()?;
         let commit = d.commit.as_ref().ok_or(EconError::Commit)?;
         let set = self.validator_set()?;
@@ -257,7 +263,7 @@ impl EconomyChain {
         }
         self.tip = block_id(&d.payload);
         self.blocks.push(d);
-        Ok(())
+        Ok(out)
     }
 
     /// Owner address of a consensus key (where its rewards go).

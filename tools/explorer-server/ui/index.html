@@ -1,0 +1,34 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light dark">
+  <title>Teko Explorer</title>
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <div class="flagstripe" aria-hidden="true"></div>
+  <header class="top">
+    <a class="brand" href="#/"><span class="brand__name">Teko</span> <span class="brand__tag">explorer</span></a>
+    <nav class="nav" aria-label="Navegação">
+      <a href="#/">Início</a>
+      <a href="#/blocks">Blocos</a>
+      <a href="#/txs">Transações</a>
+      <a href="#/validators">Validadores</a>
+      <a href="#/assets">Bens</a>
+      <a href="#/events">Eventos</a>
+      <a href="#/votes">Votos</a>
+    </nav>
+    <form class="search" id="search" role="search">
+      <label class="sr" for="q">Buscar</label>
+      <input id="q" class="input" type="search" autocomplete="off" placeholder="altura, hash, tekow1… ou chave do validador">
+      <button class="btn" type="submit">Buscar</button>
+    </form>
+  </header>
+  <div id="badge" class="badge" role="status" aria-live="polite"></div>
+  <main id="main" class="main" aria-live="polite">Carregando…</main>
+  <footer class="foot">Teko Explorer · protótipo de estudo · somente leitura · valores em TEKO (1 TEKO = 1.000.000 ypy)</footer>
+  <script src="app.js"></script>
+</body>
+</html>

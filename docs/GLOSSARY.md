@@ -1,5 +1,7 @@
 # Glossário
 
+Consulta rápida. Para **entender** cada conceito, com diagrama e código Rust, veja o [guia de conceitos](concepts/README.md).
+
 | Termo | Definição |
 |---|---|
 | **Teko** | Nome do projeto (guarani: "modo de ser", identidade). |
@@ -30,3 +32,42 @@
 | **ADR** | Architecture Decision Record, em `docs/adr/`. |
 | **TEKO** | A moeda. 1 TEKO = 1.000.000 ypy; mostrada em pt-BR com até 6 casas (`1.234,5 TEKO`). ADR-0029. |
 | **ypy** | Menor unidade da moeda (tupi: começo, origem). O livro guarda inteiros em ypy; 1 ypy = 0,000001 TEKO. |
+## Conceitos explicados no guia
+
+| Termo | Definição | Capítulo |
+|---|---|---|
+| **Hash** | Impressão digital de tamanho fixo (SHA3-256, 32 bytes); mudar um bit muda tudo. | [1](concepts/01-hash.md) |
+| **Hash com tag** | Hash em que um rótulo versionado (`teko/v1/…`) e os tamanhos entram no cálculo; evita um uso valer em outro. | [1](concepts/01-hash.md) |
+| **Separação de domínio** | Princípio por trás da tag: cada finalidade tem o seu rótulo. | [1](concepts/01-hash.md) |
+| **ECDSA P-256** | Algoritmo de assinatura do Teko: chave privada assina, pública verifica; 64 bytes. | [2](concepts/02-signatures.md) |
+| **bech32m** | Formato de texto de endereços, minúsculo, com checksum que detecta erro de digitação. | [3](concepts/03-addresses-bech32m.md) |
+| **HRP** | *Human-readable part*: prefixo legível que diz para que serve o endereço (`teko`, `tekow`, `tekop`). | [3](concepts/03-addresses-bech32m.md) |
+| **BIP-39** | Padrão de frase de recuperação (24 palavras = 256 bits + checksum). | [4](concepts/04-wallet.md) |
+| **SLIP-10** | Derivação hierárquica de chaves para a curva P-256; caminho `m/7240'/0'/0'/0'/i'`. | [4](concepts/04-wallet.md) |
+| **Derivação endurecida** | Índice com apóstrofo: não permite deduzir chaves irmãs. | [4](concepts/04-wallet.md) |
+| **TEKO / ypy** | A moeda e sua menor unidade; 1 TEKO = 1.000.000 ypy. | [4](concepts/04-wallet.md) |
+| **Limiar / threshold** | M de N para agir. Para assinaturas separadas (M-de-N) ou para juntar partes de uma chave (votação). | [5](concepts/05-m-of-n.md), [9](concepts/09-voting-crypto.md) |
+| **Consenso** | Como nós que não confiam uns nos outros concordam sobre os mesmos blocos. | [6](concepts/06-consensus.md) |
+| **PoA** | *Proof of authority*: validadores de uma lista fixa em rodízio; bloco vale com M de N assinaturas (livro de votos). | [6](concepts/06-consensus.md) |
+| **BFT** | *Byzantine Fault Tolerance*: tolera validadores que mentem, até 1/3 do poder (livro de economia). | [6](concepts/06-consensus.md) |
+| **Tendermint** | Estilo de BFT com proposta, prevote, precommit e commit por rodadas. | [6](concepts/06-consensus.md) |
+| **Quórum** | Mais de 2/3 do poder de voto; garante que dois blocos não são decididos. | [6](concepts/06-consensus.md) |
+| **Lock** | Trava no bloco em que se deu precommit; gravada em disco antes do voto sair. | [6](concepts/06-consensus.md) |
+| **Certificado de commit** | Precommits assinados (> 2/3) que provam a decisão; qualquer um verifica. | [6](concepts/06-consensus.md) |
+| **Equivocação / slash** | Dois votos conflitantes do mesmo validador; vira evidência e queima parte do stake. | [6](concepts/06-consensus.md) |
+| **WAL** | *Write-ahead log*: o que o nó grava antes de votar para não repetir ou esquecer após reiniciar. | [6](concepts/06-consensus.md) |
+| **Nonce (de transação)** | Contador por endereço; só a transação com o próximo número vale (impede replay). | [7](concepts/07-ledger.md) |
+| **Raiz do estado** | Hash que resume todo o estado após um bloco; nós honestos chegam à mesma. | [7](concepts/07-ledger.md) |
+| **Árvore de Merkle** | Resume uma lista em um hash e permite provar que um item está nela. | [7](concepts/07-ledger.md) |
+| **Halving** | Recompensa de bloco cortada pela metade a cada intervalo (210.000 blocos); garante o teto. | [8](concepts/08-coin.md) |
+| **Stake** | Moedas travadas como garantia para validar; dá poder de voto e pode ser penalizado. | [8](concepts/08-coin.md) |
+| **Fase de fundador** | No começo só o fundador valida e recebe as recompensas; termina quando o stake total chega a N. | [8](concepts/08-coin.md) |
+| **ElGamal exponencial** | Cifra em que multiplicar cifras soma os votos sem decifrar. | [9](concepts/09-voting-crypto.md) |
+| **Shamir** | Divide um segredo em partes; M delas o reconstroem. | [9](concepts/09-voting-crypto.md) |
+| **DKG (Feldman)** | Geração distribuída de chave: ninguém a conhece inteira; as partes são verificáveis. | [9](concepts/09-voting-crypto.md) |
+| **Prova de conhecimento zero** | Prova que algo é verdade (voto é 0 ou 1) sem revelar o quê. | [9](concepts/09-voting-crypto.md) |
+| **Assinatura cega (RFC 9474)** | O órgão assina sem ver a mensagem; base do registro anônimo. | [9](concepts/09-voting-crypto.md) |
+| **Tempo constante** | Comparação cujo tempo não depende de onde erra (PIN). | [10](concepts/10-device-security.md) |
+| **zeroize** | Zerar a memória de um segredo ao descartá-lo. | [10](concepts/10-device-security.md) |
+| **Explorador** | Página e API somente leitura para ver blocos, transações e carteiras; verifica a cadeia sozinho, sem confiar nos nós. | [fluxo 15](flows/15-explorer.md) |
+| **Recibo / evento** | O que uma transação fez ao executar (por exemplo `slashed`); vem do `BlockOutcome` do livro. | [7](concepts/07-ledger.md) |

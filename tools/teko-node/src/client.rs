@@ -277,6 +277,39 @@ impl NodeClient {
         Err(last)
     }
 
+    /// Downloads the final blocks from height `from` on from ONE node, WITHOUT verifying
+    /// them: the caller (the explorer index) verifies every certificate itself.
+    pub fn econ_fetch_from_node(
+        addr: SocketAddr,
+        from: u64,
+    ) -> Result<Vec<teko_economy::DecidedBlock>, NodeError> {
+        let mut out: Vec<teko_economy::DecidedBlock> = Vec::new();
+        loop {
+            let next = from.saturating_add(out.len() as u64);
+            let req = wire::msg(
+                wire::ECON_BLOCKS,
+                &GetBlocks {
+                    from: next,
+                    max: 200,
+                },
+            );
+            let r = call(addr, &req, Duration::from_secs(10))?;
+            if r.kind != wire::BLOCKS_REPLY {
+                return Err(NodeError::Protocol("unexpected reply".into()));
+            }
+            let reply: BlocksReply = wire::decode(&r)?;
+            if reply.blocks.is_empty() {
+                return Ok(out);
+            }
+            for raw in reply.blocks {
+                out.push(
+                    teko_economy::DecidedBlock::decode(raw.as_slice())
+                        .map_err(|_| NodeError::Protocol("malformed block".into()))?,
+                );
+            }
+        }
+    }
+
     fn econ_pull(
         addr: SocketAddr,
         genesis: &teko_economy::EconomyGenesis,

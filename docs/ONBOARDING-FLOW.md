@@ -63,7 +63,7 @@ Aviso ao usuário: **perder o PIN = reemissão presencial**; **N erros = apagame
 | "Confirme a sua anotação" | "Digite as palavras nº 4, 11 e 19" (sorteadas) | `ButtonRequest(WalletConfirm)` |
 | "Carteira pronta: `tekow1…`" | Endereço | `WalletReady{address}` |
 
-Errou uma palavra: o dispositivo mostra a frase de novo e sorteia outras posições. Sem carteira pronta, o dispositivo recusa o passo seguinte (`GetCivicId`). Detalhes: [fluxo 14](fluxos/14-carteira-e-seed.md).
+Errou uma palavra: o dispositivo mostra a frase de novo e sorteia outras posições. Sem carteira pronta, o dispositivo recusa o passo seguinte (`GetCivicId`). Detalhes: [fluxo 14](flows/14-wallet-and-seed.md).
 
 ## Passo 5 — Geração de chaves e conferência do ID Cívico
 

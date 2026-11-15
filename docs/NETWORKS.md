@@ -23,7 +23,7 @@ Cada rede tem um `chain_id` (`teko-devnet-1`, `teko-testnet-1`). Ele entra no **
 - **Persistência:** `dev/net/node-<i>/blocks.log`; no boot cada bloco é reverificado.
 
 ## Economia sobre BFT (M6a, ADR-0028)
-Ao lado do PoA dos votos, cada nó roda o **livro de economia** (moeda, bens, stake) em consenso **BFT** ponderado por stake. Só o **validador fundador** (nó 0) vota no começo; os nós 1 e 2 **replicam**. As recompensas de bloco vão para a **carteira do fundador** (`make devnet FOUNDER=tekow1…`, o endereço da tela Carteira da Suite). Quando o stake total chega a N (1.000 TEKO na devnet local; `make devnet FOUNDER=… FOUNDER_TARGET=…` muda, em TEKO; ADR-0029), os validadores passam a ser os que têm stake. `make devnet-economy` mostra altura, fase e validadores e **verifica a cadeia**; `make devnet-founder FOUNDER=…` troca o fundador e zera a economia. Blocos vazios a cada 3 s (`TEKO_EMPTY_BLOCK_MS`) pagam as recompensas. Detalhes: [fluxo 12](fluxos/12-livro-razao-moeda-e-bens.md).
+Ao lado do PoA dos votos, cada nó roda o **livro de economia** (moeda, bens, stake) em consenso **BFT** ponderado por stake. Só o **validador fundador** (nó 0) vota no começo; os nós 1 e 2 **replicam**. As recompensas de bloco vão para a **carteira do fundador** (`make devnet FOUNDER=tekow1…`, o endereço da tela Carteira da Suite). Quando o stake total chega a N (1.000 TEKO na devnet local; `make devnet FOUNDER=… FOUNDER_TARGET=…` muda, em TEKO; ADR-0029), os validadores passam a ser os que têm stake. `make devnet-economy` mostra altura, fase e validadores e **verifica a cadeia**; `make devnet-founder FOUNDER=…` troca o fundador e zera a economia. Blocos vazios a cada 3 s (`TEKO_EMPTY_BLOCK_MS`) pagam as recompensas. Detalhes: [fluxo 12](flows/12-ledger-coin-and-assets.md).
 
 ## Rodando
 
@@ -36,6 +36,7 @@ make publish           # a eleição entra por blocos
 make simulate-live     # votos sintéticos via rede
 make devnet-status     # altura, mempool, pares de cada nó
 make devnet-blocks     # blocos verificados no terminal
+make explorer          # explorador web (blocos, transações, carteiras, validadores) em http://127.0.0.1:8545
 make devnet-economy    # economia BFT: altura, fase de fundador, validadores (cadeia verificada)
 make devnet-stop | devnet-reset
 ```

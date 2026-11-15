@@ -1,0 +1,25 @@
+[package]
+name = "teko-explorer"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+description = "Chain explorer index: verifies the economy chain and answers block, transaction, account and validator queries (no I/O)"
+
+[dependencies]
+teko-crypto.workspace = true
+teko-ledger.workspace = true
+teko-coin.workspace = true
+teko-assets.workspace = true
+teko-economy.workspace = true
+teko-bft.workspace = true
+prost.workspace = true
+serde.workspace = true
+
+[dev-dependencies]
+rand.workspace = true
+proptest.workspace = true
+p256.workspace = true
+
+[lints]
+workspace = true

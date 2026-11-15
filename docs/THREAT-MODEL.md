@@ -101,6 +101,8 @@ Colunas: **STRIDE** (S spoofing, T tampering, R repudiation, I info disclosure, 
 | O2 | Colisão/ambiguidade entre domínios de hash | Tags de domínio únicas e versionadas | `prop_domain_separation` |
 | O3 | Segredos permanecem em memória | `zeroize` no `Drop` | revisão + teste estrutural |
 | O4 | Canal lateral de tempo em assinaturas | Bibliotecas de tempo constante | — |
+| O5 | Nó mente ao explorador (bloco falso, certificado forjado) | O explorador reexecuta e verifica cada bloco sozinho (ADR-0031) | `a_block_with_a_forged_certificate_is_refused_and_the_index_keeps_its_chain` |
+| O6 | Script injetado ou escrita via API do explorador | API só GET (405); todo texto escapado; CSP sem inline; loopback por padrão e `--public` explícito | `the_api_is_read_only` |
 
 ## 4. Tensões a registrar (não resolvidas)
 

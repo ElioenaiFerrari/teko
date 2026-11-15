@@ -50,6 +50,8 @@ pub enum ButtonKind {
     WalletPassphrase = 20,
     /// "Send N coins to ADDRESS?" prompt (everything shown comes from the device).
     SignTransfer = 21,
+    /// "Consent to sell/buy asset X?" prompt.
+    SignAssetConsent = 22,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, prost::Enumeration)]
@@ -148,6 +150,33 @@ pub struct RestoreWallet {}
 pub struct CheckWalletBackup {}
 #[derive(Clone, PartialEq, prost::Message)]
 pub struct GetAddress {}
+/// Asks the device to sign the CONSENT of one party (seller or buyer) to move an asset.
+/// The device shows the asset, parties, price and version and signs only after the
+/// physical confirmation; it refuses if the wallet is neither the seller nor the buyer.
+#[derive(Clone, PartialEq, prost::Message)]
+pub struct SignAssetConsent {
+    #[prost(string, tag = "1")]
+    pub chain_id: String,
+    /// 2 = transfer, 3 = swap (delivery versus payment).
+    #[prost(uint32, tag = "2")]
+    pub kind: u32,
+    #[prost(string, tag = "3")]
+    pub class: String,
+    #[prost(string, tag = "4")]
+    pub asset: String,
+    /// `tekow1…` of the current owner (seller).
+    #[prost(string, tag = "5")]
+    pub from_address: String,
+    /// `tekow1…` of the buyer.
+    #[prost(string, tag = "6")]
+    pub to_address: String,
+    /// Price in coin units (swap only; 0 for a plain transfer).
+    #[prost(uint64, tag = "7")]
+    pub price: u64,
+    /// Asset version the consent is bound to.
+    #[prost(uint64, tag = "8")]
+    pub version: u64,
+}
 /// Asks the device to sign a coin transfer. The device BUILDS the transaction itself
 /// from these fields, shows it on its screen (destination, amount, fee, network) and
 /// signs only after the physical confirmation.
@@ -282,6 +311,14 @@ pub struct Address {
 #[derive(Clone, PartialEq, prost::Message)]
 pub struct WalletBackupOk {}
 /// Signature of the transfer built by the device (public data).
+/// A signed consent (public data).
+#[derive(Clone, PartialEq, prost::Message)]
+pub struct AssetConsentSigned {
+    #[prost(bytes = "vec", tag = "1")]
+    pub signature: Vec<u8>,
+    #[prost(bytes = "vec", tag = "2")]
+    pub public_key: Vec<u8>,
+}
 #[derive(Clone, PartialEq, prost::Message)]
 pub struct TransferSigned {
     #[prost(bytes = "vec", tag = "1")]
@@ -560,6 +597,7 @@ define_messages! {
         CheckWalletBackup(CheckWalletBackup) = 0x001B,
         GetAddress(GetAddress) = 0x001C,
         SignTransfer(SignTransfer) = 0x001D,
+        SignAssetConsent(SignAssetConsent) = 0x001E,
     }
 }
 
@@ -591,6 +629,7 @@ define_messages! {
         Address(Address) = 0x0117,
         WalletBackupOk(WalletBackupOk) = 0x0118,
         TransferSigned(TransferSigned) = 0x0119,
+        AssetConsentSigned(AssetConsentSigned) = 0x011A,
     }
 }
 

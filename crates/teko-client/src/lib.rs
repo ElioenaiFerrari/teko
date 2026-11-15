@@ -465,6 +465,68 @@ impl<T: Transport> DeviceClient<T> {
         Ok(tx)
     }
 
+    /// Asks the device for this wallet's CONSENT (as seller or buyer) to move an asset.
+    /// The device shows the asset, parties, price and version and signs only after the
+    /// physical confirmation. `kind`: 2 = transfer, 3 = swap. The client checks the
+    /// signature before returning it.
+    #[allow(clippy::too_many_arguments)]
+    pub fn wallet_sign_asset_consent(
+        &mut self,
+        chain_id: &str,
+        kind: u8,
+        class: &str,
+        asset: &str,
+        from_address: &str,
+        to_address: &str,
+        price: u64,
+        version: u64,
+    ) -> Result<teko_assets::Approval, ClientError> {
+        let from = parse_wallet_address(from_address)
+            .map_err(|_| ClientError::Verification("endereço do vendedor inválido".into()))?;
+        let to = parse_wallet_address(to_address)
+            .map_err(|_| ClientError::Verification("endereço do comprador inválido".into()))?;
+        let signed = self.expect(
+            Request::SignAssetConsent(SignAssetConsent {
+                chain_id: chain_id.to_string(),
+                kind: u32::from(kind),
+                class: class.to_string(),
+                asset: asset.to_string(),
+                from_address: from_address.to_string(),
+                to_address: to_address.to_string(),
+                price,
+                version,
+            }),
+            |r| match r {
+                Response::AssetConsentSigned(a) => Ok(a),
+                o => Err(o),
+            },
+        )?;
+        let h = teko_crypto::ledger::asset_intent_hash(
+            chain_id,
+            kind,
+            class.as_bytes(),
+            asset.as_bytes(),
+            &from,
+            &to,
+            price,
+            version,
+            &[],
+        );
+        teko_crypto::verify_tagged(
+            &signed.public_key,
+            teko_crypto::tags::ASSET_APPROVAL,
+            &h,
+            &signed.signature,
+        )
+        .map_err(|_| {
+            ClientError::Verification("o consentimento devolvido não confere com a operação".into())
+        })?;
+        Ok(teko_assets::Approval {
+            key: signed.public_key,
+            signature: signed.signature,
+        })
+    }
+
     // ───────────────────────── identity & issuance ─────────────────────────
 
     /// Asks the device for its civic ID and double-checks it locally.

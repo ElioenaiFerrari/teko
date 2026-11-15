@@ -1,5 +1,5 @@
 use prost::Message;
-use teko_crypto::{SigningKey, public_key_bytes, sign_tagged, tagged_hash, tags};
+use teko_crypto::{SigningKey, public_key_bytes, sign_tagged, tags};
 use teko_ledger::Address;
 
 #[derive(Clone, PartialEq, Eq, Message)]
@@ -178,19 +178,16 @@ impl Intent {
 }
 
 pub fn intent_hash(chain_id: &str, i: &Intent) -> [u8; 32] {
-    tagged_hash(
-        tags::ASSET_INTENT,
-        &[
-            chain_id.as_bytes(),
-            &[i.kind as u8],
-            &i.class,
-            &i.asset,
-            &i.from,
-            &i.to,
-            &i.amount.to_be_bytes(),
-            &i.version.to_be_bytes(),
-            &i.extra,
-        ],
+    teko_crypto::ledger::asset_intent_hash(
+        chain_id,
+        i.kind as u8,
+        &i.class,
+        &i.asset,
+        &i.from,
+        &i.to,
+        i.amount,
+        i.version,
+        &i.extra,
     )
 }
 

@@ -40,3 +40,38 @@ pub fn coin_transfer_payload(to: &[u8; 32], amount: u64) -> Vec<u8> {
     p.extend_from_slice(&amount.to_be_bytes());
     p
 }
+
+/// Intent kinds that a wallet owner or buyer signs (values match `teko-assets`).
+pub const INTENT_TRANSFER: u8 = 2;
+pub const INTENT_SWAP: u8 = 3;
+
+/// Hash that an asset CONSENT signs: network, action, class, asset, parties, price and
+/// the asset version. Shared by the device (which signs it) and `teko-assets` (which
+/// verifies it), so a consent cannot be replayed on another chain, action or version.
+#[allow(clippy::too_many_arguments)]
+pub fn asset_intent_hash(
+    chain_id: &str,
+    kind: u8,
+    class: &[u8],
+    asset: &[u8],
+    from: &[u8; 32],
+    to: &[u8; 32],
+    amount: u64,
+    version: u64,
+    extra: &[u8],
+) -> [u8; 32] {
+    crate::tagged_hash(
+        crate::tags::ASSET_INTENT,
+        &[
+            chain_id.as_bytes(),
+            &[kind],
+            class,
+            asset,
+            from,
+            to,
+            &amount.to_be_bytes(),
+            &version.to_be_bytes(),
+            extra,
+        ],
+    )
+}

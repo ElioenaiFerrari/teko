@@ -935,3 +935,57 @@ fn sending_coins_is_signed_on_the_device_and_lands_in_the_devnet_economy() {
     assert_eq!(device_code(r.unwrap_err()), ErrorCode::UserRejected);
     assert_eq!(Economy::open(&dir).unwrap().balance(&friend), 2500);
 }
+
+#[test]
+fn an_asset_consent_is_signed_on_the_device_and_verified_by_the_client() {
+    let rig = start();
+    let mut c = connect(&rig);
+    let (m, b) = firmware(&rig, 1);
+    c.install_firmware(&rig.trust, &m, &b, &mut |_, _| {})
+        .unwrap();
+    c.setup_pin().unwrap();
+    let me = c.wallet_setup().unwrap().address;
+    let buyer = teko_crypto::wallet_address(&[4u8; 32]).unwrap();
+    let prompts = Arc::new(AtomicUsize::new(0));
+    let p2 = prompts.clone();
+    c.set_on_button(move |k| {
+        if k == teko_protocol::ButtonKind::SignAssetConsent {
+            p2.fetch_add(1, Ordering::SeqCst);
+        }
+    });
+    let a = c
+        .wallet_sign_asset_consent(
+            "teko-devnet",
+            3,
+            "imovel",
+            "matricula-9",
+            &me,
+            &buyer,
+            750,
+            2,
+        )
+        .unwrap();
+    assert_eq!(prompts.load(Ordering::SeqCst), 1);
+    assert!(rig.hal.screens().iter().any(|s| {
+        s.title == "VENDA DE BEM" && s.lines.iter().any(|l| l.contains("Preço: 750"))
+    }));
+    assert_eq!(
+        a.key,
+        c.wallet_address()
+            .map(|x| teko_crypto::hex::decode(&x.public_key).unwrap())
+            .unwrap()
+    );
+    // the user refuses on the device: no consent is produced
+    rig.hal.push_decision(Decision::Reject);
+    let r = c.wallet_sign_asset_consent(
+        "teko-devnet",
+        3,
+        "imovel",
+        "matricula-9",
+        &me,
+        &buyer,
+        750,
+        2,
+    );
+    assert_eq!(device_code(r.unwrap_err()), ErrorCode::UserRejected);
+}

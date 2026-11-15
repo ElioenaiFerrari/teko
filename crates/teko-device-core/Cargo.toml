@@ -24,6 +24,7 @@ rand_core.workspace = true
 [dev-dependencies]
 teko-ledger.workspace = true
 teko-coin.workspace = true
+teko-assets.workspace = true
 p256.workspace = true
 teko-registration.workspace = true
 proptest.workspace = true

@@ -220,6 +220,7 @@
     wallet_confirm: ['Confirme a sua anotação no dispositivo', 'O dispositivo vai pedir palavras de posições sorteadas. Digite-as no dispositivo, lendo do seu papel.'],
     wallet_passphrase: ['Escolha no dispositivo: usar passphrase?', 'Uma senha extra protege a frase, mas esquecê-la significa perder os fundos. Decida no dispositivo.'],
     wallet_restore: ['Restaure a carteira no dispositivo', 'Digite as 24 palavras NO DISPOSITIVO e confira o endereço mostrado. Esta janela nunca vê as palavras.'],
+    sign_asset_consent: ['Confirme o seu consentimento no dispositivo', 'Confira o BEM, o vendedor, o comprador, o preço e a versão que o dispositivo mostra. Só confirme se for exatamente o negócio combinado.'],
     sign_transfer: ['Confirme o envio no dispositivo', 'Confira o ENDEREÇO de destino, o valor e a taxa que o dispositivo mostra. Só confirme se for exatamente o que você quer enviar.'],
     wallet_check: ['Verifique o backup no dispositivo', 'Digite a frase do seu papel no dispositivo. Ele só diz se confere ou não.'],
     unknown: ['Aguardando o dispositivo', 'Olhe a tela do dispositivo.'],

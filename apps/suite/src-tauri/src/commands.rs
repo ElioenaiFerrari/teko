@@ -88,6 +88,7 @@ fn prompt_name(kind: ButtonKind) -> &'static str {
         ButtonKind::WalletCheck => "wallet_check",
         ButtonKind::WalletPassphrase => "wallet_passphrase",
         ButtonKind::SignTransfer => "sign_transfer",
+        ButtonKind::SignAssetConsent => "sign_asset_consent",
         ButtonKind::Unspecified => "unknown",
     }
 }

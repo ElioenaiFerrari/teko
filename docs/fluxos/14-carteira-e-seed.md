@@ -38,6 +38,9 @@ Você (com papel e caneta), o dispositivo (tela e botões) e a Suite, que só es
 3. Confirmado, o dispositivo devolve a assinatura; a Suite remonta a transação, confere a assinatura e a entrega ao livro, que valida de novo (assinatura, nonce, taxa, saldo).
 4. Hoje o livro é a **devnet local** (`dev/economy.*`); o histórico e o saldo da tela vêm dele. Decisão: [ADR-0024](../adr/0024-assinar-transferencias-no-dispositivo.md).
 
+## Consentir na venda de um bem (M5c)
+Para vender ou comprar um bem, o dispositivo assina **o seu consentimento** (vendedor ou comprador): ele mostra o bem, as partes, o **preço**, a **versão do bem** e a rede e só assina depois do botão. O consentimento do órgão registrador (quórum M-de-N) não passa pelo dispositivo do cidadão. Se a carteira não for parte do negócio, o dispositivo recusa sem mostrar nada. Decisão: [ADR-0025](../adr/0025-consentimentos-de-bens-no-dispositivo.md); a tela de compra e venda na Suite ainda **não existe**.
+
 ## O que é verificado e por quem
 - O **dispositivo**: lista de palavras e checksum BIP-39, as palavras das posições sorteadas, a igualdade das duas digitações da passphrase.
 - A **Suite**: só confere que o endereço recebido é bech32m válido e que corresponde à chave pública (`wallet_address`).

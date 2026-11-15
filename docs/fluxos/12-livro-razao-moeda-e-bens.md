@@ -48,7 +48,7 @@ Validadores (stake + histórico), emissor (elegibilidade de eleitores), órgão 
 1. **M2** `teko-ledger` (**feito**): envelope de transação, módulos, blocos atômicos e raiz de estado (veja "O núcleo do livro").
 2. **M3** `teko-coin` (**feito**): veja "A moeda".
 3. **M4** `teko-assets` (**feito**): veja "Os bens".
-4. **M5a** (**feito**): carteira com frase de 24 palavras, `GetAddress` e tela Carteira com saldo de teste ([fluxo 14](14-carteira-e-seed.md)). **M5b** (**feito para a moeda**): `SignTransfer` com confirmação no dispositivo e envio/histórico na Suite, contra a devnet local. **Planejado:** assinar consentimentos de bens e patrimônio na Suite.
+4. **M5a** (**feito**): carteira com frase de 24 palavras, `GetAddress` e tela Carteira com saldo de teste ([fluxo 14](14-carteira-e-seed.md)). **M5b** (**feito para a moeda**): `SignTransfer` com confirmação no dispositivo e envio/histórico na Suite, contra a devnet local. **M5c** (**feito no dispositivo**): o dono e o comprador assinam o consentimento no dispositivo (`SignAssetConsent`, [ADR-0025](../adr/0025-consentimentos-de-bens-no-dispositivo.md)). **Planejado:** tela de bens/patrimônio e de compra e venda na Suite.
 5. **M6** o livro de votos passa a rodar sobre o BFT.
 
 ## O que será verificado e por quem

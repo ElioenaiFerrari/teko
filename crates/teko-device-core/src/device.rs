@@ -23,11 +23,12 @@ use teko_election::{
     sign_ballot, validate_revision,
 };
 use teko_protocol::{
-    AttestationResponse, AttributeProof, BallotSignature, ButtonKind, ButtonRequest, CivicId,
-    ContestInfo, CredentialLoaded, DeviceState, DocumentSignature, ElectionLoaded, ErrorCode,
-    Failure, Features, FirmwareStatus, IdentityRequest, PROTO_VERSION, PairwiseId, PinSet,
-    PinWrong, Predicate, PredicateKind, RegistrationRequest, RegistrationToken, Request, Response,
-    Success, TransferSigned, Unlocked, VoterKey, WalletBackupOk, WalletReady, WipeDone,
+    AssetConsentSigned, AttestationResponse, AttributeProof, BallotSignature, ButtonKind,
+    ButtonRequest, CivicId, ContestInfo, CredentialLoaded, DeviceState, DocumentSignature,
+    ElectionLoaded, ErrorCode, Failure, Features, FirmwareStatus, IdentityRequest, PROTO_VERSION,
+    PairwiseId, PinSet, PinWrong, Predicate, PredicateKind, RegistrationRequest, RegistrationToken,
+    Request, Response, Success, TransferSigned, Unlocked, VoterKey, WalletBackupOk, WalletReady,
+    WipeDone,
 };
 use teko_wallet::{MasterKey, Phrase, WORD_COUNT};
 use zeroize::{Zeroize, Zeroizing};
@@ -397,6 +398,7 @@ impl<H: Hal, R: Rng + CryptoRng> Device<H, R> {
             Request::RestoreWallet(_) => self.restore_wallet(),
             Request::CheckWalletBackup(_) => self.check_wallet_backup(),
             Request::GetAddress(_) => self.get_address(),
+            Request::SignAssetConsent(m) => self.sign_asset_consent(&m),
             Request::SignTransfer(m) => {
                 self.sign_transfer(&m.chain_id, &m.to_address, m.amount, m.fee, m.nonce)
             }
@@ -909,6 +911,89 @@ impl<H: Hal, R: Rng + CryptoRng> Device<H, R> {
         Ok(Response::TransferSigned(TransferSigned {
             signature,
             public_key: sender,
+        }))
+    }
+
+    /// Signs the consent of THIS wallet (as seller or buyer) to move an asset. The
+    /// bytes that are signed come from the same fields the screen shows.
+    fn sign_asset_consent(
+        &mut self,
+        m: &teko_protocol::SignAssetConsent,
+    ) -> Result<Response, Failure> {
+        use teko_crypto::ledger::{INTENT_SWAP, INTENT_TRANSFER, asset_intent_hash};
+        self.require_unlocked_initialized()?;
+        self.require_wallet()?;
+        let bad = |msg: &str| fail(ErrorCode::InvalidArgument, msg);
+        let kind = u8::try_from(m.kind).map_err(|_| bad("tipo de ação inválido"))?;
+        if kind != INTENT_TRANSFER && kind != INTENT_SWAP {
+            return Err(bad("tipo de ação inválido"));
+        }
+        let clean = |s: &str, max: usize| {
+            sanitize(s, max).filter(|c| !c.trim().is_empty() && c.as_str() == s)
+        };
+        let chain = clean(&m.chain_id, 48).ok_or_else(|| bad("rede inválida"))?;
+        let class = clean(&m.class, 32).ok_or_else(|| bad("classe inválida"))?;
+        let asset = clean(&m.asset, 64).ok_or_else(|| bad("identificador do bem inválido"))?;
+        let from = teko_crypto::parse_wallet_address(&m.from_address)
+            .map_err(|_| bad("endereço do vendedor inválido"))?;
+        let to = teko_crypto::parse_wallet_address(&m.to_address)
+            .map_err(|_| bad("endereço do comprador inválido"))?;
+        if from == to {
+            return Err(bad("vendedor e comprador são o mesmo"));
+        }
+        if kind == INTENT_SWAP && m.price == 0 {
+            return Err(bad("o preço deve ser positivo"));
+        }
+        if kind == INTENT_TRANSFER && m.price != 0 {
+            return Err(bad("transferência simples não tem preço"));
+        }
+        let master = self.master()?;
+        let sk = master
+            .signing_key(0)
+            .map_err(|_| fail(ErrorCode::Internal, "chave da carteira"))?;
+        let pk = public_key_bytes(&sk);
+        let me = teko_crypto::ledger_address(&pk);
+        let role = if me == from {
+            "VENDEDOR"
+        } else if me == to {
+            "COMPRADOR"
+        } else {
+            return Err(bad("esta carteira não é parte da operação"));
+        };
+        let mut lines = Vec::from([format!("Você é o {role}")]);
+        lines.push(format!("Bem: {class}/{asset}"));
+        lines.push(String::from("Vendedor:"));
+        lines.extend(wrap(&m.from_address, 22));
+        lines.push(String::from("Comprador:"));
+        lines.extend(wrap(&m.to_address, 22));
+        if kind == INTENT_SWAP {
+            lines.push(format!("Preço: {}", m.price));
+        } else {
+            lines.push(String::from("Sem pagamento (só o bem)"));
+        }
+        lines.push(format!("Versão do bem: {}", m.version));
+        lines.push(format!("Rede: {chain}"));
+        let title = if kind == INTENT_SWAP {
+            "VENDA DE BEM"
+        } else {
+            "TRANSFERIR BEM"
+        };
+        self.confirm(ButtonKind::SignAssetConsent, Screen::new(title, lines))?;
+        let h = asset_intent_hash(
+            &chain,
+            kind,
+            class.as_bytes(),
+            asset.as_bytes(),
+            &from,
+            &to,
+            m.price,
+            m.version,
+            &[],
+        );
+        let signature = sign_tagged(&sk, tags::ASSET_APPROVAL, &h);
+        Ok(Response::AssetConsentSigned(AssetConsentSigned {
+            signature,
+            public_key: pk,
         }))
     }
 

@@ -225,6 +225,9 @@ Legenda: **P** = `proptest` (muitos casos), **U** = unitário, **E** = ponta a p
 | Enviar exige carteira e dispositivo desbloqueado | device: `transfers_need_the_wallet_and_the_unlocked_device` |
 | **Ponta a ponta:** assinar no dispositivo, entregar ao livro local, saldos corretos, reinício reproduz, recusa no botão não muda nada | e2e: `sending_coins_is_signed_on_the_device_and_lands_in_the_devnet_economy` |
 | A economia local move moedas com taxa, recusa repetição (nonce), saldo insuficiente e taxa baixa sem deixar rastro, e rejeita arquivo adulterado | coin: `devnet::tests::the_local_economy_moves_coins_with_fees_and_history`, `a_tampered_transactions_file_is_rejected_on_open` |
+| **Consentimento de bem assinado no dispositivo vale no livro real:** o dono assina no dispositivo, comprador e órgão em software, e a troca move o bem e a moeda com a oferta conservada | device: `a_swap_signed_on_the_device_moves_the_asset_and_the_coin_in_the_real_ledger` |
+| O dispositivo só assina se a carteira for parte; recusa antes de qualquer tela tipo desconhecido, mesma parte, venda sem preço, transferência com preço, endereço ruim; recusar no botão não gera consentimento; reconhece o papel de comprador | device: `consent_requests_are_validated_and_need_a_physical_confirmation` |
+| Ponta a ponta: consentimento assinado, mostrado na tela e **verificado pelo cliente**; recusa no botão | e2e: `an_asset_consent_is_signed_on_the_device_and_verified_by_the_client` |
 | Saldo de teste da devnet (arquivo de alocações) | coin: `devnet::tests::allocations_roundtrip_and_balance`, `bad_input_is_refused` |
 
 ## O que **não** está coberto por teste automático (honestidade)

@@ -58,7 +58,7 @@ make devnet-status  # estado da rede     |  make devnet-blocks  # blocos
 make tally          # apuração no terminal
 make close          # encerra a votação; depois a Suite mostra os gráficos
 make devnet-stop    # para os validadores
-make fund ADDR=tekow1… AMOUNT=1000   # moedas de TESTE para a sua carteira (aparecem em "Carteira" na Suite)
+make fund ADDR=tekow1… AMOUNT=1000   # TEKO de TESTE para a sua carteira, aparecem em "Carteira" na Suite (aceita decimais: AMOUNT=0,5; 1 TEKO = 1.000.000 ypy, ADR-0029)
 make coin-demo      # demonstração da moeda em memória: teto, halving, taxa, stake e slash
 make assets-demo    # demonstração dos bens: registro com quórum, gravame, venda contra pagamento
 ```

@@ -20,7 +20,7 @@
   };
   const mine = [{ id: 'matricula-001', version: 0, liens: 0 }], theirs = [{ id: 'matricula-002', version: 0, liens: 0 }];
   let mstake = 0, mheight = 5, munb = [];
-  let wbal = 4000; const whist = [{ height: 1, direction: 'received', counterparty: 'tekow1qqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqq9z3k', amount: 4000, fee: 0 }];
+  let wbal = 4000 * 1000000; const whist = [{ height: 1, direction: 'received', counterparty: 'tekow1qqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqq9z3k', amount: 4000 * 1000000, fee: 0 }];
   const WADDR = 'tekow1qpzry9x8gf2tvdw0s3jn54khce6mua7lqpzry9x8gf2tvdw0s3jn54khce6muaw9z3k';
   const status = () => ({
     connected: dev.connected, busy: false, addr: '127.0.0.1:7878', trust_ok: true, error: null,
@@ -66,13 +66,13 @@
     wallet_address: async () => ({ address: WADDR, public_key: '02' + 'cd'.repeat(32) }),
     wallet_send: async ({ to, amount }) => { await prompt('sign_transfer', 1800); wbal -= amount + 162; whist.unshift({ height: whist.length + 1, direction: 'sent', counterparty: to, amount, fee: 162 }); return { amount, fee: 162, to, balance_after: wbal }; },
     wallet_history: async () => whist.slice(),
-    stake_view: async () => ({ available: true, reason: null, balance: wbal - mstake - 0, my_stake: mstake, unbonding: munb.map((u) => [u.rel, u.amt]), height: mheight, unbonding_period: 3, slash_bps: 1000, mode: 'node', founder_phase_active: mstake < 1000000, founder_target: 1000000, total_stake: mstake, validators: mstake ? [['03ab12cd…9f00e1', mstake, true], ['02ff98aa…11b2c3', 9000, false]] : [['02ff98aa…11b2c3', 9000, false]] }),
+    stake_view: async () => ({ available: true, reason: null, balance: wbal - mstake - 0, my_stake: mstake, unbonding: munb.map((u) => [u.rel, u.amt]), height: mheight, unbonding_period: 3, slash_bps: 1000, mode: 'node', founder_phase_active: mstake < 1000 * 1000000, founder_target: 1000 * 1000000, total_stake: mstake, validators: mstake ? [['03ab12cd…9f00e1', mstake, true], ['02ff98aa…11b2c3', 9 * 1000000, false]] : [['02ff98aa…11b2c3', 9 * 1000000, false]] }),
     stake_action: async ({ action, amount }) => { await prompt('sign_stake', 1500); mheight += 1; if (action === 1) { if (wbal - mstake < amount) throw { code: 'Verification', message: 'saldo insuficiente', retry_after_ms: 0, remaining: 0 }; mstake += amount; } else if (action === 2) { if (amount > mstake) throw { code: 'Verification', message: 'stake insuficiente', retry_after_ms: 0, remaining: 0 }; mstake -= amount; munb.push({ rel: mheight + 3, amt: amount }); } else { const ok = munb.filter((u) => u.rel <= mheight); if (!ok.length) throw { code: 'Verification', message: 'nada para resgatar ainda', retry_after_ms: 0, remaining: 0 }; munb = munb.filter((u) => u.rel > mheight); } return wbal; },
-    assets_view: async () => ({ available: true, reason: null, balance: wbal, mine: mine.map((a) => ({ ...a, class: 'imovel' })), counterparty_address: 'tekow1qpzry9x8gf2tvdw0s3jn54khce6mua7lqpzry9x8gf2tvdw0s3jn54khce6muaw9z3q', counterparty_balance: 6000, counterparty_assets: theirs.map((a) => ({ ...a, class: 'imovel' })) }),
+    assets_view: async () => ({ available: true, reason: null, balance: wbal, mine: mine.map((a) => ({ ...a, class: 'imovel' })), counterparty_address: 'tekow1qpzry9x8gf2tvdw0s3jn54khce6mua7lqpzry9x8gf2tvdw0s3jn54khce6muaw9z3q', counterparty_balance: 6000 * 1000000, counterparty_assets: theirs.map((a) => ({ ...a, class: 'imovel' })) }),
     asset_register_test: async ({ forCounterparty }) => { const id = 'matricula-' + String(mine.length + theirs.length + 1).padStart(3, '0'); (forCounterparty ? theirs : mine).push({ id, version: 0, liens: 0 }); return id; },
     asset_lien: async ({ asset, on }) => { const a = mine.find((x) => x.id === asset); if (a) { a.liens = on ? 1 : 0; a.version += 1; } },
     asset_trade: async ({ asset, price, selling }) => { await prompt('sign_asset_consent', 1800); const from = selling ? mine : theirs, to = selling ? theirs : mine; const i = from.findIndex((x) => x.id === asset); if (i < 0) throw { code: 'Verification', message: 'bem desconhecido', retry_after_ms: 0, remaining: 0 }; if (from[i].liens) throw { code: 'Verification', message: 'o bem tem gravame (penhora)', retry_after_ms: 0, remaining: 0 }; const [a] = from.splice(i, 1); a.version += 1; to.push(a); wbal += selling ? price : -price; return wbal; },
-    wallet_balance: async () => (wbal = wbal ?? 4000, { available: true, amount: wbal, note: 'Alocação de gênese de TESTE da devnet (mock).' }),
+    wallet_balance: async () => (wbal = wbal ?? 4000 * 1000000, { available: true, amount: wbal, note: 'Alocação de gênese de TESTE da devnet (mock).' }),
     unlock: async () => { await prompt('pin_entry', 1000); dev.locked = false; return { result: 'unlocked' }; },
     civic_id: async () => { if (dev.state === 'initialized') await prompt('confirm_civic_id'); return { id: ID, public_key: '02' + 'ab'.repeat(32) }; },
     dev_mode: async () => true,

@@ -33,8 +33,8 @@ Você (com papel e caneta), o dispositivo (tela e botões) e a Suite, que só es
 
 *Fontes: [SVG](../diagramas/carteira-enviar.svg) · [HTML](../diagramas/carteira-enviar.html)*
 
-1. Na tela Carteira, informe o endereço de destino e o valor. A Suite lê o `nonce` e o saldo do livro e calcula a taxa (preço por byte); recusa cedo se o saldo não cobre.
-2. Ela envia ao dispositivo só os campos (`SignTransfer`). O dispositivo **monta a transação**, mostra **destino, valor, taxa, total e rede** e espera o botão. **Confira o destino na tela do dispositivo**: é a única fonte confiável.
+1. Na tela Carteira, informe o endereço de destino e o valor **em TEKO** (até 6 casas decimais; ex.: `12,5`). A Suite lê o `nonce` e o saldo do livro e calcula a taxa (preço por byte); recusa cedo se o saldo não cobre.
+2. Ela envia ao dispositivo só os campos (`SignTransfer`). O dispositivo **monta a transação**, mostra **destino, valor, taxa, total e rede**, com os valores **exatos em TEKO** (ex.: `Valor: 0,5 TEKO`, `Taxa: 0,000162 TEKO`; o `u64` assinado é em ypy, [ADR-0029](../adr/0029-unidade-teko-e-ypy.md)) e espera o botão. **Confira o destino na tela do dispositivo**: é a única fonte confiável.
 3. Confirmado, o dispositivo devolve a assinatura; a Suite remonta a transação, confere a assinatura e a entrega ao livro, que valida de novo (assinatura, nonce, taxa, saldo).
 4. Hoje o livro é a **devnet local** (`dev/economy.*`); o histórico e o saldo da tela vêm dele. Decisão: [ADR-0024](../adr/0024-assinar-transferencias-no-dispositivo.md).
 

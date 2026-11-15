@@ -14,7 +14,7 @@ const HELP: &str = "\
 teko-node: rede de teste federada (PoA). PROTÓTIPO, só chaves de teste.
 
 USO:
-  teko-node init   [--dir dev/net] [--network devnet|testnet] [--nodes 3] [--port 7901] [--founder tekow1…] [--force]
+  teko-node init   [--dir dev/net] [--network devnet|testnet] [--nodes 3] [--port 7901] [--founder tekow1…] [--founder-target TEKO] [--force]
                    --founder: endereço da CARTEIRA (do dispositivo) que recebe as recompensas do fundador (opção B, ADR-0028)
   teko-node run    [--dir dev/net] --index I        sobe o validador I (só loopback)
   teko-node stop   [--dir dev/net]                  para os validadores iniciados com `run` (pelos arquivos .pid)
@@ -78,13 +78,21 @@ fn run(args: Vec<String>) -> Result<(), String> {
                 ),
                 None => None,
             };
-            let g = teko_node::init_economy(&dir, owner, f.contains_key("force")).map_err(e)?;
+            let target = match f.get("founder-target") {
+                Some(v) => Some(
+                    teko_crypto::amount::parse_amount(v)
+                        .map_err(|x| format!("--founder-target: {x}"))?,
+                ),
+                None => None,
+            };
+            let g =
+                teko_node::init_economy(&dir, owner, target, f.contains_key("force")).map_err(e)?;
             match owner {
                 Some(a) => println!(
                     "Economia {}: o fundador (validador 0) manda as recompensas para a carteira {} · a fase de fundador termina com {} de stake total",
                     g.chain_id,
                     teko_crypto::wallet_address(&a).unwrap_or_default(),
-                    g.coin.founder_target
+                    teko_crypto::amount::format_amount(g.coin.founder_target)
                 ),
                 None => println!(
                     "AVISO: sem --founder, as recompensas vão para uma conta do nó que ninguém movimenta. Use: make devnet-reset FOUNDER=<seu endereço tekow1…> e make devnet."
@@ -216,7 +224,7 @@ fn run(args: Vec<String>) -> Result<(), String> {
             let a = f.get("address").ok_or("faltou --address")?;
             let owner = teko_crypto::parse_wallet_address(a)
                 .map_err(|_| "endereço tekow1… inválido (confira o checksum)")?;
-            teko_node::init_economy(&dir, Some(owner), true).map_err(e)?;
+            teko_node::init_economy(&dir, Some(owner), None, true).map_err(e)?;
             for i in 0..net.peers.len() {
                 let nd = teko_node::node_dir(&dir, i);
                 let _ = std::fs::remove_file(nd.join("economy.blocks"));
@@ -257,11 +265,11 @@ fn run(args: Vec<String>) -> Result<(), String> {
             let chain = c.econ_sync(&ec.genesis).map_err(e)?;
             let l = chain.ledger();
             println!(
-                "cadeia VERIFICADA aqui: {} blocos · stake total {} de {} para encerrar a fase de fundador · {} moedas criadas (só recompensas)",
+                "cadeia VERIFICADA aqui: {} blocos · stake total {} de {} para encerrar a fase de fundador · {} criadas (só recompensas)",
                 chain.height(),
-                teko_coin::total_stake(l),
-                ec.genesis.coin.founder_target,
-                teko_coin::minted(l)
+                teko_crypto::amount::format_amount(teko_coin::total_stake(l)),
+                teko_crypto::amount::format_amount(ec.genesis.coin.founder_target),
+                teko_crypto::amount::format_amount(teko_coin::minted(l))
             );
             for v in teko_coin::validator_set(l) {
                 println!(

@@ -28,3 +28,5 @@
 | **ButtonRequest** | Mensagem do dispositivo informando que aguarda ação física do usuário. |
 | **Wipe** | Apagamento seguro de todo o estado do dispositivo. |
 | **ADR** | Architecture Decision Record, em `docs/adr/`. |
+| **TEKO** | A moeda. 1 TEKO = 1.000.000 ypy; mostrada em pt-BR com até 6 casas (`1.234,5 TEKO`). ADR-0029. |
+| **ypy** | Menor unidade da moeda (tupi: começo, origem). O livro guarda inteiros em ypy; 1 ypy = 0,000001 TEKO. |

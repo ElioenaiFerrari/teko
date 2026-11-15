@@ -166,6 +166,41 @@
     lastKey: '',
   };
 
+  // Moeda TEKO (ADR-0029): o livro guarda inteiros em ypy (1 TEKO = 1.000.000 ypy);
+  // aqui só aritmética inteira (exata abaixo de 2^53; o teto é 2,1e13), nunca ponto flutuante.
+  const YPY = 1000000, DECIMALS = 6;
+  const INT_FMT = new Intl.NumberFormat('pt-BR', { maximumFractionDigits: 0 });
+  // 1234500000 -> "1.234,5" (sem zeros à direita, sem arredondar)
+  const money = (n) => {
+    const v = Math.max(0, Math.trunc(Number(n) || 0));
+    const whole = Math.floor(v / YPY), frac = v % YPY;
+    const f = String(frac).padStart(DECIMALS, '0').replace(/0+$/, '');
+    return INT_FMT.format(whole) + (f ? ',' + f : '');
+  };
+  // O que a pessoa digitou -> ypy (inteiro) ou null. Aceita 1234, 1234,5, 1.234,5, 1234.5.
+  const parseTeko = (text) => {
+    let t = String(text || '').trim().replace(/\s*TEKO$/i, '');
+    if (!/^[0-9.,]+$/.test(t)) return null;
+    let ip, fp = '';
+    if (t.includes(',')) {
+      const [i, f, ...rest] = t.split(',');
+      if (rest.length || f.includes('.')) return null;
+      ip = i; fp = f;
+      if (ip.includes('.') && !/^\d{1,3}(\.\d{3})+$/.test(ip)) return null;
+      ip = ip.replace(/\./g, '');
+    } else if ((t.match(/\./g) || []).length === 1 && !/^[1-9]\d{0,2}\.\d{3}$/.test(t)) {
+      [ip, fp] = t.split('.');
+    } else if (t.includes('.')) {
+      if (!/^\d{1,3}(\.\d{3})+$/.test(t)) return null;
+      ip = t.replace(/\./g, '');
+    } else ip = t;
+    if (!ip && !fp) return null;
+    if (fp.length > DECIMALS || ip.length > 14) return null;
+    const v = Number(ip || '0') * YPY + Number(fp.padEnd(DECIMALS, '0'));
+    return Number.isSafeInteger(v) ? v : null;
+  };
+  const AMOUNT_HELP = 'Em TEKO, até 6 casas decimais (1 TEKO = 1.000.000 ypy). Ex.: 12,5 ou 0,000001.';
+
   const NAV = [
     { id: 'onboarding', label: 'Configurar dispositivo', icon: 'usb', need: 'onboarding' },
     { id: 'home', label: 'Início', icon: 'chart', need: 'ready' },
@@ -665,7 +700,7 @@
     const b = S.balance;
     const bal = !b ? `<div class="row">${ico('spin', 'spin')}<span>Lendo o saldo…</span></div>`
       : b.available
-        ? `<div class="kpi__val">${esc(String(b.amount))} <span class="muted" style="font-size:1rem;font-weight:600">moedas</span></div><div class="row">${chip('moeda de TESTE', 'warn')}</div><p class="muted">${esc(b.note || '')}</p>`
+        ? `<div class="kpi__val">${esc(money(b.amount))} <span class="muted" style="font-size:1rem;font-weight:600">TEKO</span></div><div class="row">${chip('moeda de TESTE', 'warn')}</div><p class="muted">${esc(b.note || '')}</p>`
         : `<p class="muted">${esc(b.reason || 'Saldo indisponível.')}</p>`;
     return `${head('Carteira', 'Seu endereço e seu saldo', 'A chave desta carteira nasceu no dispositivo e nunca sai dele. Só o endereço, que é público, aparece aqui.')}
       <article class="card">
@@ -683,7 +718,7 @@
         <p class="muted">O dispositivo mostra o destino, o valor e a taxa e só assina depois da sua confirmação no botão dele. Moedas de teste, na devnet local.</p>
         <div class="fields">
           <div class="field"><label for="f-to">Endereço de destino</label><input class="input" id="f-to" placeholder="tekow1…" autocomplete="off" spellcheck="false"></div>
-          <div class="field"><label for="f-amt">Valor</label><input class="input" id="f-amt" type="number" min="1" step="1" placeholder="ex.: 100"></div>
+          <div class="field"><label for="f-amt">Valor (TEKO)</label><input class="input" id="f-amt" type="text" inputmode="decimal" autocomplete="off" placeholder="ex.: 12,5" aria-describedby="f-amt-h"><div class="muted" id="f-amt-h" style="font-size:.8rem">${AMOUNT_HELP}</div></div>
         </div>
         <p class="muted">A taxa é calculada por byte e paga a quem produz o bloco; você vê o valor exato no dispositivo.</p>
         <div class="row"><button class="btn" data-act="walletsend">${ico('upload')}Enviar com o dispositivo</button></div>
@@ -692,7 +727,7 @@
         <div class="card__head"><div class="card__ico card__ico--arara">${ico('list')}</div><h2>Histórico</h2></div>
         ${!S.history ? `<div class="row">${ico('spin', 'spin')}<span>Lendo…</span></div>`
           : S.history.length === 0 ? '<p class="muted">Nenhuma movimentação ainda.</p>'
-          : `<dl class="kv">${S.history.map((h) => `<dt>${h.direction === 'sent' ? 'Enviado' : 'Recebido'} · bloco ${esc(String(h.height))}</dt><dd><strong>${h.direction === 'sent' ? '−' : '+'}${esc(String(h.amount))}</strong>${h.fee ? ` <span class="muted">(taxa ${esc(String(h.fee))})</span>` : ''} <span class="muted mono" style="font-size:.8rem">${h.direction === 'sent' ? 'para' : 'de'} ${esc(h.counterparty.slice(0, 14))}…${esc(h.counterparty.slice(-6))}</span></dd>`).join('')}</dl>`}
+          : `<dl class="kv">${S.history.map((h) => `<dt>${h.direction === 'sent' ? 'Enviado' : 'Recebido'} · bloco ${esc(String(h.height))}</dt><dd><strong>${h.direction === 'sent' ? '−' : '+'}${esc(money(h.amount))} TEKO</strong>${h.fee ? ` <span class="muted">(taxa ${esc(money(h.fee))})</span>` : ''} <span class="muted mono" style="font-size:.8rem">${h.direction === 'sent' ? 'para' : 'de'} ${esc(h.counterparty.slice(0, 14))}…${esc(h.counterparty.slice(-6))}</span></dd>`).join('')}</dl>`}
       </article>
       <article class="card">
         <div class="card__head"><div class="card__ico">${ico('shield')}</div><h2>Backup da frase</h2></div>
@@ -1200,12 +1235,12 @@
       S.lastKey = ''; await poll();
     },
     async walletsend() {
-      const to = ($('#f-to') || {}).value || '', amount = Number(($('#f-amt') || {}).value || 0);
-      if (!to.trim() || !Number.isInteger(amount) || amount <= 0) { toast('Informe o endereço de destino e um valor inteiro maior que zero.'); return; }
+      const to = ($('#f-to') || {}).value || '', amount = parseTeko(($('#f-amt') || {}).value);
+      if (!to.trim() || !amount || amount <= 0) { toast('Informe o endereço de destino e um valor válido maior que zero (até 6 casas decimais).'); return; }
       let r = null;
       await guarded(async () => { r = await call('wallet_send', { to: to.trim(), amount }, { delay: 300 }); });
       if (r) {
-        toast(`Enviado: ${r.amount} (taxa ${r.fee}). Saldo: ${r.balance_after}.`, 'ok');
+        toast(`Enviado: ${money(r.amount)} TEKO (taxa ${money(r.fee)}). Saldo: ${money(r.balance_after)} TEKO.`, 'ok');
         S.walletTried = false; S.balance = null; S.history = null; S.lastKey = ''; render(); loadWallet();
       }
     },
@@ -1347,12 +1382,12 @@
   }
 
   async function trade(id, selling) {
-    const price = Number((document.getElementById(`px-${id}`) || {}).value || 0);
-    if (!Number.isInteger(price) || price <= 0) { toast('Informe um preço inteiro maior que zero.'); return; }
+    const price = parseTeko((document.getElementById(`px-${id}`) || {}).value);
+    if (!price || price <= 0) { toast('Informe um preço válido maior que zero (até 6 casas decimais).'); return; }
     let bal = null;
     await guarded(async () => { bal = await call('asset_trade', { asset: id, price, selling }, { delay: 300 }); });
     if (bal !== null) {
-      toast(selling ? `Vendido por ${price}. Seu saldo: ${bal}.` : `Comprado por ${price}. Seu saldo: ${bal}.`, 'ok');
+      toast(selling ? `Vendido por ${money(price)} TEKO. Seu saldo: ${money(bal)} TEKO.` : `Comprado por ${money(price)} TEKO. Seu saldo: ${money(bal)} TEKO.`, 'ok');
       S.assetsTried = false; S.walletTried = false; S.balance = null; S.history = null; S.lastKey = ''; render(); loadAssets();
     }
   }
@@ -1400,9 +1435,9 @@
     const open = h.election ? h.election.contests.filter((c) => c.phase === 'voting_open' && c.eligible) : [];
     const pending = open.filter((c) => !c.voted);
     const kpi = (label, val, sub) => `<div class="kpi"><div class="kpi__label">${esc(label)}</div><div class="kpi__val">${val}</div><div class="kpi__sub">${sub}</div></div>`;
-    const bal = h.balance && h.balance.available ? esc(String(h.balance.amount)) : '—';
+    const bal = h.balance && h.balance.available ? esc(money(h.balance.amount)) : '—';
     const assets = h.assets && h.assets.available ? esc(String(h.assets.mine.length)) : '—';
-    const stk = h.stake && h.stake.available ? esc(String(h.stake.my_stake)) : '—';
+    const stk = h.stake && h.stake.available ? esc(money(h.stake.my_stake)) : '—';
     const testNote = h.balance && h.balance.available ? 'moedas de teste' : 'indisponível aqui';
     return `${head('Início', 'Tudo em um só lugar', 'Um resumo do que importa. Cada ação sensível continua sendo confirmada no dispositivo.')}
       <div class="kpis">
@@ -1448,21 +1483,21 @@
     const h0 = head('Validadores', 'Stake e rede', 'Quem trava moeda como stake ajuda a validar a rede e pode ser penalizado se agir de má-fé. Cada ação é confirmada no dispositivo.');
     if (!k) return `${h0}<article class="card"><div class="row">${ico('spin', 'spin')}<span>Lendo…</span></div></article>`;
     if (!k.available) return `${h0}<article class="card">${callout('info', 'shield', 'Indisponível nesta versão', `<p>${esc(k.reason || 'O livro de economia ainda não está na rede.')}</p>`)}</article>`;
-    const unb = k.unbonding.map(([rel, amt]) => `<dt>${esc(String(amt))} moedas</dt><dd>${k.height >= rel ? chip('pronto para resgatar', 'ok', 'check') : chip(`libera no bloco ${rel} (faltam ${rel - k.height})`, 'warn')}</dd>`).join('');
+    const unb = k.unbonding.map(([rel, amt]) => `<dt>${esc(money(amt))} TEKO</dt><dd>${k.height >= rel ? chip('pronto para resgatar', 'ok', 'check') : chip(`libera no bloco ${rel} (faltam ${rel - k.height})`, 'warn')}</dd>`).join('');
     const total = k.validators.reduce((a, v) => a + v[1], 0);
     const phase = k.mode === 'node' ? founderCard(k) : '';
     return `${h0}
       ${phase}
       ${callout('warn', 'alert', 'Ambiente de teste', k.mode === 'node' ? '<p>Rede <strong>local</strong> de teste com consenso BFT (<code>make devnet</code>): moedas de <strong>teste</strong>, só na sua máquina. O que você vê aqui foi <strong>verificado por esta janela</strong> (certificados de cada bloco), não apenas informado por um nó.</p>' : '<p>O livro é local e as moedas são de <strong>teste</strong> (<code>make fund</code>). Em desenvolvimento cada transação é um bloco, por isso o prazo de saída é curto (3 blocos).</p>')}
       <div class="kpis">
-        <div class="kpi"><div class="kpi__label">Saldo livre</div><div class="kpi__val">${esc(String(k.balance))}</div></div>
-        <div class="kpi"><div class="kpi__label">Meu stake</div><div class="kpi__val">${esc(String(k.my_stake))}</div><div class="kpi__sub">${k.my_stake ? 'você é validador' : 'ainda não é validador'}</div></div>
+        <div class="kpi"><div class="kpi__label">Saldo livre</div><div class="kpi__val">${esc(money(k.balance))}</div></div>
+        <div class="kpi"><div class="kpi__label">Meu stake</div><div class="kpi__val">${esc(money(k.my_stake))}</div><div class="kpi__sub">${k.my_stake ? 'você é validador' : 'ainda não é validador'}</div></div>
         <div class="kpi"><div class="kpi__label">Penalidade</div><div class="kpi__val">${esc(String(k.slash_bps / 100))}%</div><div class="kpi__sub">por voto duplo comprovado</div></div>
       </div>
       <article class="card">
         <div class="card__head"><div class="card__ico card__ico--onca">${ico('stake')}</div><h2>Travar e sair</h2></div>
         <div class="fields">
-          <div class="field"><label for="f-stk">Valor</label><input class="input" id="f-stk" type="number" min="1" step="1" placeholder="ex.: 1000"></div>
+          <div class="field"><label for="f-stk">Valor (TEKO)</label><input class="input" id="f-stk" type="text" inputmode="decimal" autocomplete="off" placeholder="ex.: 1000" aria-describedby="f-stk-h"><div class="muted" id="f-stk-h" style="font-size:.8rem">${AMOUNT_HELP}</div></div>
         </div>
         <div class="row" style="flex-wrap:wrap">
           <button class="btn" data-act="stakebond">${ico('lock')}Travar stake</button>
@@ -1474,7 +1509,7 @@
       </article>
       <article class="card">
         <div class="card__head"><div class="card__ico card__ico--boto">${ico('users')}</div><h2>Validadores por stake</h2></div>
-        ${k.validators.length ? `<dl class="kv">${k.validators.map(([key, st, mine]) => `<dt class="mono">${esc(key)} ${mine ? chip('você', 'ok') : ''}</dt><dd>${k.founder_phase_active ? `<strong>fundador</strong> <span class="muted">(recebe as recompensas de bloco)</span>` : `<strong>${esc(String(st))}</strong> <span class="muted">(${total ? Math.round((st * 100) / total) : 0}% do poder de voto)</span>`}</dd>`).join('')}</dl>` : '<p class="muted">Ninguém travou stake ainda.</p>'}
+        ${k.validators.length ? `<dl class="kv">${k.validators.map(([key, st, mine]) => `<dt class="mono">${esc(key)} ${mine ? chip('você', 'ok') : ''}</dt><dd>${k.founder_phase_active ? `<strong>fundador</strong> <span class="muted">(recebe as recompensas de bloco)</span>` : `<strong>${esc(money(st))}</strong> <span class="muted">(${total ? Math.round((st * 100) / total) : 0}% do poder de voto)</span>`}</dd>`).join('')}</dl>` : '<p class="muted">Ninguém travou stake ainda.</p>'}
         <p class="muted">O poder de voto de cada validador no consenso (BFT) é proporcional ao stake; mais de 2/3 do stake precisa concordar para fechar um bloco.</p>
       </article>`;
   }
@@ -1484,20 +1519,20 @@
     if (k.founder_phase_active) {
       return `<article class="card">
         <div class="card__head"><div class="card__ico card__ico--onca">${ico('stake')}</div><h2>Fase de fundador</h2></div>
-        <p class="muted">No começo, <strong>só o validador fundador</strong> produz os blocos e as <strong>recompensas</strong> vão para a carteira do fundador (sem pré-mineração). Travando essas moedas como stake, a rede passa a ser validada por <strong>quem tem stake</strong>. A fase termina quando o stake total chega a <strong>${esc(String(k.founder_target))}</strong>.</p>
+        <p class="muted">No começo, <strong>só o validador fundador</strong> produz os blocos e as <strong>recompensas</strong> vão para a carteira do fundador (sem pré-mineração). Travando essas moedas como stake, a rede passa a ser validada por <strong>quem tem stake</strong>. A fase termina quando o stake total chega a <strong>${esc(money(k.founder_target))} TEKO</strong>.</p>
         <div class="meter" role="progressbar" aria-valuenow="${pct}" aria-valuemin="0" aria-valuemax="100"><span style="width:${pct}%"></span></div>
-        <p class="muted">${esc(String(k.total_stake))} de ${esc(String(k.founder_target))} (${pct}%) · bloco ${esc(String(k.height))}</p>
+        <p class="muted">${esc(money(k.total_stake))} de ${esc(money(k.founder_target))} TEKO (${pct}%) · bloco ${esc(String(k.height))}</p>
       </article>`;
     }
     return `<article class="card">
       <div class="card__head"><div class="card__ico card__ico--arara">${ico('check')}</div><h2>Fase de fundador encerrada</h2></div>
-      <p class="muted">Desde o stake total de ${esc(String(k.founder_target))}, os validadores são os que têm <strong>stake</strong>, com poder de voto proporcional. Bloco ${esc(String(k.height))}.</p>
+      <p class="muted">Desde o stake total de ${esc(money(k.founder_target))} TEKO, os validadores são os que têm <strong>stake</strong>, com poder de voto proporcional. Bloco ${esc(String(k.height))}.</p>
     </article>`;
   }
 
   async function stakeAct(action) {
-    const amount = Number(($('#f-stk') || {}).value || 0);
-    if (action !== 3 && (!Number.isInteger(amount) || amount <= 0)) { toast('Informe um valor inteiro maior que zero.'); return; }
+    const amount = action === 3 ? 0 : parseTeko(($('#f-stk') || {}).value);
+    if (action !== 3 && (!amount || amount <= 0)) { toast('Informe um valor válido maior que zero (até 6 casas decimais).'); return; }
     let r = null;
     await guarded(async () => { r = await call('stake_action', { action, amount: action === 3 ? 0 : amount }, { delay: 300 }); });
     if (r !== null) { toast(['', 'Stake travado.', 'Saída iniciada: aguarde o prazo.', 'Resgate concluído.'][action], 'ok'); S.stakeTried = false; S.assetsTried = false; S.walletTried = false; S.lastKey = ''; render(); loadStake(); }
@@ -1514,7 +1549,7 @@
   }
 
   function assetCard(a, mine) {
-    const price = `<input class="input" style="max-width:120px" id="px-${esc(a.id)}" type="number" min="1" placeholder="preço">`;
+    const price = `<input class="input" style="max-width:120px" id="px-${esc(a.id)}" type="text" inputmode="decimal" autocomplete="off" placeholder="preço em TEKO" aria-label="preço em TEKO">`;
     return `<div class="fw__item"><div>
         <h3>${esc(a.class)} / ${esc(a.id)} ${a.liens ? chip('PENHORADO', 'bad', 'lock') : ''}</h3>
         <p class="muted">versão ${esc(String(a.version))} · ${a.liens ? `${a.liens} gravame(s): não pode ser vendido` : 'sem gravames'}</p>
@@ -1535,13 +1570,13 @@
       ${callout('warn', 'alert', 'Ambiente de teste', '<p>O <strong>órgão registrador</strong> e a <strong>contraparte</strong> abaixo são <strong>simulados</strong> (chaves de teste em <code>dev/</code>) e o livro é local. Seu consentimento, porém, é assinado <strong>no seu dispositivo</strong>, que mostra o bem, as partes, o preço e a versão. Moedas de teste: <code>make fund</code>.</p>')}
       <article class="card">
         <div class="card__head"><div class="card__ico card__ico--onca">${ico('home')}</div><h2>Meu patrimônio</h2></div>
-        <p class="muted">Seu saldo: <strong>${esc(String(a.balance))}</strong> moedas de teste.</p>
+        <p class="muted">Seu saldo: <strong>${esc(money(a.balance))}</strong> TEKO de teste.</p>
         ${a.mine.length ? `<div class="fw">${a.mine.map((x) => assetCard(x, true)).join('')}</div>` : '<p class="muted">Você ainda não tem bens. Peça ao órgão simulado para registrar um bem de teste.</p>'}
         <div class="row"><button class="btn btn--ghost" data-act="assetreg" data-cp="0">${ico('badge')}Órgão: registrar bem de teste para mim</button></div>
       </article>
       <article class="card">
         <div class="card__head"><div class="card__ico card__ico--boto">${ico('users')}</div><h2>Contraparte simulada</h2></div>
-        <p class="muted">Outra pessoa de teste, para vender ou comprar. Saldo: <strong>${esc(String(a.counterparty_balance))}</strong> moedas.</p>
+        <p class="muted">Outra pessoa de teste, para vender ou comprar. Saldo: <strong>${esc(money(a.counterparty_balance))}</strong> TEKO.</p>
         <div class="screen"><div class="screen__label">Endereço da contraparte</div><div class="id-big" style="font-size:.8rem">${esc(a.counterparty_address)}</div></div>
         <div class="row"><button class="btn btn--ghost btn--sm" data-act="copy" data-text="${esc(a.counterparty_address)}">${ico('copy')}Copiar</button></div>
         ${a.counterparty_assets.length ? `<div class="fw">${a.counterparty_assets.map((x) => assetCard(x, false)).join('')}</div>` : '<p class="muted">A contraparte ainda não tem bens.</p>'}

@@ -41,6 +41,10 @@ pub trait World {
     fn balance(&self, who: &Address) -> u64 {
         teko_coin::balance(self.ledger(), who)
     }
+    /// How a person gets test coins in THIS world (shown when a buyer cannot pay).
+    fn funding_hint(&self) -> &'static str {
+        "use `make fund`"
+    }
     /// A fee that covers the per-byte price of a coin transfer.
     fn estimate_fee(&self, sender_key: &[u8], nonce: u64, to: &Address, amount: u64) -> u64 {
         let price = teko_coin::config(self.ledger()).map_or(0, |c| c.fee_per_byte);
@@ -303,8 +307,10 @@ pub fn trade_with_counterparty(
     }
     if econ.balance(&buyer) < price {
         return Err(format!(
-            "o comprador não tem saldo: precisa de {price}, tem {} (use `make fund`)",
-            econ.balance(&buyer)
+            "o comprador não tem saldo: precisa de {}, tem {} ({})",
+            teko_crypto::amount::format_amount(price),
+            teko_crypto::amount::format_amount(econ.balance(&buyer)),
+            econ.funding_hint()
         ));
     }
     let i = Intent::swap(

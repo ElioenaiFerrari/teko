@@ -918,7 +918,7 @@ fn sending_coins_is_signed_on_the_device_and_lands_in_the_devnet_economy() {
         .unwrap();
     assert_eq!(prompts.load(Ordering::SeqCst), 1);
     assert!(rig.hal.screens().iter().any(|s| {
-        s.title == "ENVIAR MOEDAS" && s.lines.iter().any(|l| l.contains("Valor: 2500"))
+        s.title == "ENVIAR MOEDAS" && s.lines.iter().any(|l| l.contains("Valor: 0,0025 TEKO"))
     }));
     econ.submit(tx).unwrap();
     assert_eq!(econ.balance(&friend), 2500);
@@ -967,7 +967,7 @@ fn an_asset_consent_is_signed_on_the_device_and_verified_by_the_client() {
         .unwrap();
     assert_eq!(prompts.load(Ordering::SeqCst), 1);
     assert!(rig.hal.screens().iter().any(|s| {
-        s.title == "VENDA DE BEM" && s.lines.iter().any(|l| l.contains("Preço: 750"))
+        s.title == "VENDA DE BEM" && s.lines.iter().any(|l| l.contains("Preço: 0,00075 TEKO"))
     }));
     assert_eq!(
         a.key,
@@ -1054,7 +1054,7 @@ fn selling_and_buying_an_asset_with_my_device_consent_in_the_devnet_world() {
     assert!(rig.hal.screens().iter().any(|s| {
         s.title == "VENDA DE BEM"
             && s.lines.iter().any(|l| l.contains("VENDEDOR"))
-            && s.lines.iter().any(|l| l.contains("Preço: 3000"))
+            && s.lines.iter().any(|l| l.contains("Preço: 0,003 TEKO"))
     }));
 
     // Buying it back: my device signs as the BUYER.

@@ -893,9 +893,9 @@ impl<H: Hal, R: Rng + CryptoRng> Device<H, R> {
         // What the user will read is built from the SAME values that get signed.
         let mut lines = Vec::from([String::from("Para:")]);
         lines.extend(wrap(to_address, 22));
-        lines.push(format!("Valor: {amount}"));
-        lines.push(format!("Taxa:  {fee}"));
-        lines.push(format!("Total: {total}"));
+        push_amount(&mut lines, "Valor:", amount);
+        push_amount(&mut lines, "Taxa: ", fee);
+        push_amount(&mut lines, "Total:", total);
         lines.push(format!("Rede:  {chain}"));
         self.confirm(
             ButtonKind::SignTransfer,
@@ -959,9 +959,9 @@ impl<H: Hal, R: Rng + CryptoRng> Device<H, R> {
         if act == STAKE_CLAIM {
             lines.push(String::from(what));
         } else {
-            lines.push(format!("{what}: {amount}"));
+            push_amount(&mut lines, &format!("{what}:"), amount);
         }
-        lines.push(format!("Taxa: {fee}"));
+        push_amount(&mut lines, "Taxa:", fee);
         lines.push(format!("Rede: {chain}"));
         if act == STAKE_BOND {
             lines.push(String::from("Sujeito a penalidade se"));
@@ -1040,7 +1040,7 @@ impl<H: Hal, R: Rng + CryptoRng> Device<H, R> {
         lines.push(String::from("Comprador:"));
         lines.extend(wrap(&m.to_address, 22));
         if kind == INTENT_SWAP {
-            lines.push(format!("Preço: {}", m.price));
+            push_amount(&mut lines, "Preço:", m.price);
         } else {
             lines.push(String::from("Sem pagamento (só o bem)"));
         }
@@ -2005,5 +2005,18 @@ fn resolve_predicate(
             Ok((c.name.clone(), format!("{} = {}", c.name, c.value)))
         }
         PredicateKind::Unspecified => Err(fail(ErrorCode::InvalidArgument, "predicado inválido")),
+    }
+}
+
+/// One screen line `"Label: 1.234,5 TEKO"` (exact, never rounded: ADR-0029);
+/// label and value go on separate lines when they do not fit in 28 columns.
+fn push_amount(lines: &mut Vec<String>, label: &str, ypy: u64) {
+    let value = teko_crypto::amount::format_amount(ypy);
+    let one = format!("{label} {value}");
+    if one.chars().count() <= 28 {
+        lines.push(one);
+    } else {
+        lines.push(String::from(label));
+        lines.push(format!("  {value}"));
     }
 }

@@ -77,6 +77,10 @@ impl World for NodeWorld {
         self.chain.ledger()
     }
 
+    fn funding_hint(&self) -> &'static str {
+        "na rede não há `make fund`: as moedas vêm das recompensas do fundador e de transferências; confira que FOUNDER é o endereço da sua Carteira"
+    }
+
     fn submit(&mut self, tx: Tx) -> Result<(), String> {
         let sender = tx.address();
         let nonce = tx.nonce;

@@ -79,7 +79,7 @@ cargo run -p issuer-cli -- dev-setup   # 1x: chaves de teste, firmware, fábrica
 cargo run -p device-emulator           # terminal 1: tela e botões do dispositivo (PIN aqui!)
 cargo run -p teko-suite                # terminal 2: a Suite (Tauri v2)
 make docs-check                        # confere links, imagens e crates no README
-make fund ADDR=tekow1… AMOUNT=1000    # moedas de TESTE na carteira (devnet local)
+make fund ADDR=tekow1… AMOUNT=1000    # TEKO de TESTE na carteira (devnet local; decimais ok; 1 TEKO = 1.000.000 ypy, ADR-0029)
 make diagramas                         # regenera os diagramas (docs/diagramas)
 make devnet FOUNDER=tekow1…            # (1ª vez) FOUNDER = sua carteira: recebe as recompensas do fundador (ADR-0028)
 make devnet-economy                    # economia BFT: altura, fase de fundador, validadores

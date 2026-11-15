@@ -2256,7 +2256,12 @@ fn a_transfer_is_shown_on_the_device_and_signs_as_a_valid_ledger_tx() {
     let sc = screens.iter().find(|s| s.title == "ENVIAR MOEDAS").unwrap();
     let text = sc.lines.join("");
     assert!(text.contains(&to), "{text}");
-    for needle in ["Valor: 500", "Taxa:  3", "Total: 503", "teko-devnet"] {
+    for needle in [
+        "Valor: 0,0005 TEKO",
+        "Taxa:  0,000003 TEKO",
+        "Total: 0,000503 TEKO",
+        "teko-devnet",
+    ] {
         assert!(sc.lines.iter().any(|l| l.contains(needle)), "{needle}");
     }
     assert!(hal.interim().iter().any(|r| matches!(
@@ -2451,7 +2456,7 @@ fn a_swap_signed_on_the_device_moves_the_asset_and_the_coin_in_the_real_ledger()
         .find(|s| s.title == "VENDA DE BEM")
         .unwrap();
     assert!(sc.lines.iter().any(|l| l.contains("VENDEDOR")));
-    assert!(sc.lines.iter().any(|l| l.contains("Preço: 4000")));
+    assert!(sc.lines.iter().any(|l| l.contains("Preço: 0,004 TEKO")));
     assert!(sc.lines.iter().any(|l| l.contains("imovel/matricula-1")));
     let seller_consent = Approval {
         key: c.public_key.clone(),
@@ -2587,7 +2592,7 @@ fn a_stake_is_shown_on_the_device_and_becomes_a_validator_in_the_real_ledger() {
         .into_iter()
         .find(|s| s.title == "TRAVAR STAKE")
         .unwrap();
-    assert!(sc.lines.iter().any(|x| x.contains("Travar: 3000")));
+    assert!(sc.lines.iter().any(|x| x.contains("Travar: 0,003 TEKO")));
     assert_eq!(teko_coin::stake_of(&l, &me), 3000);
     assert_eq!(teko_coin::validators(&l).len(), 1);
     // unbond, then claim too early fails, later works

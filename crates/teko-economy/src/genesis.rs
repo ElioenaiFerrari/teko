@@ -1,4 +1,5 @@
 use teko_coin::CoinConfig;
+use teko_crypto::amount::YPY_PER_TEKO;
 use teko_crypto::{hex, parse_wallet_address, wallet_address};
 use teko_ledger::{Address, Ledger};
 
@@ -15,19 +16,20 @@ pub struct ClassSpec {
 /// Text format (`economy.txt`), one `key=value` per line, `#` comments:
 /// ```text
 /// chain_id=teko-devnet-1
-/// cap=20000000
-/// initial_reward=50000
-/// halving_interval=100
+/// units=ypy6                                  (amounts below are in ypy: 1 TEKO = 1.000.000 ypy)
+/// cap=21000000000000
+/// initial_reward=50000000
+/// halving_interval=210000
 /// fee_per_byte=1
 /// unbonding_period=20
 /// slash_bps=1000
-/// founder_target=1000000
-/// min_total_stake=100000
-/// min_validator_stake=10000
+/// founder_target=1000000000
+/// min_total_stake=100000000
+/// min_validator_stake=10000000
 /// max_validators=16
 /// founder=<hex consensus key> tekow1…        (the OWNER address gets the rewards)
 /// class=imovel 2 <hex key> <hex key> <hex key>
-/// alloc=tekow1… 5000                          (TEST networks only; normally absent)
+/// alloc=tekow1… 5000000000                          (TEST networks only; normally absent)
 /// ```
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct EconomyGenesis {
@@ -39,14 +41,16 @@ pub struct EconomyGenesis {
 }
 
 impl EconomyGenesis {
-    /// Devnet/testnet parameters: the founder reaches N = 1.000.000 in a few dozen blocks.
+    /// Devnet/testnet parameters (ADR-0029, amounts in ypy): Bitcoin-style cap (21M TEKO)
+    /// and reward (50 TEKO). The LOCAL devnet uses N = 1.000 TEKO so the founder phase ends
+    /// in ~20 blocks; the documented default for a testnet is 1.000.000 TEKO.
     pub fn test_defaults(chain_id: &str, founder_key: Vec<u8>, owner: Address) -> Self {
         Self {
             chain_id: chain_id.to_string(),
             coin: CoinConfig {
-                cap: 20_000_000,
-                initial_reward: 50_000,
-                halving_interval: 100,
+                cap: 21_000_000 * YPY_PER_TEKO,
+                initial_reward: 50 * YPY_PER_TEKO,
+                halving_interval: 210_000,
                 // Fees are OFF in the local test network (the simulated registrar and
                 // counterparty have no coins to pay them); the fee mechanism itself is
                 // covered by the coin module's tests.
@@ -55,9 +59,9 @@ impl EconomyGenesis {
                 slash_bps: 1000,
                 faucet_amount: 0,
                 faucet_cooldown: 0,
-                founder_target: 1_000_000,
-                min_total_stake: 100_000,
-                min_validator_stake: 10_000,
+                founder_target: 1_000 * YPY_PER_TEKO,
+                min_total_stake: 100 * YPY_PER_TEKO,
+                min_validator_stake: 10 * YPY_PER_TEKO,
                 max_validators: 16,
             },
             founders: vec![(founder_key, owner)],
@@ -91,7 +95,7 @@ impl EconomyGenesis {
     pub fn to_text(&self) -> String {
         let c = &self.coin;
         let mut s = format!(
-            "# Economia da rede de teste (parâmetros públicos, sem segredos)\nchain_id={}\ncap={}\ninitial_reward={}\nhalving_interval={}\nfee_per_byte={}\nunbonding_period={}\nslash_bps={}\nfounder_target={}\nmin_total_stake={}\nmin_validator_stake={}\nmax_validators={}\n",
+            "# Economia da rede de teste (parâmetros públicos, sem segredos)\nunits=ypy6\nchain_id={}\ncap={}\ninitial_reward={}\nhalving_interval={}\nfee_per_byte={}\nunbonding_period={}\nslash_bps={}\nfounder_target={}\nmin_total_stake={}\nmin_validator_stake={}\nmax_validators={}\n",
             self.chain_id,
             c.cap,
             c.initial_reward,
@@ -137,6 +141,7 @@ impl EconomyGenesis {
             classes: Vec::new(),
             allocations: Vec::new(),
         };
+        let mut saw_units = false;
         let num = |v: &str, k: &str| -> Result<u64, String> {
             v.parse().map_err(|_| format!("{k}: número inválido"))
         };
@@ -150,6 +155,8 @@ impl EconomyGenesis {
                 .ok_or_else(|| format!("linha {}: esperado chave=valor", n + 1))?;
             let (k, v) = (k.trim(), v.trim());
             match k {
+                "units" if v == "ypy6" => saw_units = true,
+                "units" => return Err(format!("units={v}: escala desconhecida (esperado ypy6)")),
                 "chain_id" => g.chain_id = v.to_string(),
                 "cap" => g.coin.cap = num(v, k)?,
                 "initial_reward" => g.coin.initial_reward = num(v, k)?,
@@ -203,6 +210,9 @@ impl EconomyGenesis {
                 }
                 other => return Err(format!("linha {}: chave desconhecida `{other}`", n + 1)),
             }
+        }
+        if !saw_units {
+            return Err("economy.txt na escala antiga (sem `units=ypy6`, ADR-0029): recrie a rede com `make devnet-reset FOUNDER=tekow1…` e `make devnet`".into());
         }
         if g.chain_id.is_empty() {
             return Err("falta chain_id".into());

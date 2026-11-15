@@ -131,10 +131,12 @@ pub const ECONOMY_FILE: &str = "economy.txt";
 /// validator 0 (its consensus key is the node key) and the rewards go to `founder_owner`
 /// (the wallet address of the product owner). Without an owner the rewards go to the
 /// node's own account, which nobody can spend from (a warning for the caller).
+/// `founder_target` (ypy) overrides N (local devnet default: 1.000 TEKO).
 /// Also creates the TEST registrar keys of the asset class `imovel` (2 of 3).
 pub fn init_economy(
     dir: &Path,
     founder_owner: Option<teko_ledger::Address>,
+    founder_target: Option<u64>,
     force: bool,
 ) -> Result<teko_economy::EconomyGenesis, NodeError> {
     let path = dir.join(ECONOMY_FILE);
@@ -157,6 +159,9 @@ pub fn init_economy(
         founder_key,
         owner,
     );
+    if let Some(n) = founder_target {
+        g.coin.founder_target = n;
+    }
     let mut rng = UnwrapErr(rand::rngs::SysRng);
     let mut regs = Vec::new();
     for i in 0..3 {

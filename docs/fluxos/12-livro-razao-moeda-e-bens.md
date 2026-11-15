@@ -38,6 +38,10 @@ Validadores (stake + histórico), emissor (elegibilidade de eleitores), órgão 
 
 **Para ver funcionando:** `make coin-demo` roda alguns blocos em memória e imprime saldos, stake, recompensa, taxa, penalidade e a conservação da oferta. Ainda não há moeda na devnet nem na Suite (M5 e M6).
 
+## Unidade: TEKO e ypy ([ADR-0029](../adr/0029-unidade-teko-e-ypy.md))
+
+O livro guarda **inteiros em ypy**; **1 TEKO = 1.000.000 ypy** (6 casas decimais, como o Bitcoin tem satoshis). Telas, CLIs e a Suite mostram e leem **TEKO** em pt-BR (`1.234,5 TEKO`) com aritmética inteira exata (`teko_crypto::amount`), sem arredondar; entrada com mais de 6 casas é recusada. Parâmetros de teste: teto 21.000.000 TEKO, recompensa 50 TEKO, *halving* a cada 210.000 blocos; N = 1.000 TEKO na devnet local (1.000.000 TEKO é o padrão documentado de testnet). Limite honesto: a taxa por byte é 0 na devnet local.
+
 ## Fase de fundador e validação por stake (M6a, [ADR-0028](../adr/0028-economia-sobre-bft-e-fase-de-fundador.md))
 
 ![Da fase de fundador à validação por stake: o fundador valida sozinho, o dono trava as recompensas como stake e, ao chegar a N, a fase termina e os validadores passam a ser os que têm stake](../diagramas/fundador-fases.png)

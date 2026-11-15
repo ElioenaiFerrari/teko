@@ -27,7 +27,7 @@ NODE = target/debug/teko-node
 
 devnet: ## Sobe a rede de TESTE local (votos PoA 2-de-3 + economia BFT). Primeira vez: make devnet FOUNDER=tekow1… (sua carteira)
 	$(CARGO) build -q -p teko-node
-	@test -f $(NET)/network.txt || $(NODE) init --dir $(NET) --network devnet $(if $(FOUNDER),--founder $(FOUNDER))
+	@test -f $(NET)/network.txt || $(NODE) init --dir $(NET) --network devnet $(if $(FOUNDER),--founder $(FOUNDER)) $(if $(FOUNDER_TARGET),--founder-target $(FOUNDER_TARGET))
 	@$(NODE) stop --dir $(NET) >/dev/null 2>&1; \
 	for i in 0 1 2; do $(NODE) run --dir $(NET) --index $$i >$(NET)/node-$$i/node.log 2>&1 & done; \
 	sleep 1; $(NODE) status --dir $(NET)
@@ -90,7 +90,7 @@ reset: ## Volta o dispositivo a "virgem" e esquece cidadãos/registros/revogaç�
 demo: ## Emulador com botões AUTOMÁTICOS (só teste/demo, não protege nada). PIN=482913
 	$(CARGO) run -q -p device-emulator --features test-buttons -- --auto-pin $(PIN)
 
-fund: ## TESTE (devnet): aloca moedas de teste a uma carteira. Uso: make fund ADDR=tekow1… AMOUNT=1000
+fund: ## TESTE (devnet): aloca moedas de teste a uma carteira. Uso: make fund ADDR=tekow1… AMOUNT=1000   (em TEKO; aceita decimais: AMOUNT=0,5)
 	$(CARGO) run -q -p issuer-cli -- economy-fund --address $(ADDR) --amount $(or $(AMOUNT),1000)
 
 issuer-help: ## Ajuda da autoridade simulada (issuer-cli)

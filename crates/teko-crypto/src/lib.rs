@@ -9,6 +9,7 @@
 
 extern crate alloc;
 
+pub mod amount;
 pub mod credential;
 mod error;
 pub mod hex;

@@ -509,8 +509,11 @@ async fn send_impl(
         let needed = amount.saturating_add(fee);
         if econ.balance(&mine) < needed {
             return Err(v(format!(
-                "saldo insuficiente: precisa de {needed} (valor {amount} + taxa {fee}), tem {}",
-                econ.balance(&mine)
+                "saldo insuficiente: precisa de {} (valor {} + taxa {}), tem {}",
+                teko_crypto::amount::format_amount(needed),
+                teko_crypto::amount::format_amount(amount),
+                teko_crypto::amount::format_amount(fee),
+                teko_crypto::amount::format_amount(econ.balance(&mine))
             )));
         }
         let chain = econ.chain_id().to_string();
@@ -900,12 +903,16 @@ async fn stake_action_impl(
         let have = econ.balance(&me);
         if action == 1 && have < amount.saturating_add(fee) {
             return Err(v(format!(
-                "saldo insuficiente: precisa de {} (valor + taxa), tem {have}",
-                amount.saturating_add(fee)
+                "saldo insuficiente: precisa de {} (valor + taxa), tem {}",
+                teko_crypto::amount::format_amount(amount.saturating_add(fee)),
+                teko_crypto::amount::format_amount(have)
             )));
         }
         if action != 1 && have < fee {
-            return Err(v(format!("saldo insuficiente para a taxa ({fee})")));
+            return Err(v(format!(
+                "saldo insuficiente para a taxa ({})",
+                teko_crypto::amount::format_amount(fee)
+            )));
         }
         let chain = econ.chain_id().to_string();
         let tx = c.wallet_sign_stake(&chain, action, amount, fee, nonce)?;

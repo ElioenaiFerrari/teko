@@ -30,7 +30,7 @@ USO:
       Bloqueia já um dispositivo perdido/roubado (a pessoa ainda pode pedir reemissão depois).
   issuer-cli dev-forget [--dir dev]
       TESTE: esquece cidadãos/registros/revogações (use junto com `make reset`).
-  issuer-cli economy-fund [--dir dev] --address tekow1… --amount N
+  issuer-cli economy-fund [--dir dev] --address tekow1… --amount TEKO   (ex.: 1000 ou 0,5)
       TESTE (devnet): aloca N moedas de TESTE ao endereço da carteira (grava dev/economy.txt).
   issuer-cli trust [--dir dev]
   issuer-cli verify-firmware [--dir dev] --manifest ARQ --blob ARQ [--installed N]
@@ -177,15 +177,16 @@ fn run(args: Vec<String>) -> Result<(), String> {
             let address = flags
                 .get("address")
                 .ok_or_else(|| "--address é obrigatório".to_string())?;
-            let amount: u64 = flags
-                .get("amount")
-                .ok_or_else(|| "--amount é obrigatório".to_string())?
-                .parse()
-                .map_err(|_| "--amount inválido".to_string())?;
+            let amount =
+                teko_crypto::amount::parse_amount(flags.get("amount").ok_or_else(|| {
+                    "--amount é obrigatório (em TEKO, ex.: 1000 ou 0,5)".to_string()
+                })?)
+                .map_err(|x| format!("--amount: {x}"))?;
             let path = dir.join(teko_coin::devnet::ECONOMY_FILE);
             teko_coin::devnet::append_allocation(&path, address, amount)?;
             println!(
-                "Alocadas {amount} moedas de TESTE (devnet) para {address} em {}",
+                "Alocados {} de TESTE (devnet) para {address} em {}",
+                teko_crypto::amount::format_amount(amount),
                 path.display()
             );
         }

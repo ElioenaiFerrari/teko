@@ -24,7 +24,7 @@ pub const PROPOSER: Address = [0xEE; 32];
 /// Parameters of the devnet economy (no rewards: only the listed allocations exist).
 pub fn devnet_config() -> CoinConfig {
     CoinConfig {
-        cap: 1_000_000_000,
+        cap: 21_000_000 * teko_crypto::amount::YPY_PER_TEKO,
         initial_reward: 0,
         halving_interval: 1_000_000,
         fee_per_byte: 1,

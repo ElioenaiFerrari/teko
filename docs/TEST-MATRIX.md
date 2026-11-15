@@ -184,6 +184,7 @@ Legenda: **P** = `proptest` (muitos casos), **U** = unitário, **E** = ponta a p
 |---|---|
 | Faucet e alocações só na devnet; gênese inválida recusada | coin: `genesis_rules` |
 | A recompensa cai pela metade e vai ao proponente; **o teto nunca é ultrapassado** | coin: `reward_halves_and_is_credited_to_the_proposer`, `the_cap_is_never_exceeded` |
+| Valores em TEKO/ypy: `parse(format(x)) == x` (inclusive no teto); mais de 6 casas recusadas; a tela do dispositivo mostra o valor exato do `u64` assinado, sem arredondar (ADR-0029) | crypto (proptest): `amount::tests::roundtrip`, `roundtrip_any`, `parses`; device-core `tests.rs` (`Valor: 0,0005 TEKO`…) |
 | Taxa por byte: abaixo do mínimo recusada; paga ao proponente; sem saldo recusada | coin: `fees_are_priced_per_byte_and_paid_to_the_proposer` |
 | Transferência não cria nem destrói moeda; saldo insuficiente e valor zero recusados | coin: `transfers_move_funds_and_refuse_overdraft_and_zero` |
 | Stake, desvinculação e resgate só após o prazo | coin: `stake_unbonding_and_claim` |

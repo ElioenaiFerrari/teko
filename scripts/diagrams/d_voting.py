@@ -73,3 +73,24 @@ def dkg_ceremony():
     d.sequence(A, M, notas=N, passo=36)
     d.legend([(BOTO, "publicação no quadro", False), (MUTED, "canal entre nós", False)])
     return d
+
+
+def board_verification():
+    d = D("board-verification", 1100, 520, "Verificação do quadro: em paralelo e em passos", "As provas são conferidas em várias threads; a contagem segue a ordem do quadro", "VOTAÇÃO")
+    d.arrow([(230, 178), (300, 178)], "default", label="lotes", at=(265, 164))
+    d.arrow([(520, 178), (590, 178)], "ok", label="vereditos", at=(555, 164))
+    d.arrow([(810, 178), (880, 178)], "default", label="em ordem", at=(845, 164))
+    d.arrow([(990, 216), (990, 300)], "default", label="lê", at=(1020, 258))
+    d.arrow([(880, 338), (810, 338)], "link", label="mostra", at=(845, 324))
+    d.arrow([(410, 300), (410, 216)], "onca", dashed=True, label="dispara", at=(445, 258))
+    d.node(20, 140, 210, 76, "Quadro", "6.640 entradas (nós)", "boto", "verificado em blocos")
+    d.node(300, 140, 220, 76, "Lote de 256", "assinaturas, provas, tokens", "plain", "puro")
+    d.node(590, 140, 220, 76, "N threads", "confere em paralelo", "focal", "21,8 s → 3,7 s")
+    d.node(880, 140, 200, 76, "Contagem", "uma thread, em ordem", "ok", "38 ms")
+    d.node(880, 300, 200, 76, "Estado único", "compartilhado e em passos", "link", "Resultados + Exploração")
+    d.node(300, 300, 220, 76, "Aquecimento", "ao abrir a Suite", "onca", "em segundo plano")
+    d.node(590, 300, 220, 76, "Barra de progresso", "3.200 de 6.640 (48%)", "plain", "na tela")
+    d.text(20, 420, "A ordem do quadro continua mandando: a primeira cédula do eleitor vale e as repetidas são rejeitadas. O veredito de uma cédula só é usado se for do mesmo conteúdo", 11, MUTED)
+    d.text(20, 440, "e da mesma chave da eleição em vigor; senão a conferência é refeita. O resultado é idêntico ao da conferência sequencial (testado).", 11, MUTED)
+    d.legend([(MUTED, "fluxo", False), (GREEN, "vereditos", False), (LINK, "estado", False)])
+    return d

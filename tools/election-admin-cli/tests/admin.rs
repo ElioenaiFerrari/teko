@@ -4,7 +4,7 @@
 use std::fs;
 use std::time::Duration;
 
-use election_admin::{Admin, SIM_MARKER, feed_new, new_tallier, tally_board};
+use election_admin::{Admin, SIM_MARKER, feed_new, feed_step_with, new_tallier, tally_board};
 use issuer_cli::{Issuer, scratch_dir};
 use teko_bulletin::{BulletinBoard, FileBoard};
 use teko_crypto::{public_key_bytes, voter::derive_voter_key};
@@ -295,5 +295,69 @@ fn at_the_deadline_governance_closes_the_contest_and_the_log_locks_the_vote() {
         t.ignored_governance, 0,
         "the closing is a valid signed step"
     );
+    let _ = fs::remove_dir_all(admin.dir());
+}
+
+/// A board with many ballots of several kinds (valid, duplicate, unregistered, not open).
+fn busy_board(tag: &str, voters: u8) -> (Admin, teko_bulletin::FileBoard) {
+    let admin = setup(tag);
+    let m = manifest(&admin);
+    for root in 1..=voters {
+        register(&admin, &m, "governador-sp", root);
+        admin
+            .submit_ballot(&real_ballot(&m, "governador-sp", root, u32::from(root) % 3))
+            .unwrap();
+        if root % 5 == 0 {
+            // the same voter again: a duplicate
+            admin
+                .submit_ballot(&real_ballot(&m, "governador-sp", root, 1))
+                .unwrap();
+        }
+        if root % 7 == 0 {
+            // never registered for the President: refused
+            admin
+                .submit_ballot(&real_ballot(&m, "presidente", root, 0))
+                .unwrap();
+        }
+    }
+    let (board, _) = FileBoard::open_tolerant(admin.board_path()).unwrap();
+    (admin, board)
+}
+
+#[test]
+fn checking_ballots_on_many_threads_gives_the_sequential_result() {
+    let (admin, board) = busy_board("par", 60);
+    let want = tally_board(admin.policy(), &board);
+    assert!(want.contest("governador-sp").unwrap().accepted >= 50);
+    assert!(want.contest("governador-sp").unwrap().rejected.duplicate > 0);
+    for threads in [1usize, 2, 4, 8] {
+        let mut t = new_tallier(admin.policy());
+        let n = feed_step_with(&mut t, &board, u64::MAX, threads);
+        assert_eq!(n, board.len(), "{threads} threads");
+        assert_eq!(t.snapshot(), want, "{threads} threads");
+    }
+    let _ = fs::remove_dir_all(admin.dir());
+}
+
+#[test]
+fn feeding_in_steps_reports_progress_and_ends_at_the_same_state() {
+    let (admin, board) = busy_board("steps", 30);
+    let want = tally_board(admin.policy(), &board);
+    let mut t = new_tallier(admin.policy());
+    let mut last = 0;
+    let mut steps = 0;
+    while last < board.len() {
+        let now = feed_step_with(&mut t, &board, 7, 4);
+        assert!(
+            now > last && now <= last + 7,
+            "each step moves at most 7 entries"
+        );
+        last = now;
+        steps += 1;
+    }
+    assert!(steps > 3, "the walk takes several steps");
+    assert_eq!(t.snapshot(), want);
+    // already caught up: nothing more to do
+    assert_eq!(feed_step_with(&mut t, &board, 7, 4), board.len());
     let _ = fs::remove_dir_all(admin.dir());
 }

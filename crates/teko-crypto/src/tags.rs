@@ -38,6 +38,8 @@ pub const BALLOT_SUM_PROOF: &str = "teko/v2/ballot-sum-proof";
 pub const DECRYPT_PROOF: &str = "teko/v2/decrypt-proof";
 pub const DKG_POP: &str = "teko/v2/dkg-pop";
 pub const BALLOT_CT: &str = "teko/v2/ballot-ciphertext";
+/// Identifies a ballot payload in a pre-verification (it is never signed).
+pub const BALLOT_PRECHECK: &str = "teko/v2/ballot-precheck";
 pub const BFT_VOTE: &str = "teko/v2/bft-vote";
 pub const BFT_PROPOSAL: &str = "teko/v2/bft-proposal";
 pub const BFT_BLOCK: &str = "teko/v2/bft-block";

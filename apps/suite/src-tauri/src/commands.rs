@@ -2,7 +2,7 @@ use std::fs;
 use std::sync::{Arc, Mutex, MutexGuard, TryLockError};
 use std::time::Duration;
 
-use election_admin::{Admin, feed_new};
+use election_admin::{Admin, AnyBoard, feed_step};
 #[cfg(feature = "dev-simulation")]
 use issuer_cli::{ISSUER_NAME, Issuer, Subject};
 #[cfg(feature = "dev-simulation")]
@@ -26,10 +26,94 @@ type Client = DeviceClient<TcpTransport>;
 pub struct SuiteInner {
     pub client: Mutex<Option<Client>>,
     pub addr: String,
-    /// Incremental tally for the live results view.
-    /// Incremental tally, keyed by the FIRST entry of the board it was built from, so a
-    /// different chain/election (reset, new network) never reuses stale state.
-    pub results: Mutex<Option<(teko_bulletin::Hash, Tallier)>>,
+    /// The tally of the board, SHARED by the live results and the public explorer and
+    /// advanced in steps (also by a background warm-up), so neither screen replays the
+    /// board and a step never blocks the UI for long. Keyed by the FIRST entry of the
+    /// board it was built from, so a different chain/election (reset, new network) never
+    /// reuses stale state.
+    pub board: Mutex<Option<BoardState>>,
+}
+
+pub struct BoardState {
+    first: teko_bulletin::Hash,
+    tallier: Tallier,
+}
+
+/// Entries verified per step (a step takes well under a second on several cores).
+const BOARD_STEP: u64 = 400;
+
+/// What a screen needs after one step over the shared tally.
+struct Walk {
+    board: AnyBoard,
+    snap: teko_election::ElectionTally,
+    manifest: Option<teko_election::ElectionManifest>,
+    /// Entries verified so far, of `board.len()`.
+    verified: u64,
+}
+
+/// Prints a timing line in the terminal that runs the Suite when something is slow, so
+/// it is visible where the time goes.
+fn log_slow(what: &str, started: std::time::Instant, detail: impl FnOnce() -> String) {
+    let took = started.elapsed();
+    if took >= Duration::from_millis(300) {
+        eprintln!("[suite] {what}: {took:.1?} ({})", detail());
+    }
+}
+
+/// Reads the board (a verified replica of the network, incremental) and moves the shared
+/// tally forward by at most `step` entries.
+fn walk_board(suite: &Suite, admin: &Admin, step: u64) -> Result<Walk, String> {
+    let board = admin
+        .read_board()
+        .map_err(|e| format!("quadro ilegível: {e}"))?;
+    if board.is_empty() {
+        return Err("O quadro de avisos ainda está vazio: publique a eleição.".into());
+    }
+    let mut guard = suite.board.lock().unwrap_or_else(|e| e.into_inner());
+    let first = board.entry(0).map_or([0; 32], |e| e.leaf_hash());
+    if guard
+        .as_ref()
+        .is_some_and(|s| s.first != first || s.tallier.consumed() > board.len())
+    {
+        *guard = None;
+    }
+    let st = guard.get_or_insert_with(|| BoardState {
+        first,
+        tallier: admin.new_tallier(),
+    });
+    let (started, before) = (std::time::Instant::now(), st.tallier.consumed());
+    feed_step(&mut st.tallier, &board, step);
+    let verified = st.tallier.consumed();
+    log_slow("quadro", started, || {
+        format!(
+            "+{} entradas verificadas, {verified} de {}",
+            verified - before,
+            board.len()
+        )
+    });
+    Ok(Walk {
+        snap: st.tallier.snapshot(),
+        manifest: st.tallier.manifest().cloned(),
+        verified,
+        board,
+    })
+}
+
+/// Keeps the shared tally up to date in the background from the moment the Suite opens,
+/// so by the time Results or the Explorer is opened the board is usually verified
+/// already. Idle (and cheap) when there is nothing new.
+pub fn spawn_board_warmup(suite: Suite) {
+    std::thread::spawn(move || {
+        loop {
+            let behind = match Admin::open(resolve_dev_dir()) {
+                Ok(admin) => walk_board(&suite, &admin, BOARD_STEP)
+                    .map(|w| w.verified < w.board.len())
+                    .unwrap_or(false),
+                Err(_) => false,
+            };
+            std::thread::sleep(Duration::from_millis(if behind { 10 } else { 2_000 }));
+        }
+    });
 }
 
 pub type Suite = Arc<SuiteInner>;
@@ -416,9 +500,30 @@ struct EconCtx {
 fn economy_open(dev: &std::path::Path) -> Result<EconCtx, String> {
     use teko_assets::devnet::{self, Cast};
     let net = dev.join("net");
-    if net.join(teko_node::ECONOMY_FILE).exists()
-        && let Ok(w) = teko_node::NodeWorld::open(&net)
-    {
+    let opened = if net.join(teko_node::ECONOMY_FILE).exists() {
+        let started = std::time::Instant::now();
+        let before = teko_node::NodeWorld::full_syncs();
+        let r = teko_node::NodeWorld::open(&net);
+        log_slow("economia", started, || {
+            if teko_node::NodeWorld::full_syncs() > before {
+                "cadeia verificada do zero".to_string()
+            } else {
+                "só os blocos novos".to_string()
+            }
+        });
+        match r {
+            Ok(w) => Some(w),
+            // say WHY the network world is not used (an old chain, nodes down...) instead
+            // of silently showing the local test file
+            Err(e) => {
+                eprintln!("[suite] economia da rede indisponível: {e}");
+                None
+            }
+        }
+    } else {
+        None
+    };
+    if let Some(w) = opened {
         let mut cast = Cast::load(dev)?.with_store(net.join(devnet::METADATA_DIR));
         for class in devnet::CLASSES {
             cast = cast.with_registrars(class, teko_node::load_class_registrar_keys(&net, class));
@@ -1694,6 +1799,10 @@ pub struct ResultsReply {
     head_root: String,
     ignored_governance: u64,
     contests: Vec<ContestView>,
+    /// Board entries verified so far and in total: while `verified < total` the numbers
+    /// are those of the verified part.
+    verified: u64,
+    total: u64,
 }
 
 fn unavailable(reason: &str) -> ResultsReply {
@@ -1709,6 +1818,8 @@ fn unavailable(reason: &str) -> ResultsReply {
         head_root: String::new(),
         ignored_governance: 0,
         contests: Vec::new(),
+        verified: 0,
+        total: 0,
     }
 }
 
@@ -1763,27 +1874,11 @@ pub async fn results_snapshot(suite: State<'_, Suite>) -> Result<ResultsReply, U
                 let _ = admin.close_due(now);
             }
         }
-        let board = match admin.read_board() {
-            Ok(b) => b,
-            Err(e) => return unavailable(&format!("quadro ilegível: {e}")),
+        let walk = match walk_board(&suite, &admin, BOARD_STEP) {
+            Ok(w) => w,
+            Err(e) => return unavailable(&e),
         };
-        if board.is_empty() {
-            return unavailable("O quadro de avisos ainda está vazio: publique a eleição.");
-        }
-        let mut guard = suite.results.lock().unwrap_or_else(|e| e.into_inner());
-        // A different board (reset, new network or election) invalidates the incremental
-        // state: it is tied to the first entry, and a shrunk board is detected too.
-        let first = board.entry(0).map_or([0; 32], |e| e.leaf_hash());
-        if guard
-            .as_ref()
-            .is_some_and(|(f, t)| *f != first || t.consumed() > board.len())
-        {
-            *guard = None;
-        }
-        let (_, tallier) = guard.get_or_insert_with(|| (first, admin.new_tallier()));
-        feed_new(tallier, &board);
-        let t = tallier.snapshot();
-        let manifest = tallier.manifest().cloned();
+        let (t, manifest, board) = (walk.snap, walk.manifest, walk.board);
         let now = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .map_or(0, |d| d.as_secs());
@@ -1861,6 +1956,8 @@ pub async fn results_snapshot(suite: State<'_, Suite>) -> Result<ResultsReply, U
             head_root: hex::encode(&board.root()),
             ignored_governance: t.ignored_governance,
             contests,
+            verified: walk.verified,
+            total: board.len(),
         }
     })
     .await
@@ -1915,6 +2012,10 @@ pub struct ExplorerReply {
     governance: Vec<GovernanceStep>,
     /// The validators' key ceremony, re-verified here (None if the election has no encrypted ballots).
     ceremony: Option<CeremonyView>,
+    /// Board entries verified so far and in total (the screen shows a progress bar
+    /// while `verified < total`).
+    verified: u64,
+    total: u64,
 }
 
 #[derive(Serialize)]
@@ -1939,6 +2040,8 @@ fn explorer_unavailable(reason: &str) -> ExplorerReply {
         contests: Vec::new(),
         governance: Vec::new(),
         ceremony: None,
+        verified: 0,
+        total: 0,
     }
 }
 
@@ -1946,24 +2049,20 @@ fn explorer_unavailable(reason: &str) -> ExplorerReply {
 /// candidates, calendar and the signed governance decisions in log order. It
 /// replays the log itself (M-of-N checked), so nothing here is taken on trust.
 #[tauri::command]
-pub async fn explorer_snapshot() -> Result<ExplorerReply, UiError> {
+pub async fn explorer_snapshot(suite: State<'_, Suite>) -> Result<ExplorerReply, UiError> {
+    let suite = suite.inner().clone();
     tauri::async_runtime::spawn_blocking(move || {
         let admin = match Admin::open(resolve_dev_dir()) {
             Ok(a) => a,
             Err(e) => return explorer_unavailable(&e.to_string()),
         };
-        let board = match admin.read_board() {
-            Ok(b) => b,
-            Err(e) => return explorer_unavailable(&format!("quadro ilegível: {e}")),
+        // the SAME verified tally as the live results (not a replay of the whole board)
+        let walk = match walk_board(&suite, &admin, BOARD_STEP) {
+            Ok(w) => w,
+            Err(e) => return explorer_unavailable(&e),
         };
-        if board.is_empty() {
-            return explorer_unavailable(
-                "O quadro de avisos ainda está vazio: publique a eleição.",
-            );
-        }
-        let mut t = admin.new_tallier();
-        feed_new(&mut t, &board);
-        let (Some(m), snap) = (t.manifest().cloned(), t.snapshot()) else {
+        let (board, snap, verified) = (walk.board, walk.snap, walk.verified);
+        let Some(m) = walk.manifest else {
             return explorer_unavailable("Nenhuma eleição válida no quadro.");
         };
         let m_tally_key = m.tally_key.clone();
@@ -2061,6 +2160,8 @@ pub async fn explorer_snapshot() -> Result<ExplorerReply, UiError> {
                     None => views.into_iter().next(),
                 }
             },
+            verified,
+            total: board.len(),
         }
     })
     .await

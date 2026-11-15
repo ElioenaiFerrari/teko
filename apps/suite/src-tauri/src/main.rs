@@ -15,8 +15,10 @@ fn main() {
     let suite: Suite = Arc::new(SuiteInner {
         client: Mutex::new(None),
         addr,
-        results: Mutex::new(None),
+        board: Mutex::new(None),
     });
+    // verify the election board in the background from the start (ADR-0033)
+    commands::spawn_board_warmup(suite.clone());
     let result = tauri::Builder::default()
         .manage(suite)
         .invoke_handler(tauri::generate_handler![

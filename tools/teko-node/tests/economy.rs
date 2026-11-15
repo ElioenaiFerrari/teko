@@ -18,6 +18,9 @@ use teko_node::{
     init_network, load_economy, load_network, load_validator_key, node_dir,
 };
 
+/// `NodeWorld` keeps a process-wide cache and a counter: the tests that use it take turns.
+static WORLD_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
 fn free_port_base() -> u16 {
     use std::sync::atomic::{AtomicU16, Ordering};
     static NEXT: AtomicU16 = AtomicU16::new(0);
@@ -238,6 +241,7 @@ fn each_asset_class_has_its_own_organ_and_a_vehicle_registers_through_the_nodes(
     use teko_crypto::asset_meta;
     use teko_node::{NodeWorld, load_class_registrar_keys};
 
+    let _turn = WORLD_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     let owner = key(40);
     let owner_addr = address_of(&public_key_bytes(&owner));
     let net = boot("assets", &owner_addr, |_| {});
@@ -276,6 +280,53 @@ fn each_asset_class_has_its_own_organ_and_a_vehicle_registers_through_the_nodes(
                 .is_some_and(|a| a.metadata_hash == asset_meta::hash("veiculo", &rec))
         })
     });
+    for n in net.nodes.into_iter().flatten() {
+        n.stop();
+    }
+}
+
+#[test]
+fn reopening_the_world_downloads_only_the_new_blocks() {
+    use teko_economy::EconomyChain;
+    use teko_node::NodeWorld;
+
+    let _turn = WORLD_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let owner = key(70);
+    let net = boot("cache", &address_of(&public_key_bytes(&owner)), |_| {});
+    let c = client(&net);
+    wait("a few blocks", 30, || {
+        heights(&c).iter().all(|h| h.is_some_and(|h| h >= 3))
+    });
+
+    let first = NodeWorld::full_syncs();
+    let h1 = NodeWorld::open(&net.dir).unwrap().chain().height(); // dropped: back to the cache
+    assert_eq!(
+        NodeWorld::full_syncs(),
+        first + 1,
+        "the first open verifies everything"
+    );
+    wait("more blocks", 30, || {
+        heights(&c).iter().all(|h| h.is_some_and(|h| h > h1))
+    });
+
+    let w = NodeWorld::open(&net.dir).unwrap();
+    assert_eq!(
+        NodeWorld::full_syncs(),
+        first + 1,
+        "the second open reuses the verified chain"
+    );
+    assert!(w.chain().height() > h1, "and picked up the new blocks");
+    // the same state as verifying that many blocks from the genesis
+    let fresh = c.econ_sync(&net.genesis).unwrap();
+    let h = w.chain().height();
+    assert!(fresh.height() >= h);
+    let replayed =
+        EconomyChain::replay(net.genesis.clone(), &fresh.blocks()[..h as usize]).unwrap();
+    assert_eq!(
+        replayed.ledger().state_root(),
+        w.chain().ledger().state_root()
+    );
+    drop(w);
     for n in net.nodes.into_iter().flatten() {
         n.stop();
     }

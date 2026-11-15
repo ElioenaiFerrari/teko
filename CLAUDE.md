@@ -86,6 +86,7 @@ make fund ADDR=tekow1… AMOUNT=1000    # TEKO de TESTE na carteira (devnet loca
 make diagrams                         # regenera os diagramas (docs/diagrams)
 make devnet FOUNDER=tekow1…            # (1ª vez) FOUNDER = sua carteira: recebe as recompensas do fundador (ADR-0028)
 make devnet-equivocate                 # SIMULA a equivocação do validador de teste (penalidade/Slash); só dev
+make tally-time                        # apura o quadro (release) e mostra o tempo; TEKO_VERIFY_THREADS=1 = sequencial
 make explorer                          # explorador da chain em http://127.0.0.1:8545 (precisa de make devnet)
 make devnet-economy                    # economia BFT: altura, fase de fundador, validadores
 make devnet                            # blockchain de TESTE local: 3 validadores PoA (docs/NETWORKS.md)

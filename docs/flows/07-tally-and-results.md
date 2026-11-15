@@ -25,6 +25,14 @@ Qualquer um confere as provas das ações de decifração contra a chave públic
 ## O que pode dar errado
 M validadores em conluio poderiam abrir **antes** do prazo. Resultado desatualizado na Suite foi corrigido: o cache é amarrado à primeira entrada do quadro.
 
+## Verificação em paralelo, em passos e com progresso
+
+![Verificação do quadro: lotes conferidos em várias threads, contagem em ordem em uma thread, estado único compartilhado por Resultados e Exploração, aquecimento ao abrir a Suite e barra de progresso](../diagrams/board-verification.png)
+
+Conferir cada cédula (assinatura e provas ElGamal) e cada token de registro custa ~3 ms; num quadro de 6.640 entradas isso eram **21,8 s** em uma thread. Agora o `election-admin-cli` confere as entradas em **lotes de 256, em várias threads**, e depois **conta uma a uma, na ordem do quadro** (a primeira cédula do eleitor vale, as repetidas são rejeitadas): **3,7 s** com 11 núcleos, com resultado idêntico ao sequencial. O veredito de uma cédula só é usado se for do mesmo conteúdo e da mesma chave da eleição; senão a conferência é refeita ([ADR-0033](../adr/0033-verificacao-do-quadro-em-paralelo-e-em-passos.md)).
+
+Na Suite, Resultados ao vivo e Exploração pública compartilham **um só apurador**, avançado **em passos** e mantido em dia por uma thread de fundo desde que a Suite abre; as telas mostram "Verificando o quadro: X de Y" com os números do trecho já verificado. `make tally-time` mostra o tempo na apuração (`TEKO_VERIFY_THREADS` e `TEKO_VERIFY_TRACE`).
+
 ## Onde está no código
 `crates/teko-election/src/tally.rs`, `result.rs`, `crates/teko-ballot-crypto`, `tools/teko-node`.
 

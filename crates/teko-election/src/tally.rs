@@ -344,6 +344,12 @@ impl Tallier {
             .collect()
     }
 
+    /// The registration-token checker, if installed (the host uses it to pre-check
+    /// registrations on several threads).
+    pub fn verifier(&self) -> Option<&dyn RegistrationVerifier> {
+        self.verifier.as_deref()
+    }
+
     /// The manifest currently in force (latest valid revision), if any.
     pub fn manifest(&self) -> Option<&ElectionManifest> {
         self.manifest.as_ref()
@@ -358,6 +364,14 @@ impl Tallier {
     /// a manifest that alters a contest...) are IGNORED and counted, so one bad
     /// entry cannot stop the public count.
     pub fn feed(&mut self, e: LogEntry<'_>) {
+        self.feed_prechecked(e, None);
+    }
+
+    /// Like `feed`, with the expensive checks of a ballot already done (by [`precheck`],
+    /// possibly on other threads). The verdict is used ONLY if it was computed for this
+    /// very payload and for the election key and option count in force right now;
+    /// otherwise the checks run again, so the outcome is always the sequential one.
+    pub fn feed_prechecked(&mut self, e: LogEntry<'_>, pre: Option<Precheck>) {
         self.count += 1;
         match e.kind {
             LogKind::Manifest => self.feed_manifest(e.payload),
@@ -367,6 +381,14 @@ impl Tallier {
                     self.orphans += 1;
                     return;
                 };
+                let pre = match pre {
+                    Some(Precheck::Registration(r))
+                        if r.payload_hash == payload_hash(e.payload) =>
+                    {
+                        Some(r)
+                    }
+                    _ => None,
+                };
                 count_registration(
                     m,
                     s,
@@ -375,6 +397,7 @@ impl Tallier {
                     &mut self.registered,
                     &mut self.unattributed,
                     e.payload,
+                    pre,
                 );
             }
             LogKind::Dkg => self.feed_dkg(e.payload),
@@ -383,6 +406,12 @@ impl Tallier {
                 let (Some(m), Some(s)) = (self.manifest.as_ref(), self.status.as_ref()) else {
                     self.orphans += 1;
                     return;
+                };
+                let pre = match pre {
+                    Some(Precheck::Ballot(b)) if b.payload_hash == payload_hash(e.payload) => {
+                        Some(b)
+                    }
+                    _ => None,
                 };
                 count_ballot(
                     m,
@@ -393,6 +422,7 @@ impl Tallier {
                     &self.registered,
                     &mut self.unattributed,
                     e.payload,
+                    pre,
                 );
             }
         }
@@ -671,6 +701,7 @@ fn replay_all<'a>(
     t.snapshot()
 }
 
+#[allow(clippy::too_many_arguments)]
 fn count_registration(
     m: &ElectionManifest,
     s: &ElectionStatus,
@@ -679,6 +710,7 @@ fn count_registration(
     registered: &mut BTreeSet<(String, Vec<u8>)>,
     unattributed: &mut RejectCounts,
     payload: &[u8],
+    pre: Option<RegistrationCheck>,
 ) {
     let Ok(r) = SubmittedRegistration::decode(payload) else {
         unattributed.malformed += 1;
@@ -700,15 +732,107 @@ fn count_registration(
         Some(Phase::RegistrationOpen | Phase::VotingOpen)
     );
     let msg = registration_message(&r.election_id, &r.contest_id, &r.voter_key);
-    let valid = open
-        && !contest.registration_key.is_empty()
-        && verifier.is_some_and(|v| v.verify(&contest.registration_key, &msg, &r.token));
+    // a token verdict computed earlier counts only for the same registration key
+    let token_ok = |key: &[u8]| match pre.as_ref().filter(|p| p.registration_key == key) {
+        Some(p) => p.token_ok,
+        None => verifier.is_some_and(|v| v.verify(key, &msg, &r.token)),
+    };
+    let valid = open && !contest.registration_key.is_empty() && token_ok(&contest.registration_key);
     // A key registers once: repeats are refused, not double-counted.
     if !valid || !registered.insert((r.contest_id.clone(), r.voter_key.clone())) {
         ct.registrations_rejected += 1;
         return;
     }
     ct.registered += 1;
+}
+
+/// The expensive check of a registration: its blind-RSA token.
+pub struct RegistrationCheck {
+    payload_hash: [u8; 32],
+    registration_key: Vec<u8>,
+    token_ok: bool,
+}
+
+/// A verdict computed ahead of counting, by [`precheck`] or [`precheck_registration`].
+pub enum Precheck {
+    Ballot(BallotCheck),
+    Registration(RegistrationCheck),
+}
+
+/// Checks the token of a registration against the contest's registration key. `None`
+/// when the payload is not a registration of this election.
+pub fn precheck_registration(
+    m: &ElectionManifest,
+    verifier: &dyn RegistrationVerifier,
+    payload: &[u8],
+) -> Option<RegistrationCheck> {
+    let r = SubmittedRegistration::decode(payload).ok()?;
+    let contest = m
+        .contest(&r.contest_id)
+        .filter(|_| r.election_id == m.election_id)?;
+    if contest.registration_key.is_empty() {
+        return None;
+    }
+    let msg = registration_message(&r.election_id, &r.contest_id, &r.voter_key);
+    Some(RegistrationCheck {
+        payload_hash: payload_hash(payload),
+        registration_key: contest.registration_key.clone(),
+        token_ok: verifier.verify(&contest.registration_key, &msg, &r.token),
+    })
+}
+
+/// The expensive part of counting a ballot (its signature and, in an encrypted
+/// election, the zero-knowledge proofs), done WITHOUT any tally state, so many ballots
+/// can be checked at once on several threads while the counting itself stays
+/// sequential and in board order.
+pub struct BallotCheck {
+    payload_hash: [u8; 32],
+    /// The election key and option count the proofs were checked against.
+    tally_key: Vec<u8>,
+    options: usize,
+    signature_ok: bool,
+    /// Encrypted mode only: the parsed ballot when its proofs verified.
+    proven: Option<EncryptedBallot>,
+}
+
+fn payload_hash(payload: &[u8]) -> [u8; 32] {
+    teko_crypto::tagged_hash(teko_crypto::tags::BALLOT_PRECHECK, &[payload])
+}
+
+/// Checks the signature and the proofs of a ballot against `m` (the manifest in force).
+/// `None` when the payload is not a ballot of this election (the tally then rejects it
+/// itself, cheaply).
+pub fn precheck(m: &ElectionManifest, payload: &[u8]) -> Option<BallotCheck> {
+    let b = SubmittedBallot::decode(payload).ok()?;
+    let contest = m
+        .contest(&b.contest_id)
+        .filter(|_| b.election_id == m.election_id)?;
+    let options = contest.options.len();
+    let signature_ok = verify_ballot(&b.voter_key, &b.body(), &b.signature).is_ok();
+    let proven = if signature_ok && !m.tally_key.is_empty() {
+        let ctx = ballot_ctx(&b.election_id, &b.contest_id, &b.voter_key);
+        match (
+            point_from_bytes(&m.tally_key),
+            EncryptedBallot::from_bytes(options, &b.encrypted),
+        ) {
+            (Some(pk), Some(eb))
+                if b.option_index == 0
+                    && teko_ballot_crypto::verify_ballot(&pk, options, &ctx, &eb) =>
+            {
+                Some(eb)
+            }
+            _ => None,
+        }
+    } else {
+        None
+    };
+    Some(BallotCheck {
+        payload_hash: payload_hash(payload),
+        tally_key: m.tally_key.clone(),
+        options,
+        signature_ok,
+        proven,
+    })
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -721,6 +845,7 @@ fn count_ballot(
     registered: &BTreeSet<(String, Vec<u8>)>,
     unattributed: &mut RejectCounts,
     payload: &[u8],
+    pre: Option<BallotCheck>,
 ) {
     let Ok(b) = SubmittedBallot::decode(payload) else {
         unattributed.malformed += 1;
@@ -760,25 +885,44 @@ fn count_ballot(
         };
         opt = pos;
     }
-    if verify_ballot(&b.voter_key, &b.body(), &b.signature).is_err() {
+    // A verdict computed earlier is trusted only for the same election key and options
+    let pre = pre.filter(|p| p.tally_key == m.tally_key && p.options == contest.options.len());
+    let signature_ok = match &pre {
+        Some(p) => p.signature_ok,
+        None => verify_ballot(&b.voter_key, &b.body(), &b.signature).is_ok(),
+    };
+    if !signature_ok {
         ct.rejected.bad_signature += 1;
         return;
     }
     let mut cts: Option<EncryptedBallot> = None;
     if encrypted_mode {
-        let n = contest.options.len();
-        let pk = point_from_bytes(&m.tally_key);
-        let parsed = EncryptedBallot::from_bytes(n, &b.encrypted);
-        let ctx = ballot_ctx(&b.election_id, &b.contest_id, &b.voter_key);
-        match (pk, parsed) {
-            (Some(pk), Some(eb))
-                if b.option_index == 0 && teko_ballot_crypto::verify_ballot(&pk, n, &ctx, &eb) =>
-            {
-                cts = Some(eb);
-            }
-            _ => {
-                ct.rejected.bad_proof += 1;
-                return;
+        match pre {
+            // checked already (a ballot whose proofs failed carries no parsed form)
+            Some(p) => match p.proven {
+                Some(eb) => cts = Some(eb),
+                None => {
+                    ct.rejected.bad_proof += 1;
+                    return;
+                }
+            },
+            None => {
+                let n = contest.options.len();
+                let pk = point_from_bytes(&m.tally_key);
+                let parsed = EncryptedBallot::from_bytes(n, &b.encrypted);
+                let ctx = ballot_ctx(&b.election_id, &b.contest_id, &b.voter_key);
+                match (pk, parsed) {
+                    (Some(pk), Some(eb))
+                        if b.option_index == 0
+                            && teko_ballot_crypto::verify_ballot(&pk, n, &ctx, &eb) =>
+                    {
+                        cts = Some(eb);
+                    }
+                    _ => {
+                        ct.rejected.bad_proof += 1;
+                        return;
+                    }
+                }
             }
         }
     }
@@ -1586,6 +1730,99 @@ mod tests {
                 });
                 assert_eq!(inc.snapshot(), run(&pol, &log[..=i].to_vec()), "step {i}");
             }
+        }
+
+        /// Feeds the log the way a parallel host does: the expensive checks of each ballot
+        /// were computed beforehand (`precheck`, against `against`), then counting is in order.
+        fn run_prechecked(
+            pol: &GovernancePolicy,
+            log: &Log,
+            against: &ElectionManifest,
+        ) -> ElectionTally {
+            let mut t = Tallier::new(pol.clone());
+            for (kind, p) in log {
+                let pre = (*kind == LogKind::Ballot)
+                    .then(|| precheck(against, p).map(Precheck::Ballot))
+                    .flatten();
+                t.feed_prechecked(
+                    LogEntry {
+                        kind: *kind,
+                        payload: p.as_slice(),
+                    },
+                    pre,
+                );
+            }
+            t.snapshot()
+        }
+
+        #[test]
+        fn prechecked_feeding_gives_exactly_the_sequential_result() {
+            let k = keys(3, 51);
+            let pol = policy(&k, 2);
+            let (_, record) = ceremony(7);
+            let (_, other_record) = ceremony(8);
+            let mut m = manifest();
+            m.tally_key = record.group_key.clone();
+            m.signatures = [0usize, 1]
+                .iter()
+                .map(|i| sign_manifest(&k[*i], &m))
+                .collect();
+            let st = steps(&m, &k, PRESIDENT, 0);
+            let mut rng = StdRng::seed_from_u64(12);
+            let mut log: Log = vec![
+                (LogKind::Manifest, m.encode_to_vec()),
+                (LogKind::Dkg, record.encode_to_vec()),
+            ];
+            log.extend(st[..3].iter().map(tr));
+            let resign = |mut sub: SubmittedBallot, voter: u8| {
+                let key = derive_voter_key(&[voter; 32], &m.election_id, PRESIDENT).unwrap();
+                sub.signature = sign_ballot(&key, &sub.body());
+                sub
+            };
+            // valid ballots, a duplicate of the first voter, and every way to be refused
+            for v in 1..=6u8 {
+                let b = enc_ballot(&m, PRESIDENT, v, usize::from(v) % 3, &mut rng).sub;
+                log.push((LogKind::Ballot, b.encode_to_vec()));
+            }
+            let again = enc_ballot(&m, PRESIDENT, 1, 2, &mut rng).sub;
+            log.push((LogKind::Ballot, again.encode_to_vec())); // duplicate voter
+            let mut tampered = enc_ballot(&m, PRESIDENT, 8, 0, &mut rng).sub;
+            tampered.encrypted[40] ^= 1;
+            log.push((LogKind::Ballot, tampered.encode_to_vec())); // signature broken
+            let mut bad_proof = enc_ballot(&m, PRESIDENT, 9, 0, &mut rng).sub;
+            bad_proof.encrypted[40] ^= 1;
+            log.push((LogKind::Ballot, resign(bad_proof, 9).encode_to_vec())); // proofs broken
+            let mut plain = enc_ballot(&m, PRESIDENT, 10, 0, &mut rng).sub;
+            plain.encrypted.clear();
+            plain.option_index = 1;
+            log.push((LogKind::Ballot, resign(plain, 10).encode_to_vec())); // not encrypted
+            log.push((LogKind::Ballot, vec![1, 2, 3])); // not even a ballot
+
+            let sequential = run(&pol, &log);
+            assert_eq!(sequential.contest(PRESIDENT).unwrap().accepted, 6);
+            assert_eq!(run_prechecked(&pol, &log, &m), sequential);
+
+            // verdicts computed against ANOTHER election key are discarded and recomputed
+            let mut stale = m.clone();
+            stale.tally_key = other_record.group_key.clone();
+            assert_eq!(run_prechecked(&pol, &log, &stale), sequential);
+
+            // a verdict that belongs to ANOTHER payload is never applied: hand the check of
+            // the ballot at index 5 to the ballot at index 8 (the payload hash differs)
+            let mut t = Tallier::new(pol.clone());
+            for (i, (kind, p)) in log.iter().enumerate() {
+                let given = (i == 8)
+                    .then(|| precheck(&m, &log[5].1).map(Precheck::Ballot))
+                    .flatten();
+                t.feed_prechecked(
+                    LogEntry {
+                        kind: *kind,
+                        payload: p.as_slice(),
+                    },
+                    given,
+                );
+            }
+            assert_eq!(t.snapshot(), sequential);
         }
 
         #[test]

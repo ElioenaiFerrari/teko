@@ -62,6 +62,7 @@ make tally          # apuração no terminal
 make close          # encerra a votação; depois a Suite mostra os gráficos
 make devnet-stop    # para os validadores
 make fund ADDR=tekow1… AMOUNT=1000   # TEKO de TESTE para a sua carteira, aparecem em "Carteira" na Suite (aceita decimais: AMOUNT=0,5; 1 TEKO = 1.000.000 ypy, ADR-0029)
+make tally-time     # tempo de verificação do quadro de votos (paralelo; ADR-0033)
 make devnet-equivocate  # SIMULA a equivocação do validador de teste e mostra a penalidade (trave stake na Suite antes)
 make coin-demo      # demonstração da moeda em memória: teto, halving, taxa, stake e slash
 make assets-demo    # demonstração dos bens: registro com quórum, gravame, venda contra pagamento

@@ -47,7 +47,8 @@ pub use registration::{
 };
 pub use result::{DecryptionShares, build_shares, decrypt_ctx};
 pub use tally::{
-    ContestTally, ElectionTally, LogEntry, LogKind, OptionTally, PublicView, Ranking, RejectCounts,
-    SubmittedBallot, Tallier, tally, tally_with,
+    BallotCheck, ContestTally, ElectionTally, LogEntry, LogKind, OptionTally, Precheck, PublicView,
+    Ranking, RegistrationCheck, RejectCounts, SubmittedBallot, Tallier, precheck,
+    precheck_registration, tally, tally_with,
 };
 pub use text::sanitize_text;

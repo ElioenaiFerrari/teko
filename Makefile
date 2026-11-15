@@ -1,6 +1,6 @@
 # Teko — atalhos. Rode `make` (ou `make help`) para ver tudo.
 .DEFAULT_GOAL := help
-.PHONY: help setup emulator suite reset demo issuer-help preview fmt lint test check build clean-dev verify-fw release-check repro fund docs-check diagrams coin-demo assets-demo devnet close devnet-dkg devnet-economy explorer devnet-equivocate devnet-founder devnet-stop devnet-status devnet-reset devnet-blocks testnet-help election publish simulate simulate-live tally reset-board
+.PHONY: help setup emulator suite reset demo issuer-help preview fmt lint test check build clean-dev verify-fw release-check repro fund docs-check diagrams coin-demo assets-demo devnet close devnet-dkg devnet-economy explorer devnet-equivocate tally-time devnet-founder devnet-stop devnet-status devnet-reset devnet-blocks testnet-help election publish simulate simulate-live tally reset-board
 
 CARGO ?= cargo
 PIN   ?= 482913
@@ -82,6 +82,9 @@ simulate-live: ## Anexa ~RATE cédulas/s por SECS s: abra Resultados ao vivo na 
 
 close: ## TESTE: a governança simulada fecha TODOS os pleitos agora; com a rede e a cerimônia, os validadores decifram e os totais aparecem
 	$(CARGO) run -q -p election-admin-cli -- close-due --now 99999999999
+
+tally-time: ## Apura o quadro (release) e mostra o tempo de verificação e de contagem; TEKO_VERIFY_THREADS=1 força o sequencial
+	TEKO_VERIFY_TRACE=1 $(CARGO) run -q --release -p election-admin-cli -- tally
 
 tally: ## Apura o quadro e mostra o top 10 de cada pleito no terminal
 	$(CARGO) run -q -p election-admin-cli -- tally

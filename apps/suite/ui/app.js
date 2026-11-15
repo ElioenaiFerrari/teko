@@ -435,11 +435,20 @@
   const callout = (kind, icon, title, body) => `<div class="callout callout--${kind}">${ico(icon)}<div>${title ? `<strong>${esc(title)}</strong>` : ''}${body}</div></div>`;
 
   // ───────────────────────── explorador (sem dispositivo) ─────────────────────────
+  // Progresso da verificação do quadro (a Suite verifica as entradas em segundo plano).
+  function verifyBar(done, total) {
+    const pct = total ? Math.floor((done * 100) / total) : 0;
+    return `<article class="card card--flat" role="status" aria-live="polite"><div class="row">${ico('spin', 'spin')}<strong>Verificando o quadro</strong>
+      <span class="muted">${nf.format(done)} de ${nf.format(total)} entradas (${pct}%): os números abaixo são os do trecho já verificado.</span></div>
+      <progress class="bar" max="${total}" value="${done}" aria-label="Verificação do quadro"></progress></article>`;
+  }
+
   function explorerBody() {
     const x = S.explorer;
     if (!x) return `<article class="card"><p class="muted">${S.explorerTried ? 'Carregando o quadro de avisos…' : ''}</p></article>`;
     if (!x.available) return callout('info', 'link', 'Quadro ainda vazio', `<p>${esc(x.reason || 'Publique a eleição no quadro (make publish).')}</p>`);
-    const head = `<article class="card">
+    const verifying = x.verified < x.total ? verifyBar(x.verified, x.total) : '';
+    const head = `${verifying}<article class="card">
       <div class="card__head"><div class="card__ico card__ico--arara">${ico('globe')}</div><div><h2>${esc(x.title)}</h2>
         <p class="muted">Eleição <span class="mono">${esc(x.election_id)}</span> · revisão ${x.revision}</p></div></div>
       <p class="muted">Quadro de avisos: <strong>${nf.format(x.head_size)}</strong> entradas · raiz Merkle <span class="mono">${esc(short(x.head_root, 12, 10))}</span></p>
@@ -496,6 +505,10 @@
     try { S.net = await invoke('network_status'); } catch { S.net = null; }
     try { S.explorer = await invoke('explorer_snapshot'); } catch { S.explorer = { available: false, reason: 'Não foi possível ler o quadro.' }; }
     S.lastKey = ''; render();
+    // enquanto a Suite ainda verifica o quadro, pede de novo logo em seguida (sem laço de render)
+    if (S.route === 'explorer' && S.explorer && S.explorer.available && S.explorer.verified < S.explorer.total) {
+      S.explorerTried = false; setTimeout(loadExplorer, 150);
+    }
   }
 
   function vExplorer() {
@@ -1040,7 +1053,8 @@
     const r = S.results;
     const ok = r && r.available && !S.resultsErr;
     const [visLabel, visKind] = (r && VIS[r.visibility]) || ['—', ''];
-    el.innerHTML = `<article class="card card--flat"><div class="livebar">
+    const verifying = ok && r.verified < r.total ? verifyBar(r.verified, r.total) : '';
+    el.innerHTML = `${verifying}<article class="card card--flat"><div class="livebar">
       <span class="live-dot ${ok ? '' : 'live-dot--off'}" aria-hidden="true"></span>
       <strong>${ok ? 'Ao vivo' : 'Sem conexão com o quadro'}</strong>${netChip()}
       <span class="muted">${S.resultsAt ? `atualizado ${relTime(S.resultsAt)}` : ''}</span>
@@ -1161,8 +1175,11 @@
     list.forEach((c) => { const el = grid.querySelector(`[data-contest="${CSS.escape(c.contest_id)}"]`); if (el) patchContestCard(el, c, r.visibility); });
   }
 
+  let resultsBusy = false;
   async function pollResults() {
-    if (S.route !== 'results') return;
+    // sem sobreposição (uma verificação longa não empilha chamadas) e parado com a janela oculta
+    if (S.route !== 'results' || resultsBusy || document.hidden) return;
+    resultsBusy = true;
     try {
       S.results = await invoke('results_snapshot');
       S.resultsErr = null; S.resultsAt = Date.now();
@@ -1171,6 +1188,9 @@
     const need = S.results && S.results.available ? 'ready' : 'empty';
     if (S.resultsShape !== need) { S.resultsShape = need; renderMain(); }
     renderResults();
+    resultsBusy = false;
+    // enquanto o quadro ainda está sendo verificado, pede de novo logo em seguida
+    if (S.results && S.results.available && S.results.verified < S.results.total) setTimeout(pollResults, 50);
   }
 
   // ───────────────────────── ações ─────────────────────────

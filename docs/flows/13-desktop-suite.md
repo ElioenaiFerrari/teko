@@ -21,6 +21,9 @@ Interface, comandos Tauri, `teko-client`, dispositivo, quadro e rede.
 ## Tela Início
 É a tela de abertura depois de desbloquear. Reúne, sem repetir lógica das outras telas: **saldo**, **bens**, **stake**, **votos pendentes** (pleitos abertos em que você pode votar e ainda não votou), o **ID Cívico**, o **endereço da carteira** e lembretes de segurança, com atalhos para cada área. Cada bloco carrega sozinho: se um falhar (por exemplo, não há livro de economia na rede), os outros continuam. Não tem nenhuma ação sensível própria.
 
+## Resultados ao vivo e Exploração pública: verificação do quadro
+As duas telas leem o **mesmo estado verificado** do quadro, que a Suite avança em passos e em paralelo e **aquece em segundo plano** desde que abre ([fluxo 07](07-tally-and-results.md), [ADR-0033](../adr/0033-verificacao-do-quadro-em-paralelo-e-em-passos.md)). Enquanto o quadro ainda está sendo verificado, a tela mostra uma barra "Verificando o quadro: X de Y" e os números do trecho já verificado, e pede de novo logo em seguida. Os comandos de saldo, bens e stake reaproveitam a cadeia de economia já verificada e baixam só os blocos novos. Se algo demorar mais de 300 ms, o terminal do `make suite` mostra uma linha `[suite] …` com o tempo.
+
 ## Tela Bens (ambiente de teste)
 
 ![Bens na Suite: a tela chama o comando de negócio, o seu dispositivo mostra e assina o consentimento, o órgão e a contraparte simulados assinam e o livro local executa a troca atômica](../diagrams/assets-suite.png)

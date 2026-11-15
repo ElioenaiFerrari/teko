@@ -72,24 +72,139 @@ pub fn log_kind(k: EntryKind) -> Option<LogKind> {
     }
 }
 
-/// Feeds the entries the tallier has not seen yet (the live-view fast path).
-/// Returns how many entries of the board were consumed in total.
-pub fn feed_new(tallier: &mut Tallier, board: &impl BulletinBoard) -> u64 {
-    let mut i = tallier.consumed();
-    while i < board.len() {
-        if let Some(e) = board.entry(i) {
-            // Skipped kinds still advance the cursor via a no-op Ballot-less path.
-            match log_kind(e.kind) {
-                Some(kind) => tallier.feed(LogEntry {
-                    kind,
-                    payload: &e.payload,
-                }),
+/// Entries handled per batch: the unit whose ballot checks run in parallel.
+const BATCH: u64 = 256;
+
+/// Threads used to check ballots: the machine's cores (at most 16). `TEKO_VERIFY_THREADS`
+/// overrides it (`1` = sequential), for measuring and for tests.
+fn verify_threads() -> usize {
+    std::env::var("TEKO_VERIFY_THREADS")
+        .ok()
+        .and_then(|v| v.parse::<usize>().ok())
+        .unwrap_or_else(|| std::thread::available_parallelism().map_or(1, |n| n.get().min(16)))
+        .max(1)
+}
+
+/// Runs the expensive checks (ballot signature and proofs, registration tokens) of
+/// `entries` on up to `threads` threads. Verdicts are only an optimisation: the tallier
+/// ignores any that does not match the election in force when it counts the entry.
+fn prechecks(
+    manifest: Option<&teko_election::ElectionManifest>,
+    verifier: Option<&dyn teko_election::RegistrationVerifier>,
+    entries: &[Option<&Entry>],
+    threads: usize,
+) -> Vec<Option<teko_election::Precheck>> {
+    use teko_election::Precheck;
+    let mut out: Vec<Option<Precheck>> = entries.iter().map(|_| None).collect();
+    let Some(m) = manifest else { return out };
+    let work: Vec<usize> = entries
+        .iter()
+        .enumerate()
+        .filter(|(_, e)| {
+            e.is_some_and(|e| e.kind == EntryKind::BALLOT || e.kind == EntryKind::REGISTRATION)
+        })
+        .map(|(i, _)| i)
+        .collect();
+    let check = |i: usize| -> Option<Precheck> {
+        let e = entries.get(i).copied().flatten()?;
+        if e.kind == EntryKind::BALLOT {
+            teko_election::precheck(m, &e.payload).map(Precheck::Ballot)
+        } else {
+            teko_election::precheck_registration(m, verifier?, &e.payload)
+                .map(Precheck::Registration)
+        }
+    };
+    if threads <= 1 || work.len() < 8 {
+        for i in work {
+            if let Some(slot) = out.get_mut(i) {
+                *slot = check(i);
+            }
+        }
+        return out;
+    }
+    let per = work.len().div_ceil(threads);
+    let done: Vec<Vec<(usize, Option<Precheck>)>> = std::thread::scope(|s| {
+        let handles: Vec<_> = work
+            .chunks(per)
+            .map(|part| s.spawn(|| part.iter().map(|&i| (i, check(i))).collect::<Vec<_>>()))
+            .collect();
+        handles
+            .into_iter()
+            .map(|h| h.join().unwrap_or_default())
+            .collect()
+    });
+    for (i, c) in done.into_iter().flatten() {
+        if let Some(slot) = out.get_mut(i) {
+            *slot = c;
+        }
+    }
+    out
+}
+
+/// Feeds at most `max` of the entries the tallier has not seen yet, checking the ballots
+/// of each batch on several threads and counting them in board order. Returns how many
+/// entries of the board were consumed in total. The outcome is exactly the sequential
+/// one; calling it repeatedly walks the board in steps (a progress bar).
+pub fn feed_step_with(
+    tallier: &mut Tallier,
+    board: &impl BulletinBoard,
+    max: u64,
+    threads: usize,
+) -> u64 {
+    let end = tallier.consumed().saturating_add(max).min(board.len());
+    let (started, first) = (Instant::now(), tallier.consumed());
+    let (mut t_check, mut t_count) = (Duration::ZERO, Duration::ZERO);
+    while tallier.consumed() < end {
+        let from = tallier.consumed();
+        // before the manifest nothing can be pre-checked: go one by one until it shows up
+        let step = if tallier.manifest().is_some() {
+            BATCH
+        } else {
+            1
+        };
+        let to = (from + step).min(end);
+        let entries: Vec<Option<&Entry>> = (from..to).map(|i| board.entry(i)).collect();
+        let t0 = Instant::now();
+        let checks = prechecks(tallier.manifest(), tallier.verifier(), &entries, threads);
+        t_check += t0.elapsed();
+        let t1 = Instant::now();
+        for (e, pre) in entries.into_iter().zip(checks) {
+            match e.and_then(|e| log_kind(e.kind).map(|kind| (kind, e))) {
+                Some((kind, e)) => tallier.feed_prechecked(
+                    LogEntry {
+                        kind,
+                        payload: &e.payload,
+                    },
+                    pre,
+                ),
+                // Skipped kinds (and holes) still advance the cursor.
                 None => tallier.skip(),
             }
         }
-        i += 1;
+        t_count += t1.elapsed();
+    }
+    if std::env::var_os("TEKO_VERIFY_TRACE").is_some() && tallier.consumed() > first {
+        eprintln!(
+            "[apuração] {} entradas em {:.2?} ({} threads): verificação {:.2?}, contagem {:.2?}",
+            tallier.consumed() - first,
+            started.elapsed(),
+            threads,
+            t_check,
+            t_count
+        );
     }
     tallier.consumed()
+}
+
+/// [`feed_step_with`] with the default number of threads.
+pub fn feed_step(tallier: &mut Tallier, board: &impl BulletinBoard, max: u64) -> u64 {
+    feed_step_with(tallier, board, max, verify_threads())
+}
+
+/// Feeds the entries the tallier has not seen yet (the live-view fast path).
+/// Returns how many entries of the board were consumed in total.
+pub fn feed_new(tallier: &mut Tallier, board: &impl BulletinBoard) -> u64 {
+    feed_step(tallier, board, u64::MAX)
 }
 
 /// A tallier that can check registration tokens (RFC 9474 blind RSA). Use this,
@@ -304,9 +419,15 @@ impl Admin {
         let bytes = fs::read(self.dir.join("election.bundle")).map_err(|_| AdminError::NoBundle)?;
         let bundle = ElectionBundle::decode(bytes.as_slice()).map_err(|_| AdminError::BadBundle)?;
         let board = self.read_board()?;
-        let existing: Vec<(EntryKind, Vec<u8>)> = (0..board.len())
-            .filter_map(|i| board.entry(i).map(|e| (e.kind, e.payload.clone())))
-            .collect();
+        // look entries up in place: copying a board of thousands of ballots every few
+        // seconds (the simulated governance calls this) is what this avoids
+        let has = |kind: EntryKind, payload: &[u8]| {
+            (0..board.len()).any(|i| {
+                board
+                    .entry(i)
+                    .is_some_and(|e| e.kind == kind && e.payload == payload)
+            })
+        };
         let mut new = Vec::new();
         let mut already = 0;
         let wanted = std::iter::once((EntryKind::MANIFEST, bundle.manifest)).chain(
@@ -316,7 +437,7 @@ impl Admin {
                 .map(|t| (EntryKind::TRANSITION, t)),
         );
         for (kind, payload) in wanted {
-            if existing.iter().any(|(k, p)| *k == kind && *p == payload) {
+            if has(kind, &payload) {
                 already += 1;
             } else {
                 new.push(Entry::new(kind, payload));

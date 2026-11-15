@@ -23,6 +23,9 @@ serde = { version = "1", features = ["derive"] }
 thiserror = { workspace = true, features = ["std"] }
 
 [dev-dependencies]
+teko-ledger.workspace = true
+teko-coin.workspace = true
+teko-assets.workspace = true
 p256.workspace = true
 device-emulator.workspace = true
 issuer-cli.workspace = true

@@ -228,6 +228,8 @@ Legenda: **P** = `proptest` (muitos casos), **U** = unitário, **E** = ponta a p
 | **Consentimento de bem assinado no dispositivo vale no livro real:** o dono assina no dispositivo, comprador e órgão em software, e a troca move o bem e a moeda com a oferta conservada | device: `a_swap_signed_on_the_device_moves_the_asset_and_the_coin_in_the_real_ledger` |
 | O dispositivo só assina se a carteira for parte; recusa antes de qualquer tela tipo desconhecido, mesma parte, venda sem preço, transferência com preço, endereço ruim; recusar no botão não gera consentimento; reconhece o papel de comprador | device: `consent_requests_are_validated_and_need_a_physical_confirmation` |
 | Ponta a ponta: consentimento assinado, mostrado na tela e **verificado pelo cliente**; recusa no botão | e2e: `an_asset_consent_is_signed_on_the_device_and_verified_by_the_client` |
+| **Bens no mundo de teste:** o órgão simulado registra (quórum 2-de-3), penhora e libera; a venda/compra com a contraparte move bem e moeda; gravame, bem alheio, preço zero e comprador sem saldo são recusados; tudo sobrevive ao reinício e a oferta se conserva | assets: `devnet::the_simulated_registrar_and_counterparty_trade_with_me`, `a_consent_from_the_wrong_person_does_not_move_the_asset` |
+| **Ponta a ponta com o dispositivo:** vender e comprar um bem com o consentimento assinado no dispositivo (tela "VENDA DE BEM", papel vendedor/comprador), recusa no botão não move nada | e2e: `selling_and_buying_an_asset_with_my_device_consent_in_the_devnet_world` |
 | Saldo de teste da devnet (arquivo de alocações) | coin: `devnet::tests::allocations_roundtrip_and_balance`, `bad_input_is_refused` |
 
 ## O que **não** está coberto por teste automático (honestidade)

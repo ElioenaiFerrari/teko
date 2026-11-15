@@ -18,6 +18,7 @@
     wallet: q === 'ready' || q === 'locked',
     retries: Number(new URLSearchParams(location.search).get('retries') || 8),
   };
+  const mine = [{ id: 'matricula-001', version: 0, liens: 0 }], theirs = [{ id: 'matricula-002', version: 0, liens: 0 }];
   let wbal = 4000; const whist = [{ height: 1, direction: 'received', counterparty: 'tekow1qqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqq9z3k', amount: 4000, fee: 0 }];
   const WADDR = 'tekow1qpzry9x8gf2tvdw0s3jn54khce6mua7lqpzry9x8gf2tvdw0s3jn54khce6muaw9z3k';
   const status = () => ({
@@ -64,6 +65,10 @@
     wallet_address: async () => ({ address: WADDR, public_key: '02' + 'cd'.repeat(32) }),
     wallet_send: async ({ to, amount }) => { await prompt('sign_transfer', 1800); wbal -= amount + 162; whist.unshift({ height: whist.length + 1, direction: 'sent', counterparty: to, amount, fee: 162 }); return { amount, fee: 162, to, balance_after: wbal }; },
     wallet_history: async () => whist.slice(),
+    assets_view: async () => ({ available: true, reason: null, balance: wbal, mine: mine.map((a) => ({ ...a, class: 'imovel' })), counterparty_address: 'tekow1qpzry9x8gf2tvdw0s3jn54khce6mua7lqpzry9x8gf2tvdw0s3jn54khce6muaw9z3q', counterparty_balance: 6000, counterparty_assets: theirs.map((a) => ({ ...a, class: 'imovel' })) }),
+    asset_register_test: async ({ forCounterparty }) => { const id = 'matricula-' + String(mine.length + theirs.length + 1).padStart(3, '0'); (forCounterparty ? theirs : mine).push({ id, version: 0, liens: 0 }); return id; },
+    asset_lien: async ({ asset, on }) => { const a = mine.find((x) => x.id === asset); if (a) { a.liens = on ? 1 : 0; a.version += 1; } },
+    asset_trade: async ({ asset, price, selling }) => { await prompt('sign_asset_consent', 1800); const from = selling ? mine : theirs, to = selling ? theirs : mine; const i = from.findIndex((x) => x.id === asset); if (i < 0) throw { code: 'Verification', message: 'bem desconhecido', retry_after_ms: 0, remaining: 0 }; if (from[i].liens) throw { code: 'Verification', message: 'o bem tem gravame (penhora)', retry_after_ms: 0, remaining: 0 }; const [a] = from.splice(i, 1); a.version += 1; to.push(a); wbal += selling ? price : -price; return wbal; },
     wallet_balance: async () => (wbal = wbal ?? 4000, { available: true, amount: wbal, note: 'Alocação de gênese de TESTE da devnet (mock).' }),
     unlock: async () => { await prompt('pin_entry', 1000); dev.locked = false; return { result: 'unlocked' }; },
     civic_id: async () => { if (dev.state === 'initialized') await prompt('confirm_civic_id'); return { id: ID, public_key: '02' + 'ab'.repeat(32) }; },

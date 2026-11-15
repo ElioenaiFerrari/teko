@@ -4279,6 +4279,7 @@ dependencies = [
  "serde_json",
  "tauri",
  "tauri-build",
+ "teko-assets",
  "teko-attestation",
  "teko-ballot-crypto",
  "teko-bulletin",
@@ -4286,6 +4287,7 @@ dependencies = [
  "teko-coin",
  "teko-crypto",
  "teko-election",
+ "teko-ledger",
  "teko-protocol",
  "teko-transport",
 ]

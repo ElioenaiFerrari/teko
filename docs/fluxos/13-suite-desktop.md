@@ -20,6 +20,14 @@ Interface, comandos Tauri, `teko-client`, dispositivo, quadro e rede.
 3. Sem emulador ligado a Suite abre no Explorador público.
 4. Pré-visualização só visual: `make preview` (usa backend falso fora do pacote).
 
+## Tela Bens (ambiente de teste)
+
+![Bens na Suite: a tela chama o comando de negócio, o seu dispositivo mostra e assina o consentimento, o órgão e a contraparte simulados assinam e o livro local executa a troca atômica](../diagramas/bens-suite.png)
+
+*Fontes: [SVG](../diagramas/bens-suite.svg) · [HTML](../diagramas/bens-suite.html)*
+
+Mostra os bens em nome da sua carteira e permite **vender** ou **comprar** de uma contraparte simulada, além de pedir ao **órgão simulado** que registre um bem de teste, penhore ou libere. O **seu consentimento** é assinado no dispositivo; o resto é simulado e só existe com `dev-simulation`. Decisão: [ADR-0026](../adr/0026-bens-na-suite-com-orgao-e-contraparte-simulados.md).
+
 ## O que é verificado e por quem
 A Suite confere atestação, firmware e a cadeia do nó; as confirmações sensíveis são do dispositivo.
 

@@ -528,6 +528,216 @@ fn history_impl(address: &str) -> Vec<HistoryItem> {
         .collect()
 }
 
+/// One asset of the assets screen.
+#[derive(serde::Serialize)]
+pub struct AssetItem {
+    id: String,
+    class: String,
+    version: u64,
+    liens: usize,
+}
+
+#[derive(serde::Serialize)]
+pub struct AssetsView {
+    available: bool,
+    reason: Option<String>,
+    mine: Vec<AssetItem>,
+    counterparty_address: String,
+    counterparty_balance: u64,
+    counterparty_assets: Vec<AssetItem>,
+    balance: u64,
+}
+
+#[cfg_attr(feature = "dev-simulation", allow(dead_code))]
+fn assets_unavailable() -> UiError {
+    ui_err(
+        "NotAvailable",
+        "O livro de bens ainda não está na rede: esta área funcionará com ele.",
+    )
+}
+
+/// Assets of the wallet and of the SIMULATED counterparty. DEVELOPMENT ONLY.
+#[tauri::command]
+pub async fn assets_view(address: String) -> Result<AssetsView, UiError> {
+    assets_view_impl(&address)
+}
+
+#[cfg(not(feature = "dev-simulation"))]
+fn assets_view_impl(_address: &str) -> Result<AssetsView, UiError> {
+    Ok(AssetsView {
+        available: false,
+        reason: Some(assets_unavailable().message),
+        mine: Vec::new(),
+        counterparty_address: String::new(),
+        counterparty_balance: 0,
+        counterparty_assets: Vec::new(),
+        balance: 0,
+    })
+}
+
+#[cfg(feature = "dev-simulation")]
+fn assets_view_impl(address: &str) -> Result<AssetsView, UiError> {
+    use teko_assets::devnet;
+    let me = teko_crypto::parse_wallet_address(address)
+        .map_err(|_| ui_err("InvalidArgument", "endereço inválido"))?;
+    let (econ, cast) = devnet::open(&resolve_dev_dir()).map_err(|e| ui_err("Io", e))?;
+    let cp = cast.counterparty_address();
+    let items = |who: &teko_ledger::Address| {
+        devnet::owned(&econ, who)
+            .into_iter()
+            .map(|(id, version, liens)| AssetItem {
+                id,
+                class: devnet::CLASS.into(),
+                version,
+                liens,
+            })
+            .collect::<Vec<_>>()
+    };
+    Ok(AssetsView {
+        available: true,
+        reason: None,
+        mine: items(&me),
+        counterparty_address: teko_crypto::wallet_address(&cp).unwrap_or_default(),
+        counterparty_balance: econ.balance(&cp),
+        counterparty_assets: items(&cp),
+        balance: econ.balance(&me),
+    })
+}
+
+/// The SIMULATED registrar registers a new test asset to me (or to the counterparty).
+#[tauri::command]
+pub async fn asset_register_test(
+    address: String,
+    for_counterparty: bool,
+) -> Result<String, UiError> {
+    register_impl(&address, for_counterparty)
+}
+
+#[cfg(not(feature = "dev-simulation"))]
+fn register_impl(_a: &str, _c: bool) -> Result<String, UiError> {
+    Err(assets_unavailable())
+}
+
+#[cfg(feature = "dev-simulation")]
+fn register_impl(address: &str, for_counterparty: bool) -> Result<String, UiError> {
+    use teko_assets::devnet;
+    let me = teko_crypto::parse_wallet_address(address)
+        .map_err(|_| ui_err("InvalidArgument", "endereço inválido"))?;
+    let (mut econ, cast) = devnet::open(&resolve_dev_dir()).map_err(|e| ui_err("Io", e))?;
+    let owner = if for_counterparty {
+        cast.counterparty_address()
+    } else {
+        me
+    };
+    let n = econ.txs().len() + 1;
+    let id = format!("matricula-{n:03}");
+    devnet::register(&mut econ, &cast, &owner, &id).map_err(|e| ui_err("Rejected", e))?;
+    Ok(id)
+}
+
+/// The SIMULATED registrar places or releases a lien (penhora) on an asset.
+#[tauri::command]
+pub async fn asset_lien(asset: String, on: bool) -> Result<(), UiError> {
+    lien_impl(&asset, on)
+}
+
+#[cfg(not(feature = "dev-simulation"))]
+fn lien_impl(_a: &str, _o: bool) -> Result<(), UiError> {
+    Err(assets_unavailable())
+}
+
+#[cfg(feature = "dev-simulation")]
+fn lien_impl(asset: &str, on: bool) -> Result<(), UiError> {
+    use teko_assets::devnet;
+    let (mut econ, cast) = devnet::open(&resolve_dev_dir()).map_err(|e| ui_err("Io", e))?;
+    devnet::set_lien(&mut econ, &cast, asset, on).map_err(|e| ui_err("Rejected", e))
+}
+
+/// Sells my asset to (or buys it from) the simulated counterparty. My consent is signed
+/// on MY device, which shows the asset, parties, price and version.
+#[tauri::command]
+pub async fn asset_trade(
+    app: AppHandle,
+    suite: State<'_, Suite>,
+    asset: String,
+    price: u64,
+    selling: bool,
+) -> Result<u64, UiError> {
+    trade_impl(app, suite, asset, price, selling).await
+}
+
+#[cfg(not(feature = "dev-simulation"))]
+async fn trade_impl(
+    _app: AppHandle,
+    _suite: State<'_, Suite>,
+    _asset: String,
+    _price: u64,
+    _selling: bool,
+) -> Result<u64, UiError> {
+    Err(assets_unavailable())
+}
+
+#[cfg(feature = "dev-simulation")]
+async fn trade_impl(
+    app: AppHandle,
+    suite: State<'_, Suite>,
+    asset: String,
+    price: u64,
+    selling: bool,
+) -> Result<u64, UiError> {
+    use teko_assets::devnet;
+    let dir = resolve_dev_dir();
+    with_device(app, suite.inner().clone(), move |c| {
+        let v = |m: String| ClientError::Verification(m);
+        let me_info = c.wallet_address()?;
+        let pk = teko_crypto::hex::decode(&me_info.public_key)
+            .map_err(|_| v("chave pública inválida".into()))?;
+        let me = teko_crypto::ledger_address(&pk);
+        let (mut econ, cast) = devnet::open(&dir).map_err(v)?;
+        let mut device_error: Option<ClientError> = None;
+        let result = {
+            let mut consent = |kind: u8,
+                               id: &str,
+                               seller: &teko_ledger::Address,
+                               buyer: &teko_ledger::Address,
+                               price: u64,
+                               version: u64| {
+                let s = teko_crypto::wallet_address(seller).map_err(|_| "endereço".to_string())?;
+                let b = teko_crypto::wallet_address(buyer).map_err(|_| "endereço".to_string())?;
+                c.wallet_sign_asset_consent(
+                    teko_coin::devnet::CHAIN_ID,
+                    kind,
+                    devnet::CLASS,
+                    id,
+                    &s,
+                    &b,
+                    price,
+                    version,
+                )
+                .map_err(|e| {
+                    let msg = e.to_string();
+                    device_error = Some(e);
+                    msg
+                })
+            };
+            devnet::trade_with_counterparty(
+                &mut econ,
+                &cast,
+                &me,
+                &asset,
+                price,
+                selling,
+                &mut consent,
+            )
+        };
+        if let Some(e) = device_error {
+            return Err(e);
+        }
+        result.map_err(v)
+    })
+    .await
+}
+
 /// What the wallet screen shows as balance.
 #[derive(serde::Serialize)]
 pub struct BalanceInfo {

@@ -85,7 +85,8 @@ pub fn append_allocation(path: &Path, address: &str, amount: u64) -> Result<(), 
         .map_err(|e| format!("falha ao gravar: {e}"))
 }
 
-fn build_ledger(all: &[(Address, u64)]) -> Result<Ledger, String> {
+/// The coin-only devnet ledger (genesis + allocations).
+pub fn build_ledger(all: &[(Address, u64)]) -> Result<Ledger, String> {
     let mut l = Ledger::new(CHAIN_ID, vec![module()])
         .map_err(|e| format!("{e:?}"))?
         .with_fee_module(COIN_MODULE)
@@ -118,10 +119,19 @@ pub struct Economy {
 }
 
 impl Economy {
-    /// Opens (replaying everything) the economy stored in `dir`.
+    /// Opens (replaying everything) the economy stored in `dir` (coin only).
     pub fn open(dir: &Path) -> Result<Economy, String> {
+        Self::open_with(dir, build_ledger)
+    }
+
+    /// Like `open`, with a caller-provided ledger builder (more modules, extra genesis).
+    /// The builder receives the allocations read from `economy.txt`.
+    pub fn open_with(
+        dir: &Path,
+        build: impl FnOnce(&[(Address, u64)]) -> Result<Ledger, String>,
+    ) -> Result<Economy, String> {
         let allocs = read_allocations(&dir.join(ECONOMY_FILE))?;
-        let mut ledger = build_ledger(&allocs)?;
+        let mut ledger = build(&allocs)?;
         let path = dir.join(TXS_FILE);
         let mut txs = Vec::new();
         if let Ok(text) = fs::read_to_string(&path) {
@@ -146,6 +156,16 @@ impl Economy {
 
     pub fn balance(&self, who: &Address) -> u64 {
         balance(&self.ledger, who)
+    }
+
+    /// The underlying ledger (read-only), for module queries.
+    pub fn ledger(&self) -> &Ledger {
+        &self.ledger
+    }
+
+    /// The accepted transactions, in order.
+    pub fn txs(&self) -> &[Tx] {
+        &self.txs
     }
 
     /// The next valid nonce of `who`.

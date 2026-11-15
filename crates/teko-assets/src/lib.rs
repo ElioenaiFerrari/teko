@@ -15,6 +15,7 @@
 //! accountable by M-of-N and a public history. NOT AUDITED; no legal validity.
 #![cfg_attr(test, allow(clippy::unwrap_used, clippy::expect_used, clippy::panic))]
 
+pub mod devnet;
 mod module;
 mod query;
 mod types;

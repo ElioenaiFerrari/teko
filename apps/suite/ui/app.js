@@ -13,6 +13,7 @@
     shield: '<path d="M12 3l7 3v5c0 5-3.5 8.5-7 10-3.5-1.5-7-5-7-10V6l7-3z"/><path d="M9 12l2 2 4-4"/>',
     key: '<circle cx="8" cy="15" r="4"/><path d="M11 12l9-9M16 7l3 3"/>',
     wallet: '<rect x="3" y="6" width="18" height="13" rx="2"/><path d="M3 10h18M16 14.5h2"/>',
+    home: '<path d="M3 11l9-7 9 7v9H3z"/><path d="M9 20v-6h6v6"/>',
     pen: '<path d="M4 20h16"/><path d="M5 16l9-9 3 3-9 9H5v-3z"/>',
     badge: '<circle cx="12" cy="12" r="9"/><path d="M8 12l3 3 5-6"/>',
     ballot: '<rect x="4" y="9" width="16" height="11" rx="2"/><path d="M8 9V5h8v4M9 14h6"/>',
@@ -168,6 +169,7 @@
     { id: 'onboarding', label: 'Configurar dispositivo', icon: 'usb', need: 'onboarding' },
     { id: 'identity', label: 'Minha identidade', icon: 'id', need: 'ready' },
     { id: 'wallet', label: 'Carteira', icon: 'wallet', need: 'ready' },
+    { id: 'assets', label: 'Bens', icon: 'home', need: 'ready' },
     { id: 'sign', label: 'Assinar documento', icon: 'pen', need: 'ready' },
     { id: 'prove', label: 'Provar atributo', icon: 'badge', need: 'ready' },
     { id: 'vote', label: 'Votar', icon: 'ballot', need: 'ready' },
@@ -381,7 +383,7 @@
 
   function renderMain() {
     const m = $('#main');
-    const views = { results: vResults, explorer: vExplorer, onboarding: vOnboarding, unlock: vUnlock, identity: vIdentity, wallet: vWallet, sign: vSign, prove: vProve, vote: vVote };
+    const views = { results: vResults, explorer: vExplorer, onboarding: vOnboarding, unlock: vUnlock, identity: vIdentity, wallet: vWallet, assets: vAssets, sign: vSign, prove: vProve, vote: vVote };
     m.innerHTML = `<div class="view">${(views[S.route] || vExplorer)()}</div>`;
     afterRender();
   }
@@ -1140,6 +1142,7 @@
       if (id === 'explorer') { S.explorerTried = false; S.inclusion = null; }
       if (id === 'results') { S.resultsShape = null; setTimeout(pollResults, 0); }
       if (id === 'identity') S.idTried = false;
+      if (id === 'assets') { S.assetsTried = false; S.assets = null; }
       if (id === 'wallet') { S.walletTried = false; S.walletAddr = null; S.balance = null; S.history = null; }
       if (id === 'identity') loadId();
       render();
@@ -1200,6 +1203,17 @@
         S.walletTried = false; S.balance = null; S.history = null; S.lastKey = ''; render(); loadWallet();
       }
     },
+    async assetreg(b) {
+      const cp = b.dataset.cp === '1';
+      await guarded(async () => { const id = await call('asset_register_test', { address: S.walletAddr.address, forCounterparty: cp }); toast(`Órgão simulado registrou ${id} ${cp ? 'para a contraparte' : 'para você'}.`, 'ok'); });
+      S.assetsTried = false; S.lastKey = ''; render(); loadAssets();
+    },
+    async assetlien(b) {
+      await guarded(async () => { await call('asset_lien', { asset: b.dataset.id, on: b.dataset.on === '1' }); toast(b.dataset.on === '1' ? 'Órgão simulado registrou a penhora.' : 'Órgão simulado liberou o gravame.', 'ok'); });
+      S.assetsTried = false; S.lastKey = ''; render(); loadAssets();
+    },
+    async assetsell(b) { await trade(b.dataset.id, true); },
+    async assetbuy(b) { await trade(b.dataset.id, false); },
     async walletcheck() {
       await guarded(async () => { await call('wallet_check_backup'); toast('Backup conferido: a frase confere com esta carteira.', 'ok'); });
     },
@@ -1323,6 +1337,17 @@
     if (S.election) { S.lastKey = ''; render(); }
   }
 
+  async function trade(id, selling) {
+    const price = Number((document.getElementById(`px-${id}`) || {}).value || 0);
+    if (!Number.isInteger(price) || price <= 0) { toast('Informe um preço inteiro maior que zero.'); return; }
+    let bal = null;
+    await guarded(async () => { bal = await call('asset_trade', { asset: id, price, selling }, { delay: 300 }); });
+    if (bal !== null) {
+      toast(selling ? `Vendido por ${price}. Seu saldo: ${bal}.` : `Comprado por ${price}. Seu saldo: ${bal}.`, 'ok');
+      S.assetsTried = false; S.walletTried = false; S.balance = null; S.history = null; S.lastKey = ''; render(); loadAssets();
+    }
+  }
+
   async function loadWallet() {
     if (S.walletTried || phase() !== 'ready') return;
     S.walletTried = true;
@@ -1332,6 +1357,53 @@
       try { S.history = await invoke('wallet_history', { address: S.walletAddr.address }); } catch { S.history = []; }
     }
     S.lastKey = ''; render();
+  }
+
+  async function loadAssets() {
+    if (S.assetsTried || phase() !== 'ready') return;
+    S.assetsTried = true;
+    if (!S.walletAddr) await guarded(async () => { S.walletAddr = await call('wallet_address', {}, { delay: 5000 }); }, { silent: true });
+    if (S.walletAddr) {
+      try { S.assets = await invoke('assets_view', { address: S.walletAddr.address }); } catch (e) { S.assets = { available: false, reason: asErr(e).message }; }
+    }
+    S.lastKey = ''; render();
+  }
+
+  function assetCard(a, mine) {
+    const price = `<input class="input" style="max-width:120px" id="px-${esc(a.id)}" type="number" min="1" placeholder="preço">`;
+    return `<div class="fw__item"><div>
+        <h3>${esc(a.class)} / ${esc(a.id)} ${a.liens ? chip('PENHORADO', 'bad', 'lock') : ''}</h3>
+        <p class="muted">versão ${esc(String(a.version))} · ${a.liens ? `${a.liens} gravame(s): não pode ser vendido` : 'sem gravames'}</p>
+      </div>
+      <div class="row" style="flex-wrap:wrap;gap:8px">
+        ${mine ? `${price}<button class="btn" data-act="assetsell" data-id="${esc(a.id)}">${ico('upload')}Vender à contraparte</button>
+          <button class="btn btn--ghost btn--sm" data-act="assetlien" data-id="${esc(a.id)}" data-on="${a.liens ? '0' : '1'}">${ico('lock')}${a.liens ? 'Órgão: liberar gravame' : 'Órgão: penhorar'}</button>`
+        : `${price}<button class="btn" data-act="assetbuy" data-id="${esc(a.id)}">${ico('wallet')}Comprar da contraparte</button>`}
+      </div></div>`;
+  }
+
+  function vAssets() {
+    const a = S.assets;
+    const head0 = head('Bens', 'Patrimônio e negócios', 'Bens registrados em seu nome. Cada negócio exige o SEU consentimento no dispositivo, o do comprador e o do órgão registrador.');
+    if (!a) return `${head0}<article class="card"><div class="row">${ico('spin', 'spin')}<span>Lendo…</span></div></article>`;
+    if (!a.available) return `${head0}<article class="card">${callout('info', 'shield', 'Indisponível nesta versão', `<p>${esc(a.reason || 'O livro de bens ainda não está na rede.')}</p>`)}</article>`;
+    return `${head0}
+      ${callout('warn', 'alert', 'Ambiente de teste', '<p>O <strong>órgão registrador</strong> e a <strong>contraparte</strong> abaixo são <strong>simulados</strong> (chaves de teste em <code>dev/</code>) e o livro é local. Seu consentimento, porém, é assinado <strong>no seu dispositivo</strong>, que mostra o bem, as partes, o preço e a versão. Moedas de teste: <code>make fund</code>.</p>')}
+      <article class="card">
+        <div class="card__head"><div class="card__ico card__ico--onca">${ico('home')}</div><h2>Meu patrimônio</h2></div>
+        <p class="muted">Seu saldo: <strong>${esc(String(a.balance))}</strong> moedas de teste.</p>
+        ${a.mine.length ? `<div class="fw">${a.mine.map((x) => assetCard(x, true)).join('')}</div>` : '<p class="muted">Você ainda não tem bens. Peça ao órgão simulado para registrar um bem de teste.</p>'}
+        <div class="row"><button class="btn btn--ghost" data-act="assetreg" data-cp="0">${ico('badge')}Órgão: registrar bem de teste para mim</button></div>
+      </article>
+      <article class="card">
+        <div class="card__head"><div class="card__ico card__ico--boto">${ico('users')}</div><h2>Contraparte simulada</h2></div>
+        <p class="muted">Outra pessoa de teste, para vender ou comprar. Saldo: <strong>${esc(String(a.counterparty_balance))}</strong> moedas.</p>
+        <div class="screen"><div class="screen__label">Endereço da contraparte</div><div class="id-big" style="font-size:.8rem">${esc(a.counterparty_address)}</div></div>
+        <div class="row"><button class="btn btn--ghost btn--sm" data-act="copy" data-text="${esc(a.counterparty_address)}">${ico('copy')}Copiar</button></div>
+        ${a.counterparty_assets.length ? `<div class="fw">${a.counterparty_assets.map((x) => assetCard(x, false)).join('')}</div>` : '<p class="muted">A contraparte ainda não tem bens.</p>'}
+        <div class="row"><button class="btn btn--ghost" data-act="assetreg" data-cp="1">${ico('badge')}Órgão: registrar bem de teste para a contraparte</button></div>
+        <p class="muted">Para comprar, a contraparte precisa ter bem; para ela comprar de você, ela precisa de moedas (<code>make fund ADDR=&lt;endereço acima&gt; AMOUNT=1000</code>).</p>
+      </article>`;
   }
 
   async function loadId() {
@@ -1356,6 +1428,7 @@
     if (S.route === 'onboarding' && onboardStep() === 'firmware') loadFirmware();
     if (S.route === 'identity') loadId();
     if (S.route === 'wallet') loadWallet();
+    if (S.route === 'assets') loadAssets();
     if (S.route === 'vote') loadElec();
     if (S.route === 'explorer') loadExplorer();
     if (S.route === 'results') renderResults();

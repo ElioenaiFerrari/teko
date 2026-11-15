@@ -32,3 +32,4 @@ Regra: decisões de produto/segurança só passam a `Aceito` pela aprovação do
 | [0023](0023-carteira-com-seed-bip39.md) | Carteira com frase de recuperação (BIP-39 + SLIP-10 P-256), separada da identidade | **Aceito** (M5a); supera em parte o 0003 | — |
 | [0024](0024-assinar-transferencias-no-dispositivo.md) | Assinar transferências de moeda no dispositivo (`SignTransfer`) | Aceito provisoriamente (M5b) | confirmar |
 | [0025](0025-consentimentos-de-bens-no-dispositivo.md) | Consentimentos de bens assinados no dispositivo (`SignAssetConsent`) | Aceito provisoriamente (M5c) | confirmar |
+| [0026](0026-bens-na-suite-com-orgao-e-contraparte-simulados.md) | Bens na Suite com órgão e contraparte simulados (só desenvolvimento) | Aceito provisoriamente | confirmar |

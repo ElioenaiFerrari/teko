@@ -135,3 +135,19 @@ def suite_arquitetura():
     d.text(40, 430, "O build de produção não contém a autoridade nem o operador de teste (conferido por scripts/release-check.sh).", 11, MUTED)
     d.legend([(MUTED, "chamada", False), (RED, "só em desenvolvimento", True), (BOTO, "leitura do livro", False)])
     return d
+
+
+def bens_suite():
+    d = D("bens-suite", 1100, 560, "Bens na Suite (ambiente de teste)", "Seu consentimento é real, no dispositivo; órgão e contraparte são simulados", "BENS")
+    d.arrow([(240, 178), (310, 178)], "default", label="negócio", at=(275, 164))
+    d.arrow([(510, 178), (580, 178)], "ok", label="consentimento", at=(545, 164))
+    d.arrow([(410, 216), (410, 300)], "bad", dashed=True, label="órgão e contraparte assinam", at=(520, 258))
+    d.arrow([(510, 338), (580, 338)], "boto", label="troca atômica", at=(545, 324))
+    d.node(40, 140, 200, 76, "Tela Bens", "venda, compra, gravame", "link", "Suite")
+    d.node(310, 140, 200, 76, "Comandos", "asset_trade", "plain", "Tauri")
+    d.node(580, 140, 200, 76, "Seu dispositivo", "mostra e assina", "onca", "consentimento")
+    d.node(310, 300, 200, 76, "Órgão e contraparte", "simulados · chaves de teste", "security", "dev-simulation")
+    d.node(580, 300, 200, 76, "Livro local", "teko-assets + teko-coin", "boto", "dev/economy.*")
+    d.text(40, 430, "A troca é atômica: bem e moeda mudam de mãos juntos, ou nada acontece. O build de produção não tem órgão nem contraparte simulados.", 11, MUTED)
+    d.legend([(MUTED, "chamada", False), (GREEN, "consentimento no dispositivo", False), (RED, "só em desenvolvimento", True), (BOTO, "gravação", False)])
+    return d

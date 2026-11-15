@@ -989,3 +989,101 @@ fn an_asset_consent_is_signed_on_the_device_and_verified_by_the_client() {
     );
     assert_eq!(device_code(r.unwrap_err()), ErrorCode::UserRejected);
 }
+
+#[test]
+fn selling_and_buying_an_asset_with_my_device_consent_in_the_devnet_world() {
+    use teko_assets::devnet::{self, CLASS};
+    use teko_coin::devnet::{CHAIN_ID, ECONOMY_FILE, append_allocation};
+
+    let rig = start();
+    let mut c = connect(&rig);
+    let (m, b) = firmware(&rig, 1);
+    c.install_firmware(&rig.trust, &m, &b, &mut |_, _| {})
+        .unwrap();
+    c.setup_pin().unwrap();
+    c.wallet_setup().unwrap();
+    let me_info = c.wallet_address().unwrap();
+    let pk = teko_crypto::hex::decode(&me_info.public_key).unwrap();
+    let me = teko_crypto::ledger_address(&pk);
+
+    let dir = scratch_dir("e2e-assets");
+    let (_, cast) = devnet::open(&dir).unwrap();
+    let cp = cast.counterparty_address();
+    append_allocation(&dir.join(ECONOMY_FILE), &me_info.address, 1_000).unwrap();
+    append_allocation(
+        &dir.join(ECONOMY_FILE),
+        &teko_crypto::wallet_address(&cp).unwrap(),
+        8_000,
+    )
+    .unwrap();
+    let (mut econ, cast) = devnet::open(&dir).unwrap();
+    devnet::register(&mut econ, &cast, &me, "casa-7").unwrap();
+
+    // The consent goes through MY DEVICE (screen + physical confirmation).
+    let consents = Arc::new(AtomicUsize::new(0));
+    let cc = consents.clone();
+    c.set_on_button(move |k| {
+        if k == teko_protocol::ButtonKind::SignAssetConsent {
+            cc.fetch_add(1, Ordering::SeqCst);
+        }
+    });
+    let mut device_consent = |kind: u8,
+                              id: &str,
+                              seller: &teko_ledger::Address,
+                              buyer: &teko_ledger::Address,
+                              price: u64,
+                              version: u64| {
+        let s = teko_crypto::wallet_address(seller).unwrap();
+        let b = teko_crypto::wallet_address(buyer).unwrap();
+        c.wallet_sign_asset_consent(CHAIN_ID, kind, CLASS, id, &s, &b, price, version)
+            .map_err(|e| e.to_string())
+    };
+    let after = devnet::trade_with_counterparty(
+        &mut econ,
+        &cast,
+        &me,
+        "casa-7",
+        3_000,
+        true,
+        &mut device_consent,
+    )
+    .unwrap();
+    assert!(after > 3_000 && after <= 4_000, "{after}"); // 1000 + 3000 - nothing else
+    assert!(devnet::owned(&econ, &me).is_empty());
+    assert_eq!(consents.load(Ordering::SeqCst), 1);
+    assert!(rig.hal.screens().iter().any(|s| {
+        s.title == "VENDA DE BEM"
+            && s.lines.iter().any(|l| l.contains("VENDEDOR"))
+            && s.lines.iter().any(|l| l.contains("Preço: 3000"))
+    }));
+
+    // Buying it back: my device signs as the BUYER.
+    let spent = devnet::trade_with_counterparty(
+        &mut econ,
+        &cast,
+        &me,
+        "casa-7",
+        2_000,
+        false,
+        &mut device_consent,
+    )
+    .unwrap();
+    assert_eq!(spent, after - 2_000);
+    assert_eq!(devnet::owned(&econ, &me).len(), 1);
+    assert_eq!(consents.load(Ordering::SeqCst), 2);
+
+    // The user rejects on the device: nothing moves.
+    rig.hal.push_decision(Decision::Reject);
+    let r = devnet::trade_with_counterparty(
+        &mut econ,
+        &cast,
+        &me,
+        "casa-7",
+        500,
+        true,
+        &mut device_consent,
+    );
+    assert!(r.is_err());
+    assert_eq!(devnet::owned(&econ, &me).len(), 1);
+    teko_coin::audit(econ.ledger()).unwrap();
+}

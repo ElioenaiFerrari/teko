@@ -621,3 +621,29 @@ fn stress_thousands_of_random_networks_never_disagree() {
         assert_agreement(&cfg, &out);
     }
 }
+
+#[test]
+fn a_restored_lock_survives_a_restart_and_is_dropped_on_a_fresh_height() {
+    let mut rng = StdRng::seed_from_u64(9);
+    let keys: Vec<SigningKey> = (0..2).map(|_| generate_signing_key(&mut rng)).collect();
+    let set = || {
+        ValidatorSet::new(
+            keys.iter()
+                .map(|k| Validator {
+                    key: public_key_bytes(k),
+                    power: 1,
+                })
+                .collect(),
+        )
+        .unwrap()
+    };
+    let mut e = Engine::new(CHAIN, keys[0].clone(), SimApp { node: 0 }).unwrap();
+    e.start_height_locked(5, set(), 3, Some((vec![7; 32], 2)));
+    assert_eq!(e.locked(), Some((&[7u8; 32][..], 2)));
+    // a lock from the same or a later round than we resume at is impossible: ignored
+    e.start_height_locked(5, set(), 2, Some((vec![7; 32], 2)));
+    assert_eq!(e.locked(), None);
+    // a normal start never carries a lock over
+    e.start_height_at(6, set(), 0);
+    assert_eq!(e.locked(), None);
+}

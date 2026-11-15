@@ -22,6 +22,6 @@
 - A **fase de fundador é centralizada** (um validador) até o stake total chegar a N; é a escolha B.
 - Só **loopback** (devnet/testnet), **mainnet travada**, sem auditoria, sem valor real.
 - O DKG e o livro de votos continuam presos ao PoA com M-de-N fixo (nós 0–2) até o M6b.
-- **Equivocação:** o nó conta a evidência (`status`), mas **não** envia a transação `Slash` sozinho (isso exige uma conta com saldo); qualquer pessoa com saldo pode enviá-la.
-- O motor BFT não grava o *lock* em disco: um reinício de mais de 1/3 do poder ao mesmo tempo é um risco conhecido; o `economy.wal` só evita votar duas vezes na mesma rodada.
+- **Equivocação:** o nó conta a evidência e **envia a transação `Slash` sozinho** (ADR-0030).
+- O *lock* do BFT agora é gravado no `economy.wal` antes do voto sair e restaurado no reinício (ADR-0030).
 - Sem reputação/histórico como peso extra; sem delegação de stake.

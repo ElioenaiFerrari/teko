@@ -59,6 +59,9 @@ pub(crate) struct Econ {
     last_decide: Instant,
     future: Vec<(u64, BftMsg)>,
     evidence: u32,
+    /// Offences already reported by this node (validator, height, round, kind).
+    reported: std::collections::HashSet<(Vec<u8>, u64, u32, u32)>,
+    key: SigningKey,
     last_resend: Instant,
     last_sync: Instant,
     interval: Duration,
@@ -102,18 +105,41 @@ fn load_blocks(path: &Path, chain: &mut EconomyChain) -> Result<(), NodeError> {
     Ok(())
 }
 
-/// Last `(height, round)` this validator took part in (so a restart does not vote twice
-/// in the same round).
-fn read_wal(path: &Path) -> Option<(u64, u32)> {
-    let text = std::fs::read_to_string(path).ok()?;
-    let line = text.lines().last()?;
-    let (h, r) = line.split_once(' ')?;
-    Some((h.parse().ok()?, r.parse().ok()?))
+/// What a restart must remember (ADR-0030): the last `(height, round)` this validator
+/// spoke in (so it does not vote twice in a round) and the block it is LOCKED on (so it
+/// does not prevote a different block after precommitting one).
+#[derive(Debug, PartialEq, Eq)]
+struct WalEntry {
+    height: u64,
+    round: u32,
+    lock: Option<(Vec<u8>, u32)>,
 }
 
-fn write_wal(path: &Path, height: u64, round: u32) {
+/// Line format: `height round [lock_round lock_block_id_hex]`.
+fn read_wal(path: &Path) -> Option<WalEntry> {
+    let text = std::fs::read_to_string(path).ok()?;
+    let line = text.lines().last()?;
+    let mut it = line.split_whitespace();
+    let height = it.next()?.parse().ok()?;
+    let round = it.next()?.parse().ok()?;
+    let lock = match (it.next(), it.next()) {
+        (Some(r), Some(id)) => Some((teko_crypto::hex::decode(id).ok()?, r.parse().ok()?)),
+        _ => None,
+    };
+    Some(WalEntry {
+        height,
+        round,
+        lock,
+    })
+}
+
+/// Appended and synced BEFORE the vote leaves the node.
+fn write_wal(path: &Path, height: u64, round: u32, lock: Option<(&[u8], u32)>) {
     if let Ok(mut f) = OpenOptions::new().create(true).append(true).open(path) {
-        let _ = writeln!(f, "{height} {round}");
+        let _ = match lock {
+            Some((id, r)) => writeln!(f, "{height} {round} {r} {}", teko_crypto::hex::encode(id)),
+            None => writeln!(f, "{height} {round}"),
+        };
         let _ = f.sync_all();
     }
 }
@@ -149,6 +175,8 @@ impl Econ {
             last_decide: Instant::now(),
             future: Vec::new(),
             evidence: 0,
+            reported: std::collections::HashSet::new(),
+            key: key.clone(),
             last_resend: Instant::now(),
             last_sync: Instant::now(),
             interval: Duration::from_millis(cfg.empty_block_interval_ms.max(20)),
@@ -187,7 +215,13 @@ impl Econ {
                         ),
                     };
                     // Remember we spoke in this round BEFORE the message leaves.
-                    write_wal(&self.wal_path, h, self.engine.round());
+                    let lock = self.engine.locked().map(|(id, r)| (id.to_vec(), r));
+                    write_wal(
+                        &self.wal_path,
+                        h,
+                        self.engine.round(),
+                        lock.as_ref().map(|(id, r)| (id.as_slice(), *r)),
+                    );
                     out.push(wire::msg(wire::ECON_BFT, &env));
                 }
                 Action::Schedule {
@@ -200,7 +234,10 @@ impl Econ {
                     round,
                     step,
                 }),
-                Action::Evidence(_) => self.evidence += 1,
+                Action::Evidence(ev) => {
+                    self.evidence += 1;
+                    self.report_offence(&ev, out);
+                }
                 Action::Decide { commit, payload } => {
                     let d = DecidedBlock {
                         payload,
@@ -209,6 +246,39 @@ impl Econ {
                     self.finish(d, out);
                 }
             }
+        }
+    }
+
+    /// Turns an equivocation proof into a `Slash` transaction signed by this node, queues
+    /// it and gossips it, once per offence (the ledger also refuses a repeat). The node
+    /// account pays no fee, so this works while `fee_per_byte` is 0 (ADR-0030).
+    fn report_offence(&mut self, ev: &teko_bft::Evidence, out: &mut Vec<Msg>) {
+        let (Some(a), Some(validator)) = (&ev.a, ev.validator()) else {
+            return;
+        };
+        if !self
+            .reported
+            .insert((validator.to_vec(), a.height, a.round, a.kind))
+        {
+            return;
+        }
+        let app = self.engine.app();
+        let me = teko_ledger::address_of(&self.me);
+        let queued = app.queued_from(&me);
+        let nonce = app.chain.ledger().nonce_of(&me) + queued;
+        let tx = Tx::new_signed(
+            &self.key,
+            app.chain.ledger().chain_id(),
+            nonce,
+            teko_coin::COIN_MODULE,
+            teko_coin::Op::Slash {
+                evidence: ev.encode_to_vec(),
+            }
+            .encode(),
+        );
+        let raw = tx.to_bytes();
+        if self.engine.app_mut().submit(tx).is_ok() {
+            out.push(wire::msg(wire::ECON_TX_FWD, &SubmitTxs { txs: vec![raw] }));
         }
     }
 
@@ -240,12 +310,14 @@ impl Econ {
             return;
         };
         let height = self.chain().height() + 1;
-        let first_round = match read_wal(&self.wal_path) {
-            Some((h, r)) if h == height => r.saturating_add(1),
-            _ => 0,
+        let (first_round, lock) = match read_wal(&self.wal_path) {
+            Some(w) if w.height == height => (w.round.saturating_add(1), w.lock),
+            _ => (0, None),
         };
         self.started = true;
-        let actions = self.engine.start_height_at(height, set, first_round);
+        let actions = self
+            .engine
+            .start_height_locked(height, set, first_round, lock);
         self.exec(actions, out);
         // replay what arrived early for this height
         let early: Vec<BftMsg> = {
@@ -531,4 +603,79 @@ pub(crate) fn handle(s: &Arc<Shared>, req: &Msg) -> Option<Msg> {
         _ => return None,
     };
     Some(reply)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use rand::SeedableRng;
+    use teko_bft::{Evidence, VoteKind};
+    use teko_crypto::{generate_signing_key, public_key_bytes};
+
+    fn tmp(tag: &str) -> PathBuf {
+        let d = std::env::temp_dir().join(format!("teko-econ-{tag}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&d);
+        std::fs::create_dir_all(&d).unwrap();
+        d
+    }
+
+    #[test]
+    fn the_wal_remembers_the_round_and_the_lock_across_a_restart() {
+        let d = tmp("wal");
+        let p = d.join("economy.wal");
+        assert_eq!(read_wal(&p), None);
+        write_wal(&p, 7, 0, None);
+        assert_eq!(
+            read_wal(&p),
+            Some(WalEntry {
+                height: 7,
+                round: 0,
+                lock: None
+            })
+        );
+        write_wal(&p, 7, 2, Some((&[0xAB; 32], 1)));
+        assert_eq!(
+            read_wal(&p),
+            Some(WalEntry {
+                height: 7,
+                round: 2,
+                lock: Some((vec![0xAB; 32], 1))
+            })
+        );
+        // a torn last line is ignored instead of invented
+        std::fs::write(&p, "7 2 1 zz\n").unwrap();
+        assert_eq!(read_wal(&p), None);
+        let _ = std::fs::remove_dir_all(&d);
+    }
+
+    #[test]
+    fn an_equivocation_becomes_one_slash_transaction_per_offence() {
+        let d = tmp("slash");
+        let mut rng = rand::rngs::StdRng::seed_from_u64(5);
+        let me = generate_signing_key(&mut rng);
+        let bad = generate_signing_key(&mut rng);
+        let owner = teko_ledger::address_of(&public_key_bytes(&me));
+        let genesis =
+            EconomyGenesis::test_defaults("teko-test-economy", public_key_bytes(&me), owner);
+        let cfg = EconomyConfig {
+            genesis,
+            empty_block_interval_ms: 1000,
+        };
+        let mut e = Econ::open(&d, &cfg, &me, 0, Vec::new()).unwrap();
+        let chain_id = cfg.genesis.chain_id.clone();
+        let a = teko_bft::Vote::new(&chain_id, &bad, VoteKind::Prevote, 1, 0, Some(&[1; 32]));
+        let b = teko_bft::Vote::new(&chain_id, &bad, VoteKind::Prevote, 1, 0, Some(&[2; 32]));
+        let ev = Evidence {
+            a: Some(a),
+            b: Some(b),
+        };
+        let mut out = Vec::new();
+        e.report_offence(&ev, &mut out);
+        assert_eq!(out.len(), 1, "the slash is gossiped");
+        assert_eq!(e.engine.app().mempool_len(), 1);
+        e.report_offence(&ev, &mut out);
+        assert_eq!(out.len(), 1, "the same offence is not reported twice");
+        assert_eq!(e.engine.app().mempool_len(), 1);
+        let _ = std::fs::remove_dir_all(&d);
+    }
 }

@@ -36,3 +36,4 @@ Regra: decisões de produto/segurança só passam a `Aceito` pela aprovação do
 | [0027](0027-stake-assinado-no-dispositivo.md) | Stake assinado no dispositivo e tela Validadores | Aceito provisoriamente | confirmar (início da rede: ADR-0021) |
 | [0028](0028-economia-sobre-bft-e-fase-de-fundador.md) | Economia sobre consenso BFT, validadores por stake e fase de fundador | Aceito provisoriamente (M6a) | confirmar |
 | [0029](0029-unidade-teko-e-ypy.md) | Unidade da moeda: TEKO e ypy (6 casas decimais) | Aceito | — |
+| [0030](0030-slash-automatico-e-bloqueio-persistido.md) | Penalidade automática e lock do BFT persistido | Aceito | — |

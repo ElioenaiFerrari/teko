@@ -142,9 +142,28 @@ impl<A: App> Engine<A> {
         set: ValidatorSet,
         first_round: u32,
     ) -> Vec<Action> {
+        self.start_height_locked(height, set, first_round, None)
+    }
+
+    /// The `(block id, round)` this validator is locked on at this height (it
+    /// precommitted that block). A host persists it before the precommit leaves, so a
+    /// restart cannot forget the lock and prevote a different block (ADR-0030).
+    pub fn locked(&self) -> Option<(&[u8], u32)> {
+        self.locked.as_ref().map(|(id, r)| (id.as_slice(), *r))
+    }
+
+    /// Like `start_height_at`, restoring a lock persisted before a restart. A lock from
+    /// a round at or after `first_round` is ignored (it cannot be from a past round).
+    pub fn start_height_locked(
+        &mut self,
+        height: u64,
+        set: ValidatorSet,
+        first_round: u32,
+        lock: Option<(Vec<u8>, u32)>,
+    ) -> Vec<Action> {
         self.set = set;
         self.height = height;
-        self.locked = None;
+        self.locked = lock.filter(|(_, r)| *r < first_round);
         self.valid = None;
         self.proposals.clear();
         self.votes.clear();

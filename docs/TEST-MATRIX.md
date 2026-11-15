@@ -185,6 +185,7 @@ Legenda: **P** = `proptest` (muitos casos), **U** = unitário, **E** = ponta a p
 | Faucet e alocações só na devnet; gênese inválida recusada | coin: `genesis_rules` |
 | A recompensa cai pela metade e vai ao proponente; **o teto nunca é ultrapassado** | coin: `reward_halves_and_is_credited_to_the_proposer`, `the_cap_is_never_exceeded` |
 | Valores em TEKO/ypy: `parse(format(x)) == x` (inclusive no teto); mais de 6 casas recusadas; a tela do dispositivo mostra o valor exato do `u64` assinado, sem arredondar (ADR-0029) | crypto (proptest): `amount::tests::roundtrip`, `roundtrip_any`, `parses`; device-core `tests.rs` (`Valor: 0,0005 TEKO`…) |
+| Equivocação detectada vira um `Slash` por ofensa, enviado pelo próprio nó; o lock do BFT sobrevive ao reinício e não passa de uma altura a outra (ADR-0030) | node: `an_equivocation_becomes_one_slash_transaction_per_offence`, `the_wal_remembers_the_round_and_the_lock_across_a_restart`; bft: `a_restored_lock_survives_a_restart_and_is_dropped_on_a_fresh_height` |
 | Taxa por byte: abaixo do mínimo recusada; paga ao proponente; sem saldo recusada | coin: `fees_are_priced_per_byte_and_paid_to_the_proposer` |
 | Transferência não cria nem destrói moeda; saldo insuficiente e valor zero recusados | coin: `transfers_move_funds_and_refuse_overdraft_and_zero` |
 | Stake, desvinculação e resgate só após o prazo | coin: `stake_unbonding_and_claim` |

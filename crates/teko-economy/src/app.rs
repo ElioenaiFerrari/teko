@@ -39,6 +39,14 @@ impl EconApp {
         self.mempool.len()
     }
 
+    /// How many transactions of `sender` are waiting in the mempool.
+    pub fn queued_from(&self, sender: &teko_ledger::Address) -> u64 {
+        self.mempool
+            .iter()
+            .filter(|t| &t.address() == sender)
+            .count() as u64
+    }
+
     /// Queues a transaction after the cheap admission checks. Returns false for a
     /// duplicate (already queued).
     pub fn submit(&mut self, tx: Tx) -> Result<bool, String> {

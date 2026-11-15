@@ -31,7 +31,7 @@ Validadores (stake + histórico), emissor (elegibilidade de eleitores), órgão 
 - **Teto fixo:** a moeda criada nunca passa do teto. Ela nasce só como **recompensa de bloco** (cai pela metade a cada intervalo), pela **faucet** e por alocações de gênese; as duas últimas só na devnet, rotuladas como moeda de teste. Sem pré-mineração fora da devnet.
 - **Taxa:** preço por byte da transação, assinada junto com ela e paga ao proponente do bloco.
 - **Stake:** quem trava moeda pode ser validador. Ao sair, o valor espera um prazo (desvinculação) e ainda pode ser penalizado nesse período.
-- **Penalidade:** a evidência de equivocação do BFT queima uma parte do stake, uma vez por ofensa.
+- **Penalidade:** a evidência de equivocação do BFT queima uma parte do stake, uma vez por ofensa. O nó que a detecta **envia o `Slash` sozinho** e o *lock* do BFT é gravado no `economy.wal` antes de cada voto ([ADR-0030](../adr/0030-slash-automatico-e-bloqueio-persistido.md)). Limite: sem moedas na conta do nó, o `Slash` só entra com `fee_per_byte` 0 (devnet local). Diagrama desta troca: planejado.
 - **Conservação:** criado − queimado = saldos + stake + em desvinculação (`audit`), testado com proptest. Decisão e **ponto pendente** (quem valida no início da rede): [ADR-0021](../adr/0021-moeda-teto-fixo-stake-e-taxas.md).
 
 ****Stake:** a tela **Validadores** da Suite trava, sai e resgata com assinatura no dispositivo ([ADR-0027](../adr/0027-stake-assinado-no-dispositivo.md)), contra o livro local de teste.

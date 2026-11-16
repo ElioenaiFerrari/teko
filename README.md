@@ -33,7 +33,7 @@ O computador (Suite) **nunca** vê chaves nem PIN. O dispositivo cifra e assina 
 | `teko-bft` | consenso BFT estilo Tendermint ponderado por stake (ainda fora do nó) |
 | `teko-ledger` | livro-razão genérico: transações assinadas, módulos, blocos atômicos e raiz de estado (base da moeda e dos bens) |
 | `teko-coin` | moeda de teto fixo: recompensa com *halving*, taxa por byte, stake, penalidade por equivocação e faucet de teste (só devnet) |
-| `teko-assets` | bens: classes (imóvel e veículo) governadas por órgão M-de-N, metadados fora da chain com hash amarrado ao consentimento, transferência com dono + comprador + órgão, gravames e venda contra pagamento atômica |
+| `teko-assets` | bens: classes (imóvel e veículo) governadas por órgão M-de-N, metadados fora da chain com hash amarrado, **negociação direta com janela de veto** (oferta, aceite com escrow, veto do órgão, finalização por qualquer um; cada parte assina a própria transação no dispositivo, ADR-0036) e gravames |
 | `teko-transport` | trait de transporte e implementação local |
 | `teko-client` | cliente da Suite: onboarding, assinatura, eleição |
 | `device-emulator` | "tela e botões" do dispositivo, em processo separado |
@@ -70,7 +70,8 @@ make fund ADDR=tekow1… AMOUNT=1000   # TEKO de TESTE para a sua carteira, apar
 make tally-time     # tempo de verificação do quadro de votos (paralelo; ADR-0033)
 make devnet-equivocate  # SIMULA a equivocação do validador de teste e mostra a penalidade (trave stake na Suite antes)
 make coin-demo      # demonstração da moeda em memória: teto, halving, taxa, stake e slash
-make assets-demo    # demonstração dos bens: registro com quórum, gravame, venda contra pagamento
+make assets-demo    # demonstração dos bens: registro com quórum, gravame, negociação direta com janela de veto e veto do órgão
+make devnet-veto CLASS=imovel ASSET=<id>   # SIMULA o órgão vetando uma negociação pendente (dentro da janela)
 ```
 
 Demo sem teclado (**nunca** em produção): `cargo run -p device-emulator --features test-buttons -- --auto-pin 482913`.

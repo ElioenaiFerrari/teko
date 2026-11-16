@@ -9,6 +9,9 @@ pub struct ClassSpec {
     pub name: String,
     pub threshold: u32,
     pub registrars: Vec<Vec<u8>>,
+    /// Seconds a pending trade of this class waits before anyone can finalize it; the registrar
+    /// quorum may veto inside it (ADR-0036).
+    pub window_secs: u64,
 }
 
 /// Everything that defines the first state. Public data, no secrets.
@@ -29,7 +32,7 @@ pub struct ClassSpec {
 /// max_validators=16
 /// vote_chain_id=teko-devnet-1                       (the vote chain whose institutions bond here, ADR-0035)
 /// founder=<hex consensus key> tekow1…        (the OWNER address gets the rewards)
-/// class=imovel 2 <hex key> <hex key> <hex key>
+/// class=imovel 2 window=1200 <hex key> <hex key> <hex key>   (`window=` optional: default 1200 s)
 /// alloc=tekow1… 5000000000                          (TEST networks only; normally absent)
 /// ```
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -89,7 +92,13 @@ impl EconomyGenesis {
                 .map_err(|e| format!("{e:?}"))?;
         }
         for c in &self.classes {
-            teko_assets::genesis_class(&mut l, c.name.as_bytes(), &c.registrars, c.threshold)?;
+            teko_assets::genesis_class_with_window(
+                &mut l,
+                c.name.as_bytes(),
+                &c.registrars,
+                c.threshold,
+                c.window_secs,
+            )?;
         }
         Ok(l)
     }
@@ -123,9 +132,10 @@ impl EconomyGenesis {
         for cl in &self.classes {
             let keys: Vec<String> = cl.registrars.iter().map(|k| hex::encode(k)).collect();
             s.push_str(&format!(
-                "class={} {} {}\n",
+                "class={} {} window={} {}\n",
                 cl.name,
                 cl.threshold,
+                cl.window_secs,
                 keys.join(" ")
             ));
         }
@@ -190,17 +200,27 @@ impl EconomyGenesis {
                     let (Some(name), Some(th)) = (it.next(), it.next()) else {
                         return Err(format!("linha {}: class=<nome> <M> <chaves…>", n + 1));
                     };
-                    let registrars = it
-                        .map(|h| {
-                            hex::decode(h).map_err(|_| format!("linha {}: chave inválida", n + 1))
-                        })
-                        .collect::<Result<Vec<_>, _>>()?;
+                    let mut window_secs = teko_assets::DEFAULT_WINDOW_SECS;
+                    let mut registrars = Vec::new();
+                    for tok in it {
+                        if let Some(w) = tok.strip_prefix("window=") {
+                            window_secs = w
+                                .parse()
+                                .map_err(|_| format!("linha {}: window inválida", n + 1))?;
+                        } else {
+                            registrars.push(
+                                hex::decode(tok)
+                                    .map_err(|_| format!("linha {}: chave inválida", n + 1))?,
+                            );
+                        }
+                    }
                     g.classes.push(ClassSpec {
                         name: name.to_string(),
                         threshold: th
                             .parse()
                             .map_err(|_| format!("linha {}: M inválido", n + 1))?,
                         registrars,
+                        window_secs,
                     });
                 }
                 "alloc" => {

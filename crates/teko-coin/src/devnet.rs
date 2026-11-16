@@ -117,6 +117,15 @@ pub struct Economy {
     ledger: Ledger,
     txs: Vec<Tx>,
     path: std::path::PathBuf,
+    /// Time (unix seconds) of the last block: block times only move forward (ADR-0034/0036).
+    last_time: u64,
+    clock: Box<dyn Fn() -> u64 + Send>,
+}
+
+fn wall_clock() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |d| d.as_secs())
 }
 
 impl Economy {
@@ -135,24 +144,51 @@ impl Economy {
         let mut ledger = build(&allocs)?;
         let path = dir.join(TXS_FILE);
         let mut txs = Vec::new();
+        let mut last_time = 0u64;
         if let Ok(text) = fs::read_to_string(&path) {
             for (n, line) in text.lines().enumerate() {
                 let line = line.trim();
                 if line.is_empty() {
                     continue;
                 }
+                // `<block time> <hex tx>`; a line without the time (older file) runs at time 0
+                let (time, line) = match line.split_once(' ') {
+                    Some((t, rest)) => (
+                        t.parse::<u64>()
+                            .map_err(|_| format!("{TXS_FILE}:{}: horário inválido", n + 1))?,
+                        rest.trim(),
+                    ),
+                    None => (0, line),
+                };
+                last_time = last_time.max(time);
                 let bytes =
                     hex::decode(line).map_err(|_| format!("{TXS_FILE}:{}: hex inválido", n + 1))?;
                 let tx = Tx::from_bytes(&bytes)
                     .map_err(|_| format!("{TXS_FILE}:{}: transação inválida", n + 1))?;
                 let h = ledger.height() + 1;
                 ledger
-                    .apply_block(h, &PROPOSER, std::slice::from_ref(&tx))
+                    .apply_block_at(h, time, &PROPOSER, std::slice::from_ref(&tx))
                     .map_err(|e| format!("{TXS_FILE}:{}: {e:?}", n + 1))?;
                 txs.push(tx);
             }
         }
-        Ok(Economy { ledger, txs, path })
+        Ok(Economy {
+            ledger,
+            txs,
+            path,
+            last_time,
+            clock: Box::new(wall_clock),
+        })
+    }
+
+    /// Replaces the clock that stamps new blocks (tests move time to cross a veto window).
+    pub fn set_clock(&mut self, clock: Box<dyn Fn() -> u64 + Send>) {
+        self.clock = clock;
+    }
+
+    /// Time of the last block (0 before any).
+    pub fn last_time(&self) -> u64 {
+        self.last_time
     }
 
     pub fn balance(&self, who: &Address) -> u64 {
@@ -195,16 +231,19 @@ impl Economy {
     /// Validates `tx` against the current state and, if it applies, stores it.
     pub fn submit(&mut self, tx: Tx) -> Result<(), String> {
         let h = self.ledger.height() + 1;
+        // the block time: this machine's clock, never at or before the previous block's
+        let time = (self.clock)().max(self.last_time.saturating_add(1));
         self.ledger
-            .apply_block(h, &PROPOSER, std::slice::from_ref(&tx))
+            .apply_block_at(h, time, &PROPOSER, std::slice::from_ref(&tx))
             .map_err(|e| describe(&format!("{e:?}")))?;
         let mut f = fs::OpenOptions::new()
             .create(true)
             .append(true)
             .open(&self.path)
             .map_err(|e| format!("não consegui gravar {}: {e}", self.path.display()))?;
-        writeln!(f, "{}", hex::encode(&tx.to_bytes()))
+        writeln!(f, "{time} {}", hex::encode(&tx.to_bytes()))
             .map_err(|e| format!("falha ao gravar: {e}"))?;
+        self.last_time = time;
         self.txs.push(tx);
         Ok(())
     }

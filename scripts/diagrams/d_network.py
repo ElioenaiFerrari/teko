@@ -109,14 +109,16 @@ def ledger_domains():
     d.legend([(BOTO, "livro de votos", False), (MUTED, "livro de economia", False), (LINK, "elegibilidade", False), (GREEN, "aprovação do órgão", False)])
     return d
 
-def delivery_vs_payment():
-    d = D("delivery-vs-payment", 1100, 0, "Venda de bem contra pagamento", "Troca atômica: ou tudo acontece, ou nada (módulo de bens + moeda)", "BENS")
-    A = [("v", "Vendedor", "dispositivo", "onca", 110), ("c", "Comprador", "dispositivo", "onca", 380), ("o", "Órgão", "M-de-N", "plain", 650), ("l", "Livro de economia", "Swap atômico", "focal", 940)]
-    M = [("v", "l", "propõe: bem X por moeda Y", "default", False), ("c", "l", "aceita e assina", "default", False),
-         ("o", "l", "aprova a transferência", "default", False), ("l", "v", "recebe a moeda", "ok", True), ("l", "c", "recebe o bem", "ok", True)]
-    N = [(2, "l", "Atômico: tudo ou nada, com gravames checados", 320)]
+def asset_trade():
+    d = D("asset-trade", 1100, 0, "Negociação direta de um bem com janela de veto", "Cada parte envia a PRÓPRIA transação; o preço fica em escrow; o órgão pode vetar na janela; depois qualquer um conclui", "BENS")
+    A = [("v", "Vendedor", "dispositivo", "onca", 110), ("c", "Comprador", "dispositivo", "onca", 380), ("l", "Livro de economia", "bens + moeda", "focal", 680), ("o", "Órgão", "quórum M-de-N", "plain", 960)]
+    M = [("v", "l", "Offer: comprador, preço, versão", "default", False), ("c", "l", "Accept: os termos que viu", "default", False),
+         ("l", "l", "preço vai ao escrow; janela começa", "accent", False), ("o", "l", "Veto (opcional): motivo público", "bad", False),
+         ("l", "c", "veto: o preço volta", "ok", True), ("c", "l", "Finalize (qualquer um, após a janela)", "default", False),
+         ("l", "v", "recebe a moeda", "ok", True), ("l", "c", "recebe o bem", "ok", True)]
+    N = [(2, "l", "O prazo é medido pelo horário do bloco", 330), (3, "l", "Só vale DENTRO da janela, com o quórum", 330), (5, "l", "Atômico: tudo ou nada; gravame cancela", 330)]
     d.sequence(A, M, notas=N, passo=34)
-    d.legend([(MUTED, "assinatura no dispositivo", False), (GREEN, "efeito", True)])
+    d.legend([(MUTED, "transação do usuário (dispositivo)", False), (GREEN, "efeito", True), (RED, "veto do órgão", False)])
     return d
 
 def suite_architecture():

@@ -45,6 +45,8 @@ fn main() {
             commands::asset_register_test,
             commands::asset_lien,
             commands::asset_trade,
+            commands::asset_finalize,
+            commands::asset_veto,
             commands::dev_mode,
             commands::issue_credential,
             commands::revoke_credential,

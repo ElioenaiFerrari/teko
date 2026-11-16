@@ -102,6 +102,10 @@ pub struct Ctx<'a, 'b> {
     overlay: &'a mut Overlay<'b>,
     module: u32,
     pub height: u64,
+    /// Unix seconds of the block being executed: the PROPOSER's time, which every validator
+    /// checked against its own clock and the replay checks only moves forward (ADR-0034).
+    /// Consensus data, so modules may measure windows with it (0 on the legacy entry points).
+    pub time: u64,
     pub chain_id: &'a str,
     /// Validator that proposed the block being executed (fees and rewards go here).
     pub proposer: Address,
@@ -157,6 +161,7 @@ impl Ctx<'_, '_> {
             overlay: &mut *self.overlay,
             module,
             height: self.height,
+            time: self.time,
             chain_id: self.chain_id,
             proposer: self.proposer,
             sender,
@@ -320,6 +325,7 @@ impl Ledger {
                 overlay: &mut overlay,
                 module: self.fee_module.unwrap_or(0),
                 height: self.height,
+                time: 0,
                 chain_id: &self.chain_id,
                 proposer: [0; 32],
                 sender: tx.address(),
@@ -340,6 +346,7 @@ impl Ledger {
         &self,
         overlay: &mut Overlay<'_>,
         height: u64,
+        time: u64,
         proposer: &Address,
         tx: &Tx,
     ) -> Result<Receipt, TxError> {
@@ -374,6 +381,7 @@ impl Ledger {
                 overlay,
                 module: fid,
                 height,
+                time,
                 chain_id: &self.chain_id,
                 proposer: *proposer,
                 sender,
@@ -394,6 +402,7 @@ impl Ledger {
             overlay,
             module: tx.module,
             height,
+            time,
             chain_id: &self.chain_id,
             proposer: *proposer,
             sender,
@@ -416,6 +425,7 @@ impl Ledger {
         &self,
         overlay: &mut Overlay<'_>,
         height: u64,
+        time: u64,
         proposer: &Address,
     ) -> Result<Vec<Event>, LedgerError> {
         let mut events = Vec::new();
@@ -424,6 +434,7 @@ impl Ledger {
                 overlay,
                 module: *id,
                 height,
+                time,
                 chain_id: &self.chain_id,
                 proposer: *proposer,
                 sender: *proposer,
@@ -440,8 +451,14 @@ impl Ledger {
     }
 
     /// Proposer helper: executes `txs` in order on the next height and keeps only the
-    /// ones that succeed (a block with an invalid transaction is rejected whole).
+    /// ones that succeed (a block with an invalid transaction is rejected whole). Runs with
+    /// block time 0; use `select_valid_at` when modules measure time.
     pub fn select_valid(&self, proposer: &Address, txs: Vec<Tx>) -> Vec<Tx> {
+        self.select_valid_at(0, proposer, txs)
+    }
+
+    /// Like `select_valid`, for a block whose time (unix seconds) is `time`.
+    pub fn select_valid_at(&self, time: u64, proposer: &Address, txs: Vec<Tx>) -> Vec<Tx> {
         let height = self.height.saturating_add(1);
         let mut overlay = Overlay {
             base: &self.state,
@@ -450,7 +467,7 @@ impl Ledger {
         let mut kept = Vec::new();
         for tx in txs.into_iter().take(MAX_TXS_PER_BLOCK) {
             let snapshot = overlay.writes.clone();
-            match self.run(&mut overlay, height, proposer, &tx) {
+            match self.run(&mut overlay, height, time, proposer, &tx) {
                 Ok(_) => kept.push(tx),
                 Err(_) => overlay.writes = snapshot,
             }
@@ -458,11 +475,50 @@ impl Ledger {
         kept
     }
 
+    /// Mempool admission by EXECUTION: would `tx` succeed as the next transaction of a block of
+    /// time `time`, after the `prior` ones that succeed (the same selection a proposer makes)?
+    /// Returns the reason when not, so a client hears "veto window still open" at once instead of
+    /// a transaction that waits in a mempool until time passes.
+    pub fn dry_run_tx_at(
+        &self,
+        time: u64,
+        proposer: &Address,
+        prior: &[Tx],
+        tx: &Tx,
+    ) -> Result<(), TxError> {
+        let height = self.height.saturating_add(1);
+        let mut overlay = Overlay {
+            base: &self.state,
+            writes: BTreeMap::new(),
+        };
+        for p in prior.iter().take(MAX_TXS_PER_BLOCK) {
+            let snapshot = overlay.writes.clone();
+            if self.run(&mut overlay, height, time, proposer, p).is_err() {
+                overlay.writes = snapshot;
+            }
+        }
+        self.run(&mut overlay, height, time, proposer, tx)
+            .map(|_| ())
+    }
+
     /// Executes a block ATOMICALLY: either every transaction applies and the height
-    /// advances, or nothing changes.
+    /// advances, or nothing changes. Runs with block time 0; use `apply_block_at` when modules
+    /// measure time.
     pub fn apply_block(
         &mut self,
         height: u64,
+        proposer: &Address,
+        txs: &[Tx],
+    ) -> Result<BlockOutcome, LedgerError> {
+        self.apply_block_at(height, 0, proposer, txs)
+    }
+
+    /// Like `apply_block`, for a block whose time (unix seconds) is `time`: what modules read
+    /// as `Ctx::time` (the economy passes the block's own timestamp, so replicas agree).
+    pub fn apply_block_at(
+        &mut self,
+        height: u64,
+        time: u64,
         proposer: &Address,
         txs: &[Tx],
     ) -> Result<BlockOutcome, LedgerError> {
@@ -482,10 +538,10 @@ impl Ledger {
                 writes: BTreeMap::new(),
             };
             let mut receipts = Vec::with_capacity(txs.len());
-            self.begin_block(&mut overlay, height, proposer)?;
+            self.begin_block(&mut overlay, height, time, proposer)?;
             for (index, tx) in txs.iter().enumerate() {
                 let r = self
-                    .run(&mut overlay, height, proposer, tx)
+                    .run(&mut overlay, height, time, proposer, tx)
                     .map_err(|error| LedgerError::Tx { index, error })?;
                 receipts.push(r);
             }
@@ -513,6 +569,17 @@ impl Ledger {
         proposer: &Address,
         txs: &[Tx],
     ) -> Result<(Hash, Vec<Receipt>), LedgerError> {
+        self.check_block_at(height, 0, proposer, txs)
+    }
+
+    /// Like `check_block`, for a block whose time (unix seconds) is `time`.
+    pub fn check_block_at(
+        &self,
+        height: u64,
+        time: u64,
+        proposer: &Address,
+        txs: &[Tx],
+    ) -> Result<(Hash, Vec<Receipt>), LedgerError> {
         let expected = self.height.saturating_add(1);
         if height != expected {
             return Err(LedgerError::WrongHeight {
@@ -528,10 +595,10 @@ impl Ledger {
             writes: BTreeMap::new(),
         };
         let mut receipts = Vec::with_capacity(txs.len());
-        self.begin_block(&mut overlay, height, proposer)?;
+        self.begin_block(&mut overlay, height, time, proposer)?;
         for (index, tx) in txs.iter().enumerate() {
             let r = self
-                .run(&mut overlay, height, proposer, tx)
+                .run(&mut overlay, height, time, proposer, tx)
                 .map_err(|error| LedgerError::Tx { index, error })?;
             receipts.push(r);
         }

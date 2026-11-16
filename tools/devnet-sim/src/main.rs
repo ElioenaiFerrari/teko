@@ -12,10 +12,46 @@ USO:
   devnet-sim equivocate [--dir dev/net] [--validator 0]
     Faz o validador de teste assinar dois votos conflitantes (mesma altura e rodada, blocos
     diferentes) e envia a evidência como transação Slash. O livro penaliza o DONO do validador.
+
+  devnet-sim veto --class imovel --asset <id> [--dir dev/net] [--reason \"motivo\"]
+    O órgão SIMULADO da classe veta, dentro da janela, a negociação pendente do bem (ADR-0036): o
+    preço volta ao comprador e o bem continua com o dono. O motivo é público na cadeia.
 ";
+
+fn run_veto(args: &[String]) -> Result<(), String> {
+    let mut dir = PathBuf::from("dev/net");
+    let (mut class, mut asset) = (String::new(), String::new());
+    let mut reason = String::from("veto de teste do órgão simulado");
+    let mut i = 1;
+    while i < args.len() {
+        let v = args
+            .get(i + 1)
+            .ok_or("faltou o valor de uma opção")?
+            .clone();
+        match args.get(i).map(String::as_str) {
+            Some("--dir") => dir = PathBuf::from(v),
+            Some("--class") => class = v,
+            Some("--asset") => asset = v,
+            Some("--reason") => reason = v,
+            _ => return Err("opção desconhecida (veja --help)".into()),
+        }
+        i += 2;
+    }
+    if class.is_empty() || asset.is_empty() {
+        return Err(
+            "uso: devnet-sim veto --class <classe> --asset <id> [--reason \"motivo\"]".into(),
+        );
+    }
+    println!("SIMULAÇÃO (rede de teste): o órgão de {class} vai vetar a negociação de {asset}.");
+    println!("{}", devnet_sim::veto(&dir, &class, &asset, &reason)?);
+    Ok(())
+}
 
 fn run() -> Result<(), String> {
     let args: Vec<String> = std::env::args().skip(1).collect();
+    if args.first().map(String::as_str) == Some("veto") {
+        return run_veto(&args);
+    }
     if args.first().map(String::as_str) != Some("equivocate") {
         print!("{HELP}");
         return Ok(());

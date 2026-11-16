@@ -20,7 +20,7 @@ crates/teko-registration/  (Fase 2) assinatura cega RFC 9474 (registro anônimo 
 crates/teko-ballot-crypto/  (Fase 2) ElGamal exponencial de limiar P-256, provas 0/1 e soma, DKG Feldman (sem auditoria)
 crates/teko-ledger/        (Fase 2, M2) livro-razão genérico: Tx assinada, módulos, blocos atômicos, raiz de estado (ADR-0020)
 crates/teko-coin/          (Fase 2, M3) moeda de teto fixo: halving, taxa por byte, stake, slash, faucet devnet (ADR-0021)
-crates/teko-assets/        (Fase 2, M4) bens: classes com órgão M-de-N, dono+comprador+órgão, gravames, Swap atômico (ADR-0022)
+crates/teko-assets/        (Fase 2, M4) bens: classes com órgão M-de-N, negociação direta com janela de veto (oferta, aceite com escrow, veto, finalização; ADR-0036), gravames
 crates/teko-wallet/        (Fase 2, M5a) carteira: BIP-39 24 palavras (só na tela do dispositivo), SLIP-10 P-256, endereço tekow1…; independente da identidade (ADR-0023)
 crates/teko-economy/       (Fase 2, M6a) economia sobre BFT: blocos com certificado, validadores por stake, fase de fundador (ADR-0028)
 crates/teko-chain/         (Fase 2) rede de votos em **BFT institucional** (ADR-0034): perfis devnet/testnet (mainnet TRAVADA), blocos com certificado de commit, réplica verificada
@@ -85,6 +85,7 @@ make docs-check                        # confere links, imagens e crates no READ
 make fund ADDR=tekow1… AMOUNT=1000    # TEKO de TESTE na carteira (devnet local; decimais ok; 1 TEKO = 1.000.000 ypy, ADR-0029)
 make diagrams                         # regenera os diagramas (docs/diagrams)
 make devnet FOUNDER=tekow1…            # (1ª vez) FOUNDER = sua carteira: recebe as recompensas do fundador (ADR-0028)
+make devnet-veto CLASS=imovel ASSET=<id>  # SIMULA o órgão vetando uma negociação de bem pendente (ADR-0036); só dev
 make devnet-equivocate                 # SIMULA a equivocação do validador de teste (penalidade/Slash); só dev
 make tally-time                        # apura o quadro (release) e mostra o tempo; TEKO_VERIFY_THREADS=1 = sequencial
 make explorer                          # explorador da chain em http://127.0.0.1:8545 (precisa de make devnet)

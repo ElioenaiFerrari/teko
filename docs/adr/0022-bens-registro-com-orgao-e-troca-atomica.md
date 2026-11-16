@@ -1,5 +1,7 @@
 # ADR-0022 — Bens: registro com órgão M-de-N, consentimentos e troca atômica (`teko-assets`)
 
+> **Atualização (ADR-0036, 2026-11-16):** a transferência e a venda deixaram de exigir os três consentimentos numa só transação. Hoje é uma **negociação direta com janela de veto** (oferta, aceite com escrow, veto do órgão, finalização). Registro, gravames e quórum do órgão seguem como abaixo.
+
 **Status:** Aceito provisoriamente (2026-11-14): o dono do produto aprovou "dono + comprador + órgão" para transferir bens e dois livros separados. **Implementado** como biblioteca (M4); ainda não roda na rede nem na Suite.
 
 ## Decisões

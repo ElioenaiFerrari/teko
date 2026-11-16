@@ -118,8 +118,11 @@ fn kind_of(tx: &Tx) -> TxKind {
         use teko_assets::Op;
         let parsed = match Op::decode(&tx.payload) {
             Some(Op::Register(m)) => Some(("register", m.class, m.asset)),
-            Some(Op::Transfer(m)) => Some(("transfer", m.class, m.asset)),
-            Some(Op::Swap(m)) => Some(("swap", m.class, m.asset)),
+            Some(Op::Offer(m)) => Some(("offer", m.class, m.asset)),
+            Some(Op::Accept(m)) => Some(("accept", m.class, m.asset)),
+            Some(Op::Cancel(m)) => Some(("cancel", m.class, m.asset)),
+            Some(Op::Finalize(m)) => Some(("finalize", m.class, m.asset)),
+            Some(Op::Veto(m)) => Some(("veto", m.class, m.asset)),
             Some(Op::AddLien(m)) => Some(("add_lien", m.class, m.asset)),
             Some(Op::ReleaseLien(m)) => Some(("release_lien", m.class, m.asset)),
             Some(Op::UpdateRegistrars(m)) => Some(("update_registrars", m.class, Vec::new())),

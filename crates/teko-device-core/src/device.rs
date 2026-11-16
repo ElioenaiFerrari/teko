@@ -23,12 +23,11 @@ use teko_election::{
     sign_ballot, validate_revision,
 };
 use teko_protocol::{
-    AssetConsentSigned, AttestationResponse, AttributeProof, BallotSignature, ButtonKind,
-    ButtonRequest, CivicId, ContestInfo, CredentialLoaded, DeviceState, DocumentSignature,
-    ElectionLoaded, ErrorCode, Failure, Features, FirmwareStatus, IdentityRequest, PROTO_VERSION,
-    PairwiseId, PinSet, PinWrong, Predicate, PredicateKind, RegistrationRequest, RegistrationToken,
-    Request, Response, Success, TransferSigned, Unlocked, VoterKey, WalletBackupOk, WalletReady,
-    WipeDone,
+    AttestationResponse, AttributeProof, BallotSignature, ButtonKind, ButtonRequest, CivicId,
+    ContestInfo, CredentialLoaded, DeviceState, DocumentSignature, ElectionLoaded, ErrorCode,
+    Failure, Features, FirmwareStatus, IdentityRequest, PROTO_VERSION, PairwiseId, PinSet,
+    PinWrong, Predicate, PredicateKind, RegistrationRequest, RegistrationToken, Request, Response,
+    Success, TransferSigned, Unlocked, VoterKey, WalletBackupOk, WalletReady, WipeDone,
 };
 use teko_wallet::{MasterKey, Phrase, WORD_COUNT};
 use zeroize::{Zeroize, Zeroizing};
@@ -398,7 +397,32 @@ impl<H: Hal, R: Rng + CryptoRng> Device<H, R> {
             Request::RestoreWallet(_) => self.restore_wallet(),
             Request::CheckWalletBackup(_) => self.check_wallet_backup(),
             Request::GetAddress(_) => self.get_address(),
-            Request::SignAssetConsent(m) => self.sign_asset_consent(&m),
+            Request::SignAssetOffer(m) => self.sign_asset_trade(&AssetTrade {
+                accept: false,
+                chain_id: &m.chain_id,
+                class: &m.class,
+                asset: &m.asset,
+                other_address: &m.buyer_address,
+                price: m.price,
+                version: m.version,
+                metadata: &m.metadata,
+                window_secs: m.window_secs,
+                fee: m.fee,
+                nonce: m.nonce,
+            }),
+            Request::SignAssetAccept(m) => self.sign_asset_trade(&AssetTrade {
+                accept: true,
+                chain_id: &m.chain_id,
+                class: &m.class,
+                asset: &m.asset,
+                other_address: &m.seller_address,
+                price: m.price,
+                version: m.version,
+                metadata: &m.metadata,
+                window_secs: m.window_secs,
+                fee: m.fee,
+                nonce: m.nonce,
+            }),
             Request::SignStake(m) => {
                 self.sign_stake(&m.chain_id, m.action, m.amount, m.fee, m.nonce)
             }
@@ -987,28 +1011,24 @@ impl<H: Hal, R: Rng + CryptoRng> Device<H, R> {
         }))
     }
 
-    /// Signs the consent of THIS wallet (as seller or buyer) to move an asset. The
-    /// bytes that are signed come from the same fields the screen shows.
-    fn sign_asset_consent(
-        &mut self,
-        m: &teko_protocol::SignAssetConsent,
-    ) -> Result<Response, Failure> {
-        use teko_crypto::ledger::{INTENT_SWAP, INTENT_TRANSFER, asset_intent_hash};
+    /// Builds, SHOWS and signs this wallet's OWN transaction of an asset trade (ADR-0036): the
+    /// owner's `Offer` or the buyer's `Accept`. The host supplies only fields; the transaction is
+    /// derived here from exactly what the screen shows, so the computer cannot change it.
+    fn sign_asset_trade(&mut self, t: &AssetTrade<'_>) -> Result<Response, Failure> {
+        use teko_crypto::ledger::{
+            MODULE_ASSETS, asset_accept_payload, asset_offer_payload, tx_signing_bytes,
+        };
         self.require_unlocked_initialized()?;
         self.require_wallet()?;
         let bad = |msg: &str| fail(ErrorCode::InvalidArgument, msg);
-        let kind = u8::try_from(m.kind).map_err(|_| bad("tipo de ação inválido"))?;
-        if kind != INTENT_TRANSFER && kind != INTENT_SWAP {
-            return Err(bad("tipo de ação inválido"));
-        }
         let clean = |s: &str, max: usize| {
             sanitize(s, max).filter(|c| !c.trim().is_empty() && c.as_str() == s)
         };
-        let chain = clean(&m.chain_id, 48).ok_or_else(|| bad("rede inválida"))?;
-        let class = clean(&m.class, 32).ok_or_else(|| bad("classe inválida"))?;
-        let asset = clean(&m.asset, 64).ok_or_else(|| bad("identificador do bem inválido"))?;
+        let chain = clean(t.chain_id, 48).ok_or_else(|| bad("rede inválida"))?;
+        let class = clean(t.class, 32).ok_or_else(|| bad("classe inválida"))?;
+        let asset = clean(t.asset, 64).ok_or_else(|| bad("identificador do bem inválido"))?;
         // the metadata record: valid for the class, naming THIS asset (ADR-0032)
-        let record = m.metadata.as_slice();
+        let record = t.metadata;
         let record_id =
             teko_crypto::asset_meta::asset_id(&class, record).map_err(|e| bad(&e.to_string()))?;
         if record_id != asset {
@@ -1017,67 +1037,80 @@ impl<H: Hal, R: Rng + CryptoRng> Device<H, R> {
         let summary = teko_crypto::asset_meta::summary_lines(&class, record)
             .map_err(|e| bad(&e.to_string()))?;
         let meta_hash = teko_crypto::asset_meta::hash(&class, record);
-        let from = teko_crypto::parse_wallet_address(&m.from_address)
-            .map_err(|_| bad("endereço do vendedor inválido"))?;
-        let to = teko_crypto::parse_wallet_address(&m.to_address)
-            .map_err(|_| bad("endereço do comprador inválido"))?;
-        if from == to {
-            return Err(bad("vendedor e comprador são o mesmo"));
+        let other = teko_crypto::parse_wallet_address(t.other_address).map_err(|_| {
+            bad(if t.accept {
+                "endereço do vendedor inválido"
+            } else {
+                "endereço do comprador inválido"
+            })
+        })?;
+        if t.window_secs == 0 {
+            return Err(bad("a janela de veto deve ser positiva"));
         }
-        if kind == INTENT_SWAP && m.price == 0 {
-            return Err(bad("o preço deve ser positivo"));
-        }
-        if kind == INTENT_TRANSFER && m.price != 0 {
-            return Err(bad("transferência simples não tem preço"));
-        }
-        let master = self.master()?;
-        let sk = master
+        t.price
+            .checked_add(t.fee)
+            .ok_or_else(|| bad("preço + taxa excede o limite"))?;
+        let sk = self
+            .master()?
             .signing_key(0)
             .map_err(|_| fail(ErrorCode::Internal, "chave da carteira"))?;
         let pk = public_key_bytes(&sk);
         let me = teko_crypto::ledger_address(&pk);
-        let role = if me == from {
-            "VENDEDOR"
-        } else if me == to {
-            "COMPRADOR"
+        if me == other {
+            return Err(bad("vendedor e comprador são o mesmo"));
+        }
+        let (title, kind, role) = if t.accept {
+            ("ACEITAR OFERTA", ButtonKind::SignAssetAccept, "COMPRADOR")
         } else {
-            return Err(bad("esta carteira não é parte da operação"));
+            ("OFERECER BEM", ButtonKind::SignAssetOffer, "VENDEDOR")
         };
         let mut lines = Vec::from([format!("Você é o {role}")]);
         lines.push(format!("Bem: {class}/{asset}"));
         for l in &summary {
             lines.extend(wrap(l, 28));
         }
-        lines.push(String::from("Vendedor:"));
-        lines.extend(wrap(&m.from_address, 22));
-        lines.push(String::from("Comprador:"));
-        lines.extend(wrap(&m.to_address, 22));
-        if kind == INTENT_SWAP {
-            push_amount(&mut lines, "Preço:", m.price);
+        lines.push(String::from(if t.accept {
+            "Vendedor:"
         } else {
+            "Comprador:"
+        }));
+        lines.extend(wrap(t.other_address, 22));
+        if t.price == 0 {
             lines.push(String::from("Sem pagamento (só o bem)"));
-        }
-        lines.push(format!("Versão do bem: {}", m.version));
-        lines.push(format!("Rede: {chain}"));
-        let title = if kind == INTENT_SWAP {
-            "VENDA DE BEM"
         } else {
-            "TRANSFERIR BEM"
+            push_amount(&mut lines, "Preço:", t.price);
+        }
+        if t.accept && t.price > 0 {
+            lines.push(String::from("O preço fica em escrow."));
+        }
+        lines.push(format!("Janela de veto: {}", window_text(t.window_secs)));
+        lines.push(String::from("O órgão pode vetar nela;"));
+        lines.push(String::from("se vetar, tudo volta."));
+        push_amount(&mut lines, "Taxa:", t.fee);
+        lines.push(format!("Versão do bem: {}", t.version));
+        lines.push(format!("Rede: {chain}"));
+        self.confirm(kind, Screen::new(title, lines))?;
+        let payload = if t.accept {
+            asset_accept_payload(
+                class.as_bytes(),
+                asset.as_bytes(),
+                t.price,
+                t.version,
+                &meta_hash,
+            )
+        } else {
+            asset_offer_payload(
+                class.as_bytes(),
+                asset.as_bytes(),
+                &other,
+                t.price,
+                t.version,
+                &meta_hash,
+            )
         };
-        self.confirm(ButtonKind::SignAssetConsent, Screen::new(title, lines))?;
-        let h = asset_intent_hash(
-            &chain,
-            kind,
-            class.as_bytes(),
-            asset.as_bytes(),
-            &from,
-            &to,
-            m.price,
-            m.version,
-            &meta_hash,
-        );
-        let signature = sign_tagged(&sk, tags::ASSET_APPROVAL, &h);
-        Ok(Response::AssetConsentSigned(AssetConsentSigned {
+        let msg = tx_signing_bytes(&chain, t.nonce, t.fee, MODULE_ASSETS, &payload, &pk);
+        let signature = sign_tagged(&sk, tags::LEDGER_TX, &msg);
+        Ok(Response::TransferSigned(TransferSigned {
             signature,
             public_key: pk,
         }))
@@ -2023,6 +2056,32 @@ fn resolve_predicate(
 
 /// One screen line `"Label: 1.234,5 TEKO"` (exact, never rounded: ADR-0029);
 /// label and value go on separate lines when they do not fit in 28 columns.
+/// The fields of one asset-trade request, shared by `SignAssetOffer` and `SignAssetAccept`.
+struct AssetTrade<'a> {
+    accept: bool,
+    chain_id: &'a str,
+    class: &'a str,
+    asset: &'a str,
+    /// The OTHER party: the buyer (offer) or the seller (accept).
+    other_address: &'a str,
+    price: u64,
+    version: u64,
+    metadata: &'a [u8],
+    window_secs: u64,
+    fee: u64,
+    nonce: u64,
+}
+
+/// "20 min", "3 h", "2 dias": the veto window as a person reads it.
+fn window_text(secs: u64) -> String {
+    match secs {
+        s if s < 120 => format!("{s} s"),
+        s if s < 7_200 => format!("{} min", s / 60),
+        s if s < 172_800 => format!("{} h", s / 3_600),
+        s => format!("{} dias", s / 86_400),
+    }
+}
+
 fn push_amount(lines: &mut Vec<String>, label: &str, ypy: u64) {
     let value = teko_crypto::amount::format_amount(ypy);
     let one = format!("{label} {value}");

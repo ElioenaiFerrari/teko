@@ -1,5 +1,7 @@
 # ADR-0025 — Consentimentos de bens assinados no dispositivo (`SignAssetConsent`)
 
+> **Substituído em parte pelo [ADR-0036](0036-bens-negociacao-direta-com-janela-de-veto.md):** o dispositivo não assina mais um *consentimento* (`SignAssetConsent`); assina a **transação inteira** do usuário (`SignAssetOffer`/`SignAssetAccept`), que sai da carteira dele.
+
 **Status:** Aceito provisoriamente (2026-11-14, continuação do M5, dono do produto). **Implementado** no dispositivo, no protocolo e no cliente (M5c). **Ainda sem tela na Suite**: o fluxo de compra e venda de bens na interface é o próximo passo.
 
 ## Contexto

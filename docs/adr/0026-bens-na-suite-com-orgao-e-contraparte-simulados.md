@@ -1,5 +1,7 @@
 # ADR-0026 — Bens na Suite com órgão e contraparte simulados (só desenvolvimento)
 
+> **Atualização (ADR-0036):** o *relayer* só leva as transações do **órgão** simulado (registro, gravame, veto, finalização); as transações do usuário (oferta e aceite) saem da carteira dele, assinadas no dispositivo.
+
 **Status:** Aceito provisoriamente (2026-11-14, continuação do M5, dono do produto). **Implementado** (tela **Bens** da Suite, `teko_assets::devnet`).
 
 ## Contexto

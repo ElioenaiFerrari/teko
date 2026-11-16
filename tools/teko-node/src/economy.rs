@@ -54,7 +54,7 @@ impl LaneApp for EconApp {
     }
 
     fn pending(&self) -> usize {
-        self.mempool_len()
+        self.executable_len()
     }
 
     fn apply(&mut self, d: DecidedBlock) -> Result<(), NodeError> {

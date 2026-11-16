@@ -6,9 +6,10 @@
 //!   * a SIMULATED REGISTRAR (órgão) PER CLASS (`imovel`, `veiculo`): 3 keys, 2-of-3,
 //!     that registers assets and places or releases liens;
 //!   * a SIMULATED COUNTERPARTY: another citizen to sell to or buy from;
-//!   * a relayer that pays the fees of the órgão's own transactions.
+//!   * a relayer that pays the fees of the órgão's own transactions (never of a citizen's).
 //!
-//! The citizen's consent always comes from THEIR device (closure `consent`).
+//! The citizen's own transactions (offer, accept) are built AND SIGNED by THEIR device
+//! (closure `TxSigner`): they leave from the citizen's wallet, not from the relayer (ADR-0036).
 //! Nothing here exists in a production build.
 
 use std::collections::BTreeMap;
@@ -22,8 +23,9 @@ use teko_ledger::{Address, Ledger, Tx, address_of};
 
 use crate::metadata::MetadataStore;
 use crate::{
-    ASSETS_MODULE, Approval, Intent, LienOp, Op, RegisterOp, ReleaseOp, SwapOp, asset, assets_of,
-    genesis_class, module,
+    ASSETS_MODULE, AcceptOp, Approval, FinalizeOp, Intent, LienOp, OfferOp, OfferRec, Op,
+    RegisterOp, ReleaseOp, VetoOp, asset, assets_of, class_info, genesis_class, module, offer_of,
+    offers,
 };
 
 /// What the devnet screens need from an economy: the local test file or a real node.
@@ -205,22 +207,283 @@ pub fn balance_of(dir: &Path, who: &Address) -> Result<Option<u64>, String> {
     Ok(Some(open(dir)?.0.balance(who)))
 }
 
-/// What my device is asked to consent to: the asset, the parties, the price, the version
-/// and the metadata RECORD (the device shows it and signs its hash).
-pub struct ConsentRequest<'a> {
-    /// 2 = transfer, 3 = swap.
-    pub kind: u8,
+/// What the citizen's DEVICE is asked to build, show and sign (ADR-0036): ONE transaction of its
+/// own wallet. The device derives the transaction from these fields and signs after the button.
+pub struct TradeRequest<'a> {
+    pub action: TradeAction,
+    pub chain_id: &'a str,
     pub class: &'a str,
     pub asset: &'a str,
     pub seller: &'a Address,
     pub buyer: &'a Address,
     pub price: u64,
+    /// The asset version the trade is bound to.
     pub version: u64,
+    /// The asset's canonical metadata RECORD (the device shows a summary and signs its hash).
     pub metadata: &'a [u8],
+    /// Seconds the trade waits after the buyer accepts (the class's veto window).
+    pub window_secs: u64,
+    pub nonce: u64,
+    pub fee: u64,
 }
 
-/// A consent supplier: the DEVICE of the person (shows and signs), or a software key.
-pub type Consent<'a> = dyn FnMut(&ConsentRequest<'_>) -> Result<Approval, String> + 'a;
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TradeAction {
+    /// The owner offers the asset to a named buyer.
+    Offer,
+    /// The named buyer accepts (the price goes to the escrow).
+    Accept,
+}
+
+/// A transaction supplier for the citizen: the DEVICE (shows and signs), or a software key.
+pub type TxSigner<'a> = dyn FnMut(&TradeRequest<'_>) -> Result<Tx, String> + 'a;
+
+/// Fee of an assets transaction carrying `op` signed by a key of `key_len` bytes.
+fn assets_fee(econ: &dyn World, op: &Op, key_len: usize) -> u64 {
+    let price = teko_coin::config(econ.ledger()).map_or(0, |c| c.fee_per_byte);
+    price.saturating_mul(op.encode().len() as u64 + key_len as u64 + 160)
+}
+
+/// The fee a device-signed assets transaction should carry (the Suite passes it to the device).
+pub fn device_fee(econ: &dyn World, action: TradeAction) -> u64 {
+    let probe = match action {
+        TradeAction::Offer => Op::Offer(OfferOp {
+            class: vec![0; 32],
+            asset: vec![0; 64],
+            buyer: vec![0; 32],
+            price: u64::MAX,
+            version: u64::MAX,
+            metadata_hash: vec![0; 32],
+        }),
+        TradeAction::Accept => Op::Accept(AcceptOp {
+            class: vec![0; 32],
+            asset: vec![0; 64],
+            price: u64::MAX,
+            version: u64::MAX,
+            metadata_hash: vec![0; 32],
+        }),
+    };
+    assets_fee(econ, &probe, 33)
+}
+
+fn sign_as(econ: &dyn World, key: &SigningKey, op: Op) -> Tx {
+    let me = address_of(&public_key_bytes(key));
+    let pk = public_key_bytes(key);
+    let fee = assets_fee(econ, &op, pk.len());
+    Tx::new_signed_with_fee(
+        key,
+        econ.chain_id(),
+        econ.nonce(&me),
+        fee,
+        ASSETS_MODULE,
+        op.encode(),
+    )
+}
+
+/// The checks both directions share: the asset exists, belongs to `seller`, has no lien, has
+/// no trade in progress and its metadata record is here AND matches the hash on the chain.
+fn trade_context(
+    econ: &dyn World,
+    cast: &Cast,
+    class: &str,
+    asset_id: &str,
+    seller: &Address,
+) -> Result<(crate::AssetRec, Vec<u8>, u64), String> {
+    let a =
+        asset(econ.ledger(), class.as_bytes(), asset_id.as_bytes()).ok_or("bem desconhecido")?;
+    let owner: Address = a.owner.as_slice().try_into().map_err(|_| "dono inválido")?;
+    if owner != *seller {
+        return Err("quem vende não é o dono deste bem".into());
+    }
+    if !a.liens.is_empty() {
+        return Err("o bem tem gravame (penhora): peça a liberação ao órgão".into());
+    }
+    if offer_of(econ.ledger(), class.as_bytes(), asset_id.as_bytes()).is_some() {
+        return Err("este bem já tem uma negociação em andamento".into());
+    }
+    let record = cast
+        .store
+        .get_verified(class, asset_id, &a.metadata_hash)
+        .ok_or("os metadados deste bem não estão neste computador (ou não conferem com a chain): venda bloqueada")?;
+    let window = class_info(econ.ledger(), class.as_bytes()).map_or(0, |c| c.window_secs);
+    Ok((a, record, window))
+}
+
+fn require_funds(econ: &dyn World, buyer: &Address, price: u64) -> Result<(), String> {
+    if econ.balance(buyer) < price {
+        return Err(format!(
+            "o comprador não tem saldo: precisa de {}, tem {} ({})",
+            teko_crypto::amount::format_amount(price),
+            teko_crypto::amount::format_amount(econ.balance(buyer)),
+            econ.funding_hint()
+        ));
+    }
+    Ok(())
+}
+
+/// I (the owner) offer `asset_id` to the simulated counterparty for `price` coins: MY device
+/// builds and signs the offer from my wallet; the counterparty (software) accepts at once, so
+/// the trade becomes PENDING in the class's veto window. The record must be in the off-chain
+/// store AND match the hash on the chain. Finalization is a later, separate step
+/// (`finalize_pending`) that anyone can send once the window is over.
+pub fn sell_to_counterparty(
+    econ: &mut dyn World,
+    cast: &Cast,
+    me: &Address,
+    class: &str,
+    asset_id: &str,
+    price: u64,
+    signer: &mut TxSigner<'_>,
+) -> Result<(), String> {
+    if price == 0 {
+        return Err("informe um preço maior que zero".into());
+    }
+    let cp = cast.counterparty_address();
+    let (a, record, window) = trade_context(econ, cast, class, asset_id, me)?;
+    require_funds(econ, &cp, price)?;
+    let nonce = econ.nonce(me);
+    let fee = device_fee(econ, TradeAction::Offer);
+    let chain = econ.chain_id().to_string();
+    let tx = signer(&TradeRequest {
+        action: TradeAction::Offer,
+        chain_id: &chain,
+        class,
+        asset: asset_id,
+        seller: me,
+        buyer: &cp,
+        price,
+        version: a.version,
+        metadata: &record,
+        window_secs: window,
+        nonce,
+        fee,
+    })?;
+    econ.submit(tx)?;
+    // the simulated counterparty accepts (its own transaction, from its own wallet)
+    let accept = Op::Accept(AcceptOp {
+        class: class.into(),
+        asset: asset_id.as_bytes().to_vec(),
+        price,
+        version: a.version,
+        metadata_hash: a.metadata_hash.clone(),
+    });
+    let tx = sign_as(econ, &cast.counterparty, accept);
+    econ.submit(tx)
+}
+
+/// The simulated counterparty offers me `asset_id` for `price` coins (from its own wallet) and
+/// MY device builds and signs the acceptance: the price goes to the escrow and the trade is
+/// PENDING in the veto window.
+pub fn buy_from_counterparty(
+    econ: &mut dyn World,
+    cast: &Cast,
+    me: &Address,
+    class: &str,
+    asset_id: &str,
+    price: u64,
+    signer: &mut TxSigner<'_>,
+) -> Result<(), String> {
+    if price == 0 {
+        return Err("informe um preço maior que zero".into());
+    }
+    let cp = cast.counterparty_address();
+    let (a, record, window) = trade_context(econ, cast, class, asset_id, &cp)?;
+    require_funds(econ, me, price)?;
+    let offer = Op::Offer(OfferOp {
+        class: class.into(),
+        asset: asset_id.as_bytes().to_vec(),
+        buyer: me.to_vec(),
+        price,
+        version: a.version,
+        metadata_hash: a.metadata_hash.clone(),
+    });
+    let tx = sign_as(econ, &cast.counterparty, offer);
+    econ.submit(tx)?;
+    let nonce = econ.nonce(me);
+    let fee = device_fee(econ, TradeAction::Accept);
+    let chain = econ.chain_id().to_string();
+    let signed = signer(&TradeRequest {
+        action: TradeAction::Accept,
+        chain_id: &chain,
+        class,
+        asset: asset_id,
+        seller: &cp,
+        buyer: me,
+        price,
+        version: a.version,
+        metadata: &record,
+        window_secs: window,
+        nonce,
+        fee,
+    });
+    // if I did not accept (rejected on my device, or the network refused), the simulated
+    // counterparty withdraws its offer so the asset is not left blocked by a dead offer
+    let result = signed.and_then(|tx| econ.submit(tx));
+    if result.is_err() {
+        let cancel = Op::Cancel(crate::CancelOp {
+            class: class.into(),
+            asset: asset_id.as_bytes().to_vec(),
+        });
+        let tx = sign_as(econ, &cast.counterparty, cancel);
+        let _ = econ.submit(tx);
+    }
+    result
+}
+
+/// The simulated registrar quorum VETOES the pending trade of `asset_id` for a public `reason`.
+pub fn veto_pending(
+    econ: &mut dyn World,
+    cast: &Cast,
+    class: &str,
+    asset_id: &str,
+    reason: &str,
+) -> Result<(), String> {
+    let a =
+        asset(econ.ledger(), class.as_bytes(), asset_id.as_bytes()).ok_or("bem desconhecido")?;
+    let o = offer_of(econ.ledger(), class.as_bytes(), asset_id.as_bytes())
+        .filter(|o| o.accepted)
+        .ok_or("não há negociação pendente neste bem")?;
+    let i = Intent::veto(
+        class.as_bytes(),
+        asset_id.as_bytes(),
+        a.owner.as_slice().try_into().map_err(|_| "dono inválido")?,
+        o.buyer
+            .as_slice()
+            .try_into()
+            .map_err(|_| "comprador inválido")?,
+        o.price,
+        a.version,
+        reason,
+    );
+    let approvals = quorum(cast, class, econ.chain_id(), &i)?;
+    submit_assets_op(
+        econ,
+        cast,
+        Op::Veto(VetoOp {
+            class: class.into(),
+            asset: asset_id.as_bytes().to_vec(),
+            reason: reason.into(),
+            approvals,
+        }),
+    )
+}
+
+/// Completes an accepted trade whose veto window is over (anyone may; here the relayer does).
+pub fn finalize_pending(
+    econ: &mut dyn World,
+    cast: &Cast,
+    class: &str,
+    asset_id: &str,
+) -> Result<(), String> {
+    submit_assets_op(
+        econ,
+        cast,
+        Op::Finalize(FinalizeOp {
+            class: class.into(),
+            asset: asset_id.as_bytes().to_vec(),
+        }),
+    )
+}
 
 fn submit_assets_op(econ: &mut dyn World, cast: &Cast, op: Op) -> Result<(), String> {
     let me = cast.relayer_address();
@@ -356,88 +619,39 @@ pub fn set_lien(
     }
 }
 
-/// Sells (`me` is the owner) or buys (`me` is the buyer) `asset_id` against `price`
-/// coins with the simulated counterparty. MY consent comes from `consent` (my device,
-/// which is handed the metadata record and signs its hash); the counterparty and the
-/// registrar quorum sign in software; the ledger executes the atomic swap. The record
-/// must be in the off-chain store AND match the hash on the chain, or the sale is
-/// blocked. Returns my coin balance afterwards.
-#[allow(clippy::too_many_arguments)]
-pub fn trade_with_counterparty(
-    econ: &mut dyn World,
-    cast: &Cast,
-    me: &Address,
-    class: &str,
-    asset_id: &str,
-    price: u64,
-    selling: bool,
-    consent: &mut Consent<'_>,
-) -> Result<u64, String> {
-    if price == 0 {
-        return Err("informe um preço maior que zero".into());
-    }
-    let a =
-        asset(econ.ledger(), class.as_bytes(), asset_id.as_bytes()).ok_or("bem desconhecido")?;
-    let owner: Address = a.owner.as_slice().try_into().map_err(|_| "dono inválido")?;
-    let cp = cast.counterparty_address();
-    let (seller, buyer) = if selling { (*me, cp) } else { (cp, *me) };
-    if owner != seller {
-        return Err(if selling {
-            "este bem não é seu".into()
-        } else {
-            "a contraparte simulada não é dona deste bem".into()
-        });
-    }
-    if !a.liens.is_empty() {
-        return Err("o bem tem gravame (penhora): peça a liberação ao órgão".into());
-    }
-    let record = cast
-        .store
-        .get_verified(class, asset_id, &a.metadata_hash)
-        .ok_or("os metadados deste bem não estão neste computador (ou não conferem com a chain): venda bloqueada")?;
-    if econ.balance(&buyer) < price {
-        return Err(format!(
-            "o comprador não tem saldo: precisa de {}, tem {} ({})",
-            teko_crypto::amount::format_amount(price),
-            teko_crypto::amount::format_amount(econ.balance(&buyer)),
-            econ.funding_hint()
-        ));
-    }
-    let i = Intent::swap(
-        class.as_bytes(),
-        asset_id.as_bytes(),
-        seller,
-        buyer,
-        price,
-        a.version,
-        &a.metadata_hash,
-    );
-    // 1) MY consent, on my device
-    let mine = consent(&ConsentRequest {
-        kind: 3,
-        class,
-        asset: asset_id,
-        seller: &seller,
-        buyer: &buyer,
-        price,
-        version: a.version,
-        metadata: &record,
-    })?;
-    // 2) the counterparty (software) and the registrar quorum
-    let mut approvals = vec![mine];
-    let chain = econ.chain_id().to_string();
-    approvals.push(Approval::sign(&cast.counterparty, &chain, &i));
-    approvals.extend(quorum(cast, class, econ.chain_id(), &i)?);
-    // the relayer submits (and pays the fee)
-    let op = Op::Swap(SwapOp {
-        class: class.into(),
-        asset: asset_id.as_bytes().to_vec(),
-        buyer: buyer.to_vec(),
-        price,
-        approvals,
-    });
-    submit_assets_op(econ, cast, op)?;
-    Ok(econ.balance(me))
+/// A trade in progress, as the screens show it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PendingTrade {
+    pub class: String,
+    pub asset: String,
+    pub seller: Address,
+    pub buyer: Address,
+    pub price: u64,
+    pub accepted: bool,
+    /// Block time from which anyone may finalize (0 until accepted).
+    pub release_at: u64,
+}
+
+/// The trades in progress that involve `who` (as seller or buyer).
+pub fn pending_trades(econ: &dyn World, who: &Address) -> Vec<PendingTrade> {
+    offers(econ.ledger())
+        .into_iter()
+        .filter_map(|(class, id, o)| trade_view(econ, &class, &id, &o))
+        .filter(|t| t.seller == *who || t.buyer == *who)
+        .collect()
+}
+
+fn trade_view(econ: &dyn World, class: &[u8], id: &[u8], o: &OfferRec) -> Option<PendingTrade> {
+    let a = asset(econ.ledger(), class, id)?;
+    Some(PendingTrade {
+        class: String::from_utf8_lossy(class).into_owned(),
+        asset: String::from_utf8_lossy(id).into_owned(),
+        seller: a.owner.as_slice().try_into().ok()?,
+        buyer: o.buyer.as_slice().try_into().ok()?,
+        price: o.price,
+        accepted: o.accepted,
+        release_at: o.release_at,
+    })
 }
 
 /// An asset owned by a wallet.

@@ -2361,7 +2361,7 @@ fn transfers_need_the_wallet_and_the_unlocked_device() {
     assert_eq!(failure_code(&r), Some(ErrorCode::InvalidState));
 }
 
-// ───────────────────────── asset consents (M5c, ADR-0025) ─────────────────────────
+// ───────────────────────── asset trades (ADR-0036) ─────────────────────────
 
 /// Canonical metadata record of the test asset of `class` whose id is `id`.
 fn asset_record(class: &str, id: &str) -> Vec<u8> {
@@ -2378,57 +2378,84 @@ fn asset_record(class: &str, id: &str) -> Vec<u8> {
 }
 
 #[allow(clippy::too_many_arguments)]
-fn consent_req_for(
+fn offer_req_for(
     class: &str,
     asset: &str,
     record: Vec<u8>,
-    kind: u32,
-    from: &str,
-    to: &str,
+    buyer: &str,
     price: u64,
     version: u64,
+    nonce: u64,
 ) -> Request {
-    Request::SignAssetConsent(SignAssetConsent {
+    Request::SignAssetOffer(SignAssetOffer {
         chain_id: "teko-devnet".into(),
-        kind,
         class: class.into(),
         asset: asset.into(),
-        from_address: from.into(),
-        to_address: to.into(),
+        buyer_address: buyer.into(),
         price,
         version,
         metadata: record,
+        window_secs: 1_200,
+        fee: 0,
+        nonce,
     })
 }
 
-fn consent_req(kind: u32, from: &str, to: &str, price: u64, version: u64) -> Request {
-    consent_req_for(
+fn offer_req(buyer: &str, price: u64, version: u64) -> Request {
+    offer_req_for(
         "imovel",
         "matricula-1",
         asset_record("imovel", "matricula-1"),
-        kind,
-        from,
-        to,
+        buyer,
         price,
         version,
+        0,
     )
 }
 
-#[test]
-fn a_swap_signed_on_the_device_moves_the_asset_and_the_coin_in_the_real_ledger() {
-    use teko_assets::{ASSETS_MODULE, Approval, Intent, Op, RegisterOp, SwapOp};
-    use teko_coin::{COIN_MODULE, CoinConfig};
-    use teko_ledger::{Ledger, address_of};
+#[allow(clippy::too_many_arguments)]
+fn accept_req_for(
+    class: &str,
+    asset: &str,
+    record: Vec<u8>,
+    seller: &str,
+    price: u64,
+    version: u64,
+    nonce: u64,
+) -> Request {
+    Request::SignAssetAccept(SignAssetAccept {
+        chain_id: "teko-devnet".into(),
+        class: class.into(),
+        asset: asset.into(),
+        seller_address: seller.into(),
+        price,
+        version,
+        metadata: record,
+        window_secs: 1_200,
+        fee: 0,
+        nonce,
+    })
+}
 
-    // The SELLER is the device wallet; the buyer and the registrar quorum are software keys.
+#[test]
+fn an_offer_and_an_acceptance_signed_on_the_device_run_in_the_real_ledger_from_the_users_own_wallet()
+ {
+    use teko_assets::{
+        ASSETS_MODULE, AcceptOp, Approval, FinalizeOp, Intent, OfferOp, Op, RegisterOp,
+    };
+    use teko_coin::{COIN_MODULE, CoinConfig};
+    use teko_ledger::{Ledger, Tx, address_of};
+
+    // The device wallet is the SELLER of one asset and the BUYER of another; the other party and the
+    // registrar quorum are software keys.
     let (_w, hal, mut dev) = fresh_initialized();
     let created = create_wallet(&mut dev, &hal);
-    let seller_addr = teko_crypto::parse_wallet_address(&created.address).unwrap();
+    let me = teko_crypto::parse_wallet_address(&created.address).unwrap();
     let mut rng = StdRng::seed_from_u64(77);
-    let buyer = generate_signing_key(&mut rng);
+    let other = generate_signing_key(&mut rng);
     let regs: Vec<SigningKey> = (0..3).map(|_| generate_signing_key(&mut rng)).collect();
-    let buyer_addr = address_of(&public_key_bytes(&buyer));
-    let buyer_str = teko_crypto::wallet_address(&buyer_addr).unwrap();
+    let other_addr = address_of(&public_key_bytes(&other));
+    let other_str = teko_crypto::wallet_address(&other_addr).unwrap();
 
     let mut l = Ledger::new(
         "teko-devnet",
@@ -2441,125 +2468,234 @@ fn a_swap_signed_on_the_device_moves_the_asset_and_the_coin_in_the_real_ledger()
         cap: 1_000_000,
         initial_reward: 0,
         halving_interval: 10,
-        fee_per_byte: 0,
-        unbonding_period: 5,
-        slash_bps: 1000,
-        faucet_amount: 0,
-        faucet_cooldown: 0,
         ..Default::default()
     };
-    teko_coin::genesis(&mut l, cfg, &[(buyer_addr, 9000)], true).unwrap();
+    teko_coin::genesis(&mut l, cfg, &[(other_addr, 9_000), (me, 6_000)], true).unwrap();
     let keys: Vec<Vec<u8>> = regs.iter().map(public_key_bytes).collect();
-    teko_assets::genesis_class(&mut l, b"imovel", &keys, 2).unwrap();
+    teko_assets::genesis_class_with_window(&mut l, b"imovel", &keys, 2, 1_200).unwrap();
     let relayer = generate_signing_key(&mut rng);
-    let submit = |l: &mut Ledger, op: Op| {
-        let t = teko_ledger::Tx::new_signed(
-            &relayer,
+    let now = std::cell::Cell::new(1_000_000u64);
+    let send_as = |l: &mut Ledger, k: &SigningKey, op: Op, dt: u64| {
+        now.set(now.get() + dt);
+        let t = Tx::new_signed(
+            k,
             "teko-devnet",
-            l.nonce_of(&address_of(&public_key_bytes(&relayer))),
+            l.nonce_of(&address_of(&public_key_bytes(k))),
             ASSETS_MODULE,
             op.encode(),
         );
         let h = l.height() + 1;
-        l.apply_block(h, &[9; 32], &[t])
+        l.apply_block_at(h, now.get(), &[9; 32], &[t])
     };
-    // registrars register the asset to the device wallet; the chain keeps the HASH of
-    // the metadata record
-    let mh = teko_crypto::asset_meta::hash("imovel", &asset_record("imovel", "matricula-1"));
-    let reg = Intent::register(b"imovel", b"matricula-1", seller_addr, &mh);
-    let approvals = vec![
-        Approval::sign(&regs[0], "teko-devnet", &reg),
-        Approval::sign(&regs[1], "teko-devnet", &reg),
-    ];
-    submit(
-        &mut l,
-        Op::Register(RegisterOp {
-            class: b"imovel".to_vec(),
-            asset: b"matricula-1".to_vec(),
-            owner: seller_addr.to_vec(),
-            metadata_hash: mh.to_vec(),
-            approvals,
-        }),
-    )
-    .unwrap();
+    // the registrars register two assets: matricula-1 to the device wallet, matricula-2 to the other party
+    for (id, owner) in [("matricula-1", me), ("matricula-2", other_addr)] {
+        let mh = teko_crypto::asset_meta::hash("imovel", &asset_record("imovel", id));
+        let reg = Intent::register(b"imovel", id.as_bytes(), owner, &mh);
+        let approvals = vec![
+            Approval::sign(&regs[0], "teko-devnet", &reg),
+            Approval::sign(&regs[1], "teko-devnet", &reg),
+        ];
+        send_as(
+            &mut l,
+            &relayer,
+            Op::Register(RegisterOp {
+                class: b"imovel".to_vec(),
+                asset: id.as_bytes().to_vec(),
+                owner: owner.to_vec(),
+                metadata_hash: mh.to_vec(),
+                approvals,
+            }),
+            1,
+        )
+        .unwrap();
+    }
+    let mh1 = teko_crypto::asset_meta::hash("imovel", &asset_record("imovel", "matricula-1"));
 
-    // The device signs the SELLER consent for a swap at version 0, price 4000.
+    // 1) the device signs the OWNER's offer: its OWN transaction, from its OWN wallet
     hal.clear_screens();
-    let Response::AssetConsentSigned(c) =
-        dev.handle(consent_req(3, &created.address, &buyer_str, 4000, 0))
-    else {
-        panic!("not signed")
+    let nonce = l.nonce_of(&me);
+    let Response::TransferSigned(s) = dev.handle(offer_req_for(
+        "imovel",
+        "matricula-1",
+        asset_record("imovel", "matricula-1"),
+        &other_str,
+        4_000,
+        0,
+        nonce,
+    )) else {
+        panic!("offer not signed")
     };
     let sc = hal
         .screens()
         .into_iter()
-        .find(|s| s.title == "VENDA DE BEM")
+        .find(|s| s.title == "OFERECER BEM")
         .unwrap();
     assert!(sc.lines.iter().any(|l| l.contains("VENDEDOR")));
-    assert!(sc.lines.iter().any(|l| l.contains("Preço: 0,004 TEKO")));
     assert!(sc.lines.iter().any(|l| l.contains("imovel/matricula-1")));
-    // the summary of the metadata record is on the screen (ADR-0032)
+    assert!(sc.lines.iter().any(|l| l.contains("Preço: 0,004 TEKO")));
+    assert!(
+        sc.lines
+            .iter()
+            .any(|l| l.contains("Janela de veto: 20 min"))
+    );
     assert!(
         sc.lines
             .iter()
             .any(|l| l.contains("Matrícula: matricula-1"))
-    );
-    assert!(sc.lines.iter().any(|l| l.starts_with("Endereço:")));
-    let seller_consent = Approval {
-        key: c.public_key.clone(),
-        signature: c.signature.clone(),
+    ); // ADR-0032 summary
+    // the Suite rebuilds the very same transaction from the fields and attaches the signature
+    let offer = Op::Offer(OfferOp {
+        class: b"imovel".to_vec(),
+        asset: b"matricula-1".to_vec(),
+        buyer: other_addr.to_vec(),
+        price: 4_000,
+        version: 0,
+        metadata_hash: mh1.to_vec(),
+    });
+    assert_eq!(address_of(&s.public_key), me);
+    now.set(now.get() + 1);
+    let tx = Tx {
+        chain_id: "teko-devnet".into(),
+        nonce,
+        module: ASSETS_MODULE,
+        payload: offer.encode(),
+        sender: s.public_key,
+        signature: s.signature,
+        fee: 0,
     };
-    // The buyer and two registrars consent in software; the ledger executes the swap.
-    let sw = Intent::swap(
-        b"imovel",
-        b"matricula-1",
-        seller_addr,
-        buyer_addr,
-        4000,
-        0,
-        &mh,
-    );
-    let approvals = vec![
-        seller_consent,
-        Approval::sign(&buyer, "teko-devnet", &sw),
-        Approval::sign(&regs[0], "teko-devnet", &sw),
-        Approval::sign(&regs[2], "teko-devnet", &sw),
-    ];
-    submit(
+    let h = l.height() + 1;
+    l.apply_block_at(h, now.get(), &[9; 32], &[tx]).unwrap();
+    // 2) the other party accepts (software); the price waits in the escrow
+    let accept = Op::Accept(AcceptOp {
+        class: b"imovel".to_vec(),
+        asset: b"matricula-1".to_vec(),
+        price: 4_000,
+        version: 0,
+        metadata_hash: mh1.to_vec(),
+    });
+    send_as(&mut l, &other, accept, 1).unwrap();
+    let release = teko_assets::offer_of(&l, b"imovel", b"matricula-1")
+        .unwrap()
+        .release_at;
+    // 3) after the window anyone finalizes: asset to the buyer, coins to the device wallet
+    now.set(release);
+    send_as(
         &mut l,
-        Op::Swap(SwapOp {
+        &relayer,
+        Op::Finalize(FinalizeOp {
             class: b"imovel".to_vec(),
             asset: b"matricula-1".to_vec(),
-            buyer: buyer_addr.to_vec(),
-            price: 4000,
-            approvals,
         }),
+        0,
     )
     .unwrap();
-    let a = teko_assets::asset(&l, b"imovel", b"matricula-1").unwrap();
-    assert_eq!(a.owner, buyer_addr.to_vec());
-    assert_eq!(teko_coin::balance(&l, &seller_addr), 4000);
-    assert_eq!(teko_coin::balance(&l, &buyer_addr), 5000);
+    assert_eq!(
+        teko_assets::asset(&l, b"imovel", b"matricula-1")
+            .unwrap()
+            .owner,
+        other_addr.to_vec()
+    );
+    assert_eq!(teko_coin::balance(&l, &me), 6_000 + 4_000);
+
+    // 4) the other party offers matricula-2 to the device wallet; the device signs the ACCEPTANCE
+    let mh2 = teko_crypto::asset_meta::hash("imovel", &asset_record("imovel", "matricula-2"));
+    send_as(
+        &mut l,
+        &other,
+        Op::Offer(OfferOp {
+            class: b"imovel".to_vec(),
+            asset: b"matricula-2".to_vec(),
+            buyer: me.to_vec(),
+            price: 2_500,
+            version: 0,
+            metadata_hash: mh2.to_vec(),
+        }),
+        1,
+    )
+    .unwrap();
+    hal.clear_screens();
+    let nonce = l.nonce_of(&me);
+    let Response::TransferSigned(s) = dev.handle(accept_req_for(
+        "imovel",
+        "matricula-2",
+        asset_record("imovel", "matricula-2"),
+        &other_str,
+        2_500,
+        0,
+        nonce,
+    )) else {
+        panic!("acceptance not signed")
+    };
+    let sc = hal
+        .screens()
+        .into_iter()
+        .find(|s| s.title == "ACEITAR OFERTA")
+        .unwrap();
+    assert!(sc.lines.iter().any(|l| l.contains("COMPRADOR")));
+    assert!(
+        sc.lines
+            .iter()
+            .any(|l| l.contains("O preço fica em escrow"))
+    );
+    let tx = Tx {
+        chain_id: "teko-devnet".into(),
+        nonce,
+        module: ASSETS_MODULE,
+        payload: Op::Accept(AcceptOp {
+            class: b"imovel".to_vec(),
+            asset: b"matricula-2".to_vec(),
+            price: 2_500,
+            version: 0,
+            metadata_hash: mh2.to_vec(),
+        })
+        .encode(),
+        sender: s.public_key,
+        signature: s.signature,
+        fee: 0,
+    };
+    let h = l.height() + 1;
+    now.set(now.get() + 1);
+    l.apply_block_at(h, now.get(), &[9; 32], &[tx]).unwrap();
+    assert_eq!(
+        teko_coin::balance(&l, &me),
+        10_000 - 2_500,
+        "my price is in the escrow"
+    );
     teko_coin::audit(&l).unwrap();
 }
 
 #[test]
-fn consent_requests_are_validated_and_need_a_physical_confirmation() {
+fn trade_requests_are_validated_and_need_a_physical_confirmation() {
     let (_w, hal, mut dev) = fresh_initialized();
     assert_eq!(
-        failure_code(&dev.handle(consent_req(3, &dest(), &dest(), 5, 0))),
+        failure_code(&dev.handle(offer_req(&dest(), 5, 0))),
         Some(ErrorCode::InvalidState)
     ); // no wallet yet
     let created = create_wallet(&mut dev, &hal);
     let other = teko_crypto::wallet_address(&[5u8; 32]).unwrap();
     let before = hal.confirms_requested();
+    let mut window_zero = offer_req(&other, 5, 0);
+    if let Request::SignAssetOffer(m) = &mut window_zero {
+        m.window_secs = 0;
+    }
+    let mut overflow = offer_req(&other, u64::MAX, 0);
+    if let Request::SignAssetOffer(m) = &mut overflow {
+        m.fee = 1;
+    }
     let bad = [
-        consent_req(1, &created.address, &other, 5, 0), // unknown kind
-        consent_req(3, &created.address, &created.address, 5, 0), // same party
-        consent_req(3, &created.address, &other, 0, 0), // free swap
-        consent_req(2, &created.address, &other, 7, 0), // transfer with price
-        consent_req(3, &other, &dest(), 5, 0),          // wallet is not a party
-        consent_req(3, "tekow1lixo", &other, 5, 0),     // bad address
+        offer_req(&created.address, 5, 0), // offering to oneself
+        offer_req("tekow1lixo", 5, 0),     // bad address
+        window_zero,                       // a zero veto window
+        overflow,                          // price + fee overflows
+        accept_req_for(
+            "imovel",
+            "matricula-1",
+            asset_record("imovel", "matricula-1"),
+            &created.address, // accepting my own offer
+            5,
+            0,
+            0,
+        ),
     ];
     for r in bad {
         let resp = dev.handle(r);
@@ -2570,38 +2706,38 @@ fn consent_requests_are_validated_and_need_a_physical_confirmation() {
         );
     }
     assert_eq!(hal.confirms_requested(), before); // nothing shown
-    // rejecting on the device: no consent
+    // rejecting on the device: no signature leaves it
     hal.push_decision(Decision::Reject);
-    let r = dev.handle(consent_req(3, &created.address, &other, 5, 0));
+    let r = dev.handle(offer_req(&other, 5, 0));
     assert_eq!(failure_code(&r), Some(ErrorCode::UserRejected));
-    // the buyer role is recognised too
-    let Response::AssetConsentSigned(_) =
-        dev.handle(consent_req(2, &other, &created.address, 0, 3))
-    else {
-        panic!("buyer consent not signed")
+    // a gift (no price) is allowed and says so on the screen
+    hal.clear_screens();
+    let Response::TransferSigned(_) = dev.handle(offer_req(&other, 0, 3)) else {
+        panic!("gift not signed")
     };
-    assert!(hal
-        .screens()
-        .iter()
-        .any(|s| s.title == "TRANSFERIR BEM" && s.lines.iter().any(|l| l.contains("COMPRADOR"))));
+    assert!(
+        hal.screens()
+            .iter()
+            .any(|s| s.title == "OFERECER BEM"
+                && s.lines.iter().any(|l| l.contains("Sem pagamento")))
+    );
 }
 
 #[test]
-fn a_vehicle_consent_shows_plate_and_model_and_refuses_records_that_do_not_match() {
+fn a_vehicle_offer_shows_plate_and_model_and_refuses_records_that_do_not_match() {
     let (_w, hal, mut dev) = fresh_initialized();
     let created = create_wallet(&mut dev, &hal);
     let other = teko_crypto::wallet_address(&[5u8; 32]).unwrap();
     let chassi = "9BWZZZ377VT000001";
     let rec = asset_record("veiculo", chassi);
     hal.clear_screens();
-    let Response::AssetConsentSigned(_) = dev.handle(consent_req_for(
+    let Response::TransferSigned(_) = dev.handle(offer_req_for(
         "veiculo",
         chassi,
         rec.clone(),
-        3,
-        &created.address,
         &other,
         5000,
+        0,
         0,
     )) else {
         panic!("not signed")
@@ -2609,7 +2745,7 @@ fn a_vehicle_consent_shows_plate_and_model_and_refuses_records_that_do_not_match
     let sc = hal
         .screens()
         .into_iter()
-        .find(|s| s.title == "VENDA DE BEM")
+        .find(|s| s.title == "OFERECER BEM")
         .unwrap();
     for needle in [
         "Placa: BRA1A01",
@@ -2625,61 +2761,40 @@ fn a_vehicle_consent_shows_plate_and_model_and_refuses_records_that_do_not_match
     }
     // what the device refuses, before showing anything
     let shown = hal.confirms_requested();
-    let other_chassi = asset_record("veiculo", "9BWZZZ377VT000002");
+    let _ = &created;
     let bad = [
         // a record that names ANOTHER vehicle than the asset id
-        consent_req_for(
+        offer_req_for(
             "veiculo",
             chassi,
-            other_chassi,
-            3,
-            &created.address,
+            asset_record("veiculo", "9BWZZZ377VT000002"),
             &other,
             5000,
+            0,
             0,
         ),
         // no record at all
-        consent_req_for(
-            "veiculo",
-            chassi,
-            vec![],
-            3,
-            &created.address,
-            &other,
-            5000,
-            0,
-        ),
+        offer_req_for("veiculo", chassi, vec![], &other, 5000, 0, 0),
         // a record of another class
-        consent_req_for(
+        offer_req_for(
             "veiculo",
             chassi,
             asset_record("imovel", "matricula-1"),
-            3,
-            &created.address,
             &other,
             5000,
+            0,
             0,
         ),
         // a class with no schema
-        consent_req_for(
-            "barco",
-            "b-1",
-            rec.clone(),
-            3,
-            &created.address,
-            &other,
-            5000,
-            0,
-        ),
+        offer_req_for("barco", "b-1", rec.clone(), &other, 5000, 0, 0),
         // not the canonical encoding
-        consent_req_for(
+        offer_req_for(
             "veiculo",
             chassi,
             [rec.as_slice(), b"\n"].concat(),
-            3,
-            &created.address,
             &other,
             5000,
+            0,
             0,
         ),
     ];

@@ -937,64 +937,68 @@ fn sending_coins_is_signed_on_the_device_and_lands_in_the_devnet_economy() {
 }
 
 #[test]
-fn an_asset_consent_is_signed_on_the_device_and_verified_by_the_client() {
+fn an_asset_offer_is_signed_on_the_device_and_verified_by_the_client() {
     let rig = start();
     let mut c = connect(&rig);
     let (m, b) = firmware(&rig, 1);
     c.install_firmware(&rig.trust, &m, &b, &mut |_, _| {})
         .unwrap();
     c.setup_pin().unwrap();
-    let me = c.wallet_setup().unwrap().address;
+    c.wallet_setup().unwrap();
     let buyer = teko_crypto::wallet_address(&[4u8; 32]).unwrap();
     let prompts = Arc::new(AtomicUsize::new(0));
     let p2 = prompts.clone();
     c.set_on_button(move |k| {
-        if k == teko_protocol::ButtonKind::SignAssetConsent {
+        if k == teko_protocol::ButtonKind::SignAssetOffer {
             p2.fetch_add(1, Ordering::SeqCst);
         }
     });
-    let a = c
-        .wallet_sign_asset_consent(
+    let record = teko_assets::devnet::sample_record("imovel", "matricula-9").unwrap();
+    let tx = c
+        .wallet_sign_asset_offer(
             "teko-devnet",
-            3,
             "imovel",
             "matricula-9",
-            &me,
             &buyer,
             750,
             2,
-            &teko_assets::devnet::sample_record("imovel", "matricula-9").unwrap(),
+            &record,
+            1_200,
+            0,
+            0,
         )
         .unwrap();
     assert_eq!(prompts.load(Ordering::SeqCst), 1);
     assert!(rig.hal.screens().iter().any(|s| {
-        s.title == "VENDA DE BEM" && s.lines.iter().any(|l| l.contains("Preço: 0,00075 TEKO"))
+        s.title == "OFERECER BEM" && s.lines.iter().any(|l| l.contains("Preço: 0,00075 TEKO"))
     }));
+    // it is the wallet's OWN transaction (the sender is the wallet key, not a relayer)
     assert_eq!(
-        a.key,
+        tx.sender,
         c.wallet_address()
             .map(|x| teko_crypto::hex::decode(&x.public_key).unwrap())
             .unwrap()
     );
-    // the user refuses on the device: no consent is produced
+    // the user refuses on the device: no transaction is produced
     rig.hal.push_decision(Decision::Reject);
-    let r = c.wallet_sign_asset_consent(
+    let r = c.wallet_sign_asset_offer(
         "teko-devnet",
-        3,
         "imovel",
         "matricula-9",
-        &me,
         &buyer,
         750,
         2,
-        &teko_assets::devnet::sample_record("imovel", "matricula-9").unwrap(),
+        &record,
+        1_200,
+        0,
+        0,
     );
     assert_eq!(device_code(r.unwrap_err()), ErrorCode::UserRejected);
 }
 
 #[test]
-fn selling_and_buying_an_asset_with_my_device_consent_in_the_devnet_world() {
-    use teko_assets::devnet::{self, ConsentRequest, sample_record};
+fn selling_and_buying_an_asset_with_my_device_signing_my_own_transactions_in_the_devnet_world() {
+    use teko_assets::devnet::{self, TradeAction, TradeRequest, sample_record};
     use teko_coin::devnet::{CHAIN_ID, ECONOMY_FILE, append_allocation};
 
     let rig = start();
@@ -1011,7 +1015,7 @@ fn selling_and_buying_an_asset_with_my_device_consent_in_the_devnet_world() {
     let dir = scratch_dir("e2e-assets");
     let (_, cast) = devnet::open(&dir).unwrap();
     let cp = cast.counterparty_address();
-    append_allocation(&dir.join(ECONOMY_FILE), &me_info.address, 1_000).unwrap();
+    append_allocation(&dir.join(ECONOMY_FILE), &me_info.address, 5_000).unwrap();
     append_allocation(
         &dir.join(ECONOMY_FILE),
         &teko_crypto::wallet_address(&cp).unwrap(),
@@ -1028,93 +1032,126 @@ fn selling_and_buying_an_asset_with_my_device_consent_in_the_devnet_world() {
     )
     .unwrap();
 
-    // The consent goes through MY DEVICE (screen + physical confirmation).
-    let consents = Arc::new(AtomicUsize::new(0));
-    let cc = consents.clone();
+    // Every transaction of MINE goes through MY DEVICE (screen + physical confirmation).
+    let prompts = Arc::new(AtomicUsize::new(0));
+    let pp = prompts.clone();
     c.set_on_button(move |k| {
-        if k == teko_protocol::ButtonKind::SignAssetConsent {
-            cc.fetch_add(1, Ordering::SeqCst);
+        if matches!(
+            k,
+            teko_protocol::ButtonKind::SignAssetOffer | teko_protocol::ButtonKind::SignAssetAccept
+        ) {
+            pp.fetch_add(1, Ordering::SeqCst);
         }
     });
-    let mut device_consent = |r: &ConsentRequest<'_>| {
-        let s = teko_crypto::wallet_address(r.seller).unwrap();
-        let b = teko_crypto::wallet_address(r.buyer).unwrap();
-        c.wallet_sign_asset_consent(
-            CHAIN_ID, r.kind, r.class, r.asset, &s, &b, r.price, r.version, r.metadata,
-        )
+    let mut device = |r: &TradeRequest<'_>| {
+        let seller = teko_crypto::wallet_address(r.seller).unwrap();
+        let buyer = teko_crypto::wallet_address(r.buyer).unwrap();
+        match r.action {
+            TradeAction::Offer => c.wallet_sign_asset_offer(
+                CHAIN_ID,
+                r.class,
+                r.asset,
+                &buyer,
+                r.price,
+                r.version,
+                r.metadata,
+                r.window_secs,
+                r.fee,
+                r.nonce,
+            ),
+            TradeAction::Accept => c.wallet_sign_asset_accept(
+                CHAIN_ID,
+                r.class,
+                r.asset,
+                &seller,
+                r.price,
+                r.version,
+                r.metadata,
+                r.window_secs,
+                r.fee,
+                r.nonce,
+            ),
+        }
         .map_err(|e| e.to_string())
     };
-    let after = devnet::trade_with_counterparty(
+    let finish = |econ: &mut teko_coin::devnet::Economy, class: &str, id: &str| {
+        let release = teko_assets::offer_of(econ.ledger(), class.as_bytes(), id.as_bytes())
+            .unwrap()
+            .release_at;
+        econ.set_clock(Box::new(move || release + 5));
+        devnet::finalize_pending(econ, &cast, class, id).unwrap();
+    };
+
+    // I sell: the offer leaves from MY wallet, the counterparty accepts, the window passes
+    devnet::sell_to_counterparty(
         &mut econ,
         &cast,
         &me,
         "imovel",
         "casa-7",
         3_000,
-        true,
-        &mut device_consent,
+        &mut device,
     )
     .unwrap();
-    assert!(after > 3_000 && after <= 4_000, "{after}"); // 1000 + 3000 - nothing else
+    assert_eq!(prompts.load(Ordering::SeqCst), 1);
+    assert_eq!(devnet::pending_trades(&econ, &me).len(), 1);
+    assert_eq!(
+        devnet::owned(&econ, &me).len(),
+        1,
+        "still mine in the window"
+    );
+    finish(&mut econ, "imovel", "casa-7");
     assert!(devnet::owned(&econ, &me).is_empty());
-    assert_eq!(consents.load(Ordering::SeqCst), 1);
+    assert!(econ.balance(&me) > 3_000);
     assert!(rig.hal.screens().iter().any(|s| {
-        s.title == "VENDA DE BEM"
+        s.title == "OFERECER BEM"
             && s.lines.iter().any(|l| l.contains("VENDEDOR"))
             && s.lines.iter().any(|l| l.contains("Preço: 0,003 TEKO"))
             // the metadata summary is on the device screen too (ADR-0032)
             && s.lines.iter().any(|l| l.contains("Matrícula: casa-7"))
     }));
 
-    // Buying it back: my device signs as the BUYER.
-    let spent = devnet::trade_with_counterparty(
+    // Buying it back: the counterparty offers, my device signs the ACCEPTANCE
+    devnet::buy_from_counterparty(
         &mut econ,
         &cast,
         &me,
         "imovel",
         "casa-7",
         2_000,
-        false,
-        &mut device_consent,
+        &mut device,
     )
     .unwrap();
-    assert_eq!(spent, after - 2_000);
+    assert_eq!(prompts.load(Ordering::SeqCst), 2);
+    finish(&mut econ, "imovel", "casa-7");
     assert_eq!(devnet::owned(&econ, &me).len(), 1);
-    assert_eq!(consents.load(Ordering::SeqCst), 2);
 
     // The user rejects on the device: nothing moves.
     rig.hal.push_decision(Decision::Reject);
-    let r = devnet::trade_with_counterparty(
-        &mut econ,
-        &cast,
-        &me,
-        "imovel",
-        "casa-7",
-        500,
-        true,
-        &mut device_consent,
-    );
+    let r =
+        devnet::sell_to_counterparty(&mut econ, &cast, &me, "imovel", "casa-7", 500, &mut device);
     assert!(r.is_err());
+    assert!(devnet::pending_trades(&econ, &me).is_empty());
     assert_eq!(devnet::owned(&econ, &me).len(), 1);
 
-    // A VEHICLE: the órgão of its own class registers it with the chassis as id, and my
-    // device shows the plate and the model before I consent to the sale.
+    // A VEHICLE: the órgão of its own class registers it with the chassis as id, and my device
+    // shows the plate and the model before I sign the offer.
     let car = sample_record("veiculo", "9BWZZZ377VT000031").unwrap();
     let car_id = devnet::register(&mut econ, &cast, &me, "veiculo", &car).unwrap();
     assert_eq!(car_id, "9BWZZZ377VT000031");
-    devnet::trade_with_counterparty(
+    devnet::sell_to_counterparty(
         &mut econ,
         &cast,
         &me,
         "veiculo",
         &car_id,
         1_000,
-        true,
-        &mut device_consent,
+        &mut device,
     )
     .unwrap();
+    finish(&mut econ, "veiculo", &car_id);
     assert!(rig.hal.screens().iter().any(|s| {
-        s.title == "VENDA DE BEM"
+        s.title == "OFERECER BEM"
             && s.lines.iter().any(|l| l.contains("Placa: BRA1A01"))
             && s.lines
                 .iter()

@@ -379,9 +379,11 @@ fn staking_ends_the_founder_phase_new_validators_join_and_a_restarted_node_catch
     let mut net = net;
     let c = client(&net);
     let chain_id = net.genesis.chain_id.clone();
-    bump(&c, &chain_id, 4);
+    // 3.000 to bond + 2 x 600 to fund the other nodes need 4.200 of rewards: one block pays 1.000 and
+    // admission by execution (ADR-0036) refuses what the founder cannot pay yet
+    bump(&c, &chain_id, 5);
     wait("some rewards", 40, || {
-        heights(&c)[0].is_some_and(|h| h >= 4)
+        heights(&c)[0].is_some_and(|h| h >= 5)
     });
     // the owner (a wallet key) bonds 3000 and funds the other two nodes' accounts
     let n1 = load_validator_key(&net.dir, 1).unwrap();
@@ -407,6 +409,15 @@ fn staking_ends_the_founder_phase_new_validators_join_and_a_restarted_node_catch
         },
     )])
     .unwrap();
+    // the end of the phase is recorded when the NEXT block starts, and blocks only exist for
+    // transactions: wait for the stake and the transfers, then make one more block
+    wait("the stake and the transfers are in", 30, || {
+        c.econ_sync(&net.genesis).is_ok_and(|ch| {
+            teko_coin::stake_of(ch.ledger(), &owner_addr) == 3_000
+                && teko_coin::balance(ch.ledger(), &address_of(&public_key_bytes(&n2))) >= 600
+        })
+    });
+    bump(&c, &chain_id, 1);
     wait("the founder phase ends", 40, || {
         c.econ_status(c.addrs()[0])
             .is_ok_and(|s| !s.founder_phase_active)
@@ -504,6 +515,115 @@ fn each_asset_class_has_its_own_organ_and_a_vehicle_registers_through_the_nodes(
                 .is_some_and(|a| a.metadata_hash == asset_meta::hash("veiculo", &rec))
         })
     });
+    for n in net.nodes.into_iter().flatten() {
+        n.stop();
+    }
+}
+
+#[test]
+fn a_trade_between_wallets_waits_in_the_veto_window_in_real_nodes_and_completes_after_it() {
+    use teko_assets::devnet::{self, CLASSES, Cast, METADATA_DIR, TradeAction, TradeRequest};
+    use teko_assets::{ASSETS_MODULE, AcceptOp, Op};
+    use teko_crypto::asset_meta;
+    use teko_node::{NodeWorld, load_class_registrar_keys};
+
+    let _turn = WORLD_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let buyer = key(41);
+    let buyer_addr = address_of(&public_key_bytes(&buyer));
+    // a veto window of 8 SECONDS of block time, so the test can cross it for real
+    let net = boot("trade", &buyer_addr, |g| {
+        for c in &mut g.classes {
+            c.window_secs = 8;
+        }
+    });
+    let c = client(&net);
+    let chain_id = net.genesis.chain_id.clone();
+    bump(&c, &chain_id, 2); // the founder's wallet (the buyer here) earns the first rewards
+
+    let mut world = NodeWorld::open(&net.dir).unwrap();
+    let mut cast = Cast::load(&net.dir)
+        .unwrap()
+        .with_store(net.dir.join(METADATA_DIR));
+    for class in CLASSES {
+        cast = cast.with_registrars(class, load_class_registrar_keys(&net.dir, class));
+    }
+    // the órgão registers a vehicle to the simulated counterparty, which offers it to the buyer
+    let f = asset_meta::sample("veiculo", 21).unwrap();
+    let p: Vec<(&str, &str)> = f.iter().map(|(k, v)| (k.as_str(), v.as_str())).collect();
+    let rec = asset_meta::canonical("veiculo", &p).unwrap();
+    let cp = cast.counterparty_address();
+    let id = devnet::register(&mut world, &cast, &cp, "veiculo", &rec).unwrap();
+
+    // the BUYER's own transaction (a software "device" here): the acceptance, from its own wallet
+    let mut accept = |r: &TradeRequest<'_>| {
+        assert_eq!(r.action, TradeAction::Accept);
+        let op = Op::Accept(AcceptOp {
+            class: r.class.into(),
+            asset: r.asset.as_bytes().to_vec(),
+            price: r.price,
+            version: r.version,
+            metadata_hash: asset_meta::hash(r.class, r.metadata).to_vec(),
+        });
+        Ok(teko_ledger::Tx::new_signed_with_fee(
+            &buyer,
+            r.chain_id,
+            r.nonce,
+            r.fee,
+            ASSETS_MODULE,
+            op.encode(),
+        ))
+    };
+    devnet::buy_from_counterparty(
+        &mut world,
+        &cast,
+        &buyer_addr,
+        "veiculo",
+        &id,
+        500,
+        &mut accept,
+    )
+    .unwrap();
+
+    // PENDING: the price is in the escrow, the asset is still the counterparty's
+    let pending = |net: &Net| {
+        c.econ_sync(&net.genesis).map(|ch| {
+            (
+                teko_assets::offer_of(ch.ledger(), b"veiculo", id.as_bytes()),
+                teko_assets::asset(ch.ledger(), b"veiculo", id.as_bytes())
+                    .unwrap()
+                    .owner,
+            )
+        })
+    };
+    let (offer, owner) = pending(&net).unwrap();
+    let offer = offer.unwrap();
+    assert!(offer.accepted && owner == cp.to_vec());
+    // finalizing inside the window is refused by the network ITSELF, at once and with the reason
+    // (admission by execution), not parked in a mempool until time passes
+    let t = Instant::now();
+    let early = devnet::finalize_pending(&mut world, &cast, "veiculo", &id);
+    assert!(early.unwrap_err().contains("veto window still open"));
+    assert!(t.elapsed() < Duration::from_secs(3));
+    // and no empty block is made on account of that refused transaction
+    let h = heights(&c)[0].unwrap();
+    std::thread::sleep(Duration::from_secs(1));
+    assert_eq!(heights(&c)[0].unwrap(), h);
+
+    // after the window (block time moves with the real clock) anyone completes it
+    std::thread::sleep(Duration::from_secs(9));
+    devnet::finalize_pending(&mut world, &cast, "veiculo", &id).unwrap();
+    wait("the trade is final on the verified chain", 30, || {
+        pending(&net).is_ok_and(|(o, owner)| o.is_none() && owner == buyer_addr.to_vec())
+    });
+    let chain = c.econ_sync(&net.genesis).unwrap();
+    teko_coin::audit(chain.ledger()).unwrap();
+    assert_eq!(
+        teko_coin::balance(
+            chain.ledger(),
+            &teko_assets::escrow_address(b"veiculo", id.as_bytes())
+        ),
+        0
+    );
     for n in net.nodes.into_iter().flatten() {
         n.stop();
     }

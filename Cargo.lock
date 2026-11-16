@@ -787,6 +787,7 @@ dependencies = [
  "p256",
  "prost",
  "rand",
+ "teko-assets",
  "teko-bft",
  "teko-chain",
  "teko-coin",

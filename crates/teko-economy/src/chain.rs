@@ -205,7 +205,7 @@ impl EconomyChain {
         let owner = teko_coin::owner_of(&self.ledger, &b.proposer);
         let (root, _) = self
             .ledger
-            .check_block(b.height, &owner, &txs)
+            .check_block_at(b.height, b.timestamp, &owner, &txs)
             .map_err(|e| EconError::BadTx(format!("{e:?}")))?;
         if root.as_slice() != b.state_root.as_slice() {
             return Err(EconError::StateRoot);
@@ -217,12 +217,14 @@ impl EconomyChain {
     /// root it reaches, proposed by `proposer` (this node's CONSENSUS key).
     pub fn propose(&self, proposer: &[u8], mempool: &[Tx], timestamp: u64) -> Vec<u8> {
         let owner = teko_coin::owner_of(&self.ledger, proposer);
-        let mut kept = self.ledger.select_valid(&owner, mempool.to_vec());
+        let mut kept = self
+            .ledger
+            .select_valid_at(timestamp, &owner, mempool.to_vec());
         kept.truncate(MAX_BLOCK_TXS);
         let height = self.height() + 1;
         let root = self
             .ledger
-            .check_block(height, &owner, &kept)
+            .check_block_at(height, timestamp, &owner, &kept)
             .map(|(r, _)| r.to_vec())
             .unwrap_or_default();
         EconBlock {
@@ -266,7 +268,7 @@ impl EconomyChain {
         let owner = teko_coin::owner_of(&self.ledger, &checked.proposer);
         let out = self
             .ledger
-            .apply_block(checked.height, &owner, &txs)
+            .apply_block_at(checked.height, checked.timestamp, &owner, &txs)
             .map_err(|e| EconError::BadTx(format!("{e:?}")))?;
         if out.state_root.as_slice() != checked.state_root.as_slice() {
             return Err(EconError::StateRoot);

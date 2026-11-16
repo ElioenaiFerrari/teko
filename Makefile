@@ -1,6 +1,6 @@
 # Teko — atalhos. Rode `make` (ou `make help`) para ver tudo.
 .DEFAULT_GOAL := help
-.PHONY: help setup emulator suite reset demo issuer-help preview fmt lint test check build clean-dev verify-fw release-check repro fund docs-check diagrams coin-demo assets-demo devnet close devnet-dkg devnet-economy explorer devnet-equivocate tally-time devnet-founder devnet-stop devnet-status devnet-reset devnet-blocks testnet-help election publish simulate simulate-live tally reset-board
+.PHONY: help setup emulator suite reset demo issuer-help preview fmt lint test check build clean-dev verify-fw release-check repro fund docs-check diagrams coin-demo assets-demo devnet close devnet-dkg devnet-economy explorer devnet-equivocate devnet-veto tally-time devnet-founder devnet-stop devnet-status devnet-reset devnet-blocks testnet-help election publish simulate simulate-live tally reset-board
 
 CARGO ?= cargo
 PIN   ?= 482913
@@ -47,6 +47,9 @@ devnet-founder: ## Define a carteira do fundador (recebe as recompensas) e zera 
 
 devnet-equivocate: ## SIMULAÇÃO (só dev): o validador de teste assina 2 votos conflitantes e leva Slash. Uso: make devnet-equivocate [VALIDATOR=0]. Antes, trave stake na Suite (Validadores)
 	$(CARGO) run -q -p devnet-sim -- equivocate --dir $(NET) --validator $(or $(VALIDATOR),0)
+
+devnet-veto: ## SIMULAÇÃO (só dev): o órgão simulado veta uma negociação de bem pendente (janela de veto). Uso: make devnet-veto CLASS=imovel ASSET=<id>
+	$(CARGO) run -q -p devnet-sim -- veto --dir $(NET) --class $(CLASS) --asset $(ASSET)
 
 explorer: ## Explorador da chain (web + API JSON somente leitura) em http://127.0.0.1:8545; precisa da rede: make devnet
 	$(CARGO) run -q -p explorer-server -- --dir $(NET)

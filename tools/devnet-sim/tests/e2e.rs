@@ -18,6 +18,9 @@ use teko_node::{
     init_network, load_economy, load_network, load_validator_key, node_dir,
 };
 
+/// `NodeWorld` keeps a process-wide cache: the tests of this file take turns.
+static TURN: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
 fn free_port_base() -> u16 {
     use std::sync::atomic::{AtomicU16, Ordering};
     static NEXT: AtomicU16 = AtomicU16::new(0);
@@ -96,6 +99,7 @@ fn wait(what: &str, secs: u64, mut f: impl FnMut() -> bool) {
 
 #[test]
 fn the_simulated_equivocation_burns_a_tenth_of_the_owners_stake_each_time() {
+    let _turn = TURN.lock().unwrap_or_else(|e| e.into_inner());
     let owner_key: SigningKey = generate_signing_key(&mut rand::rngs::StdRng::seed_from_u64(60));
     let owner = address_of(&public_key_bytes(&owner_key));
     let dir: PathBuf = std::env::temp_dir().join(format!(
@@ -174,5 +178,111 @@ fn it_refuses_a_network_without_blocks_or_without_economy() {
     init_network(&dir, NetworkKind::Devnet, 3, free_port_base(), false).unwrap();
     let e = equivocate(&dir, 0, Duration::from_secs(1)).unwrap_err();
     assert!(e.contains("economia"), "{e}"); // network without an economy
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn the_simulated_organ_vetoes_a_pending_trade_and_the_buyer_is_refunded_on_real_nodes() {
+    use teko_assets::devnet::{self, CLASSES, Cast, METADATA_DIR, TradeAction, TradeRequest};
+    use teko_assets::{ASSETS_MODULE, AcceptOp, Op as AssetOp};
+    use teko_crypto::asset_meta;
+    use teko_node::{NodeWorld, load_class_registrar_keys};
+
+    let _turn = TURN.lock().unwrap_or_else(|e| e.into_inner());
+
+    let buyer: SigningKey = generate_signing_key(&mut rand::rngs::StdRng::seed_from_u64(61));
+    let buyer_addr = address_of(&public_key_bytes(&buyer));
+    let dir: PathBuf = std::env::temp_dir().join(format!(
+        "teko-devnet-veto-{}-{}",
+        std::process::id(),
+        free_port_base()
+    ));
+    let _ = std::fs::remove_dir_all(&dir);
+    init_network(&dir, NetworkKind::Devnet, 3, free_port_base(), false).unwrap();
+    let mut g = init_economy(&dir, Some(buyer_addr), None, Some(10_000), false).unwrap();
+    g.coin.fee_per_byte = 0;
+    g.coin.initial_reward = 1_000;
+    for c in &mut g.classes {
+        c.window_secs = 600; // long: the veto must come INSIDE it
+    }
+    std::fs::write(dir.join(ECONOMY_FILE), g.to_text()).unwrap();
+    let ec = load_economy(&dir).unwrap().unwrap();
+    let nodes: Vec<NodeHandle> = (0..3).map(|i| start_node(&dir, i, &ec)).collect();
+
+    let mut world = NodeWorld::open(&dir).unwrap();
+    let mut cast = Cast::load(&dir).unwrap().with_store(dir.join(METADATA_DIR));
+    for class in CLASSES {
+        cast = cast.with_registrars(class, load_class_registrar_keys(&dir, class));
+    }
+    let f = asset_meta::sample("veiculo", 33).unwrap();
+    let p: Vec<(&str, &str)> = f.iter().map(|(k, v)| (k.as_str(), v.as_str())).collect();
+    let rec = asset_meta::canonical("veiculo", &p).unwrap();
+    let cp = cast.counterparty_address();
+    let id = devnet::register(&mut world, &cast, &cp, "veiculo", &rec).unwrap();
+    let mut accept = |r: &TradeRequest<'_>| {
+        assert_eq!(r.action, TradeAction::Accept);
+        let op = AssetOp::Accept(AcceptOp {
+            class: r.class.into(),
+            asset: r.asset.as_bytes().to_vec(),
+            price: r.price,
+            version: r.version,
+            metadata_hash: asset_meta::hash(r.class, r.metadata).to_vec(),
+        });
+        Ok(Tx::new_signed_with_fee(
+            &buyer,
+            r.chain_id,
+            r.nonce,
+            r.fee,
+            ASSETS_MODULE,
+            op.encode(),
+        ))
+    };
+    devnet::buy_from_counterparty(
+        &mut world,
+        &cast,
+        &buyer_addr,
+        "veiculo",
+        &id,
+        4_000,
+        &mut accept,
+    )
+    .unwrap();
+    let client = NodeClient::new(load_network(&dir).unwrap().peers);
+    let before = client.econ_sync(&ec.genesis).unwrap();
+    let balance_in_escrow = teko_coin::balance(before.ledger(), &buyer_addr);
+    assert!(
+        teko_coin::balance(
+            before.ledger(),
+            &teko_assets::escrow_address(b"veiculo", id.as_bytes())
+        ) == 4_000
+    );
+
+    // the órgão simulator vetoes it (the same code `make devnet-veto` runs)
+    let said = devnet_sim::veto(&dir, "veiculo", &id, "penhora judicial nao lancada").unwrap();
+    assert!(said.contains("vetou"));
+    let after = client.econ_sync(&ec.genesis).unwrap();
+    // refunded in full (the buyer here is also the founder, who earns the reward of the veto block too)
+    let got = teko_coin::balance(after.ledger(), &buyer_addr) - balance_in_escrow;
+    assert!((4_000..=4_000 + 2_000).contains(&got), "refunded: {got}");
+    assert_eq!(
+        teko_coin::balance(
+            after.ledger(),
+            &teko_assets::escrow_address(b"veiculo", id.as_bytes())
+        ),
+        0
+    );
+    assert!(teko_assets::offer_of(after.ledger(), b"veiculo", id.as_bytes()).is_none());
+    assert_eq!(
+        teko_assets::asset(after.ledger(), b"veiculo", id.as_bytes())
+            .unwrap()
+            .owner,
+        cp.to_vec()
+    );
+    teko_coin::audit(after.ledger()).unwrap();
+    // nothing pending is a clear error
+    assert!(devnet_sim::veto(&dir, "veiculo", &id, "x").is_err());
+    for n in nodes {
+        n.stop();
+    }
     let _ = std::fs::remove_dir_all(&dir);
 }

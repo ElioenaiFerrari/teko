@@ -1,5 +1,6 @@
-//! Demonstração dos bens: registro com quórum do órgão, gravame, venda contra
-//! pagamento atômica e recusas. DADOS DE TESTE. Uso: `make assets-demo`
+//! Demonstração dos bens: registro com quórum do órgão, gravame, negociação DIRETA com janela de
+//! veto (oferta, aceite com o preço em escrow, finalização depois da janela) e veto do órgão.
+//! DADOS DE TESTE. Uso: `make assets-demo`
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 
 use rand::SeedableRng;
@@ -15,6 +16,9 @@ const CLASSE: &[u8] = b"imovel";
 const META: [u8; 32] = [7; 32];
 const ATIVO: &[u8] = b"matricula-123";
 const PROP: Address = [0xAA; 32];
+/// Janela de veto da classe nesta demonstração (segundos) e o horário inicial dos blocos.
+const JANELA: u64 = 600;
+const T0: u64 = 1_700_000_000;
 
 fn key(seed: u64) -> SigningKey {
     generate_signing_key(&mut StdRng::seed_from_u64(seed))
@@ -28,6 +32,8 @@ struct Mundo {
     orgaos: Vec<SigningKey>,
     nomes: Vec<(Address, &'static str)>,
     relayer: SigningKey,
+    /// Horário do bloco (segundos): a janela de veto é medida por ele.
+    agora: u64,
 }
 
 impl Mundo {
@@ -39,23 +45,29 @@ impl Mundo {
             .unwrap_or("?")
     }
 
-    fn enviar(&mut self, rotulo: &str, op: Op) {
+    /// Envia `op` assinada por `quem` (cada parte envia a PRÓPRIA transação) em `dt` segundos.
+    fn enviar_como(&mut self, quem: &SigningKey, rotulo: &str, op: Op, dt: u64) {
+        self.agora += dt;
         let t = Tx::new_signed(
-            &self.relayer,
+            quem,
             CHAIN,
-            self.l.nonce_of(&addr(&self.relayer)),
+            self.l.nonce_of(&addr(quem)),
             ASSETS_MODULE,
             op.encode(),
         );
         let h = self.l.height() + 1;
-        match self.l.apply_block(h, &PROP, &[t]) {
+        match self.l.apply_block_at(h, self.agora, &PROP, &[t]) {
             Ok(out) => {
                 let ev: Vec<_> = out
                     .receipts
                     .iter()
                     .flat_map(|r| r.events.iter().map(|e| e.topic.clone()))
                     .collect();
-                println!("  ✔ {rotulo}  (bloco {h}, eventos: {})", ev.join(", "));
+                println!(
+                    "  ✔ {rotulo}  (bloco {h}, t+{}s, eventos: {})",
+                    self.agora - T0,
+                    ev.join(", ")
+                );
             }
             Err(LedgerError::Tx {
                 error: TxError::Module(m),
@@ -63,6 +75,12 @@ impl Mundo {
             }) => println!("  ✘ {rotulo}  → RECUSADO: {m}"),
             Err(e) => println!("  ✘ {rotulo}  → RECUSADO: {e:?}"),
         }
+    }
+
+    /// Operações do órgão (registro, gravame, veto): o relayer só leva a transação.
+    fn enviar(&mut self, rotulo: &str, op: Op) {
+        let r = self.relayer.clone();
+        self.enviar_como(&r, rotulo, op, 1);
     }
 
     fn estado(&self, saldos: &[&SigningKey]) {
@@ -73,6 +91,18 @@ impl Mundo {
                 self.nome(&a.owner),
                 a.version,
                 a.liens.len()
+            );
+        }
+        if let Some(o) = offer_of(&self.l, CLASSE, ATIVO) {
+            println!(
+                "    negociação: para {} por {} · {}",
+                self.nome(&o.buyer),
+                o.price,
+                if o.accepted {
+                    format!("PENDENTE até t+{}s", o.release_at - T0)
+                } else {
+                    "oferecida (aguardando o aceite)".into()
+                }
             );
         }
         let s: Vec<String> = saldos
@@ -86,8 +116,9 @@ impl Mundo {
             })
             .collect();
         println!(
-            "    saldos: {} · oferta {}",
+            "    saldos: {} · escrow {} · oferta {}",
             s.join(" · "),
+            teko_coin::balance(&self.l, &escrow_address(CLASSE, ATIVO)),
             if teko_coin::audit(&self.l).is_ok() {
                 "conservada"
             } else {
@@ -105,6 +136,36 @@ impl Mundo {
     fn assinar(&self, quem: &[&SigningKey], i: &Intent) -> Vec<Approval> {
         quem.iter().map(|k| Approval::sign(k, CHAIN, i)).collect()
     }
+
+    fn oferta(&self, comprador: &SigningKey, preco: u64) -> Op {
+        Op::Offer(OfferOp {
+            class: CLASSE.to_vec(),
+            asset: ATIVO.to_vec(),
+            buyer: addr(comprador).to_vec(),
+            price: preco,
+            version: self.versao(),
+            metadata_hash: META.to_vec(),
+        })
+    }
+}
+
+/// O aceite leva os TERMOS que o comprador viu (preço, versão e hash dos metadados).
+fn aceite(w: &Mundo) -> Op {
+    let o = offer_of(&w.l, CLASSE, ATIVO).unwrap_or_default();
+    Op::Accept(AcceptOp {
+        class: CLASSE.to_vec(),
+        asset: ATIVO.to_vec(),
+        price: o.price,
+        version: o.version,
+        metadata_hash: o.metadata_hash,
+    })
+}
+
+fn finalizar() -> Op {
+    Op::Finalize(FinalizeOp {
+        class: CLASSE.to_vec(),
+        asset: ATIVO.to_vec(),
+    })
 }
 
 fn main() {
@@ -134,7 +195,7 @@ fn main() {
     )
     .unwrap();
     let chaves: Vec<Vec<u8>> = orgaos.iter().map(public_key_bytes).collect();
-    genesis_class(&mut l, CLASSE, &chaves, 2).unwrap();
+    genesis_class_with_window(&mut l, CLASSE, &chaves, 2, JANELA).unwrap();
     let nomes = vec![
         (addr(&ana), "Ana"),
         (addr(&beto), "Beto"),
@@ -145,13 +206,14 @@ fn main() {
         orgaos,
         nomes,
         relayer: key(777),
+        agora: T0,
     };
     let (o0, o1) = (w.orgaos[0].clone(), w.orgaos[1].clone());
     println!(
-        "Classe \"imovel\": órgão registrador 2-de-3 · Beto tem 10000 e Carla 50 (moedas de TESTE)\n"
+        "Classe \"imovel\": órgão 2-de-3 · janela de veto de {JANELA}s · Beto tem 10000 e Carla 50 (moedas de TESTE)\n"
     );
 
-    println!("1) Registrar a matrícula para a Ana");
+    println!("1) Registrar a matrícula para a Ana (o órgão)");
     let reg = Intent::register(CLASSE, ATIVO, addr(&ana), &META);
     let op = |ap| {
         Op::Register(RegisterOp {
@@ -169,7 +231,7 @@ fn main() {
     );
     w.estado(&[&ana, &beto, &carla]);
 
-    println!("\n2) Penhora (gravame) registrada pelo órgão: o bem não pode ser vendido");
+    println!("\n2) Penhora (gravame) lançada pelo órgão: o bem não pode ser oferecido");
     let lien = Intent::add_lien(CLASSE, ATIVO, addr(&ana), w.versao(), "penhora");
     w.enviar(
         "gravame \"penhora\"",
@@ -180,26 +242,8 @@ fn main() {
             approvals: w.assinar(&[&o0, &o1], &lien),
         }),
     );
-    let sw = |w: &Mundo, buyer: &SigningKey, price: u64, quem: &[&SigningKey]| {
-        let i = Intent::swap(
-            CLASSE,
-            ATIVO,
-            addr(&ana),
-            addr(buyer),
-            price,
-            w.versao(),
-            &META,
-        );
-        Op::Swap(SwapOp {
-            class: CLASSE.to_vec(),
-            asset: ATIVO.to_vec(),
-            buyer: addr(buyer).to_vec(),
-            price,
-            approvals: w.assinar(quem, &i),
-        })
-    };
-    let op1 = sw(&w, &beto, 4000, &[&ana, &beto, &o0, &o1]);
-    w.enviar("venda para o Beto", op1);
+    let o = w.oferta(&beto, 4000);
+    w.enviar_como(&ana, "Ana oferece ao Beto", o, 1);
 
     println!("\n3) O órgão libera o gravame");
     let rel = Intent::release_lien(CLASSE, ATIVO, addr(&ana), w.versao(), 0);
@@ -214,49 +258,84 @@ fn main() {
     );
     w.estado(&[&ana, &beto, &carla]);
 
-    println!("\n4) Venda sem o consentimento do comprador é recusada");
-    let op2 = sw(&w, &beto, 4000, &[&ana, &o0, &o1]);
-    w.enviar("Ana + órgão, sem o Beto", op2);
-
-    println!("\n5) Comprador sem dinheiro: a troca é atômica, nada se move");
-    let op3 = sw(&w, &carla, 4000, &[&ana, &carla, &o0, &o1]);
-    w.enviar("venda para a Carla (50 moedas) por 4000", op3);
-    w.estado(&[&ana, &beto, &carla]);
-
-    println!("\n6) Venda contra pagamento: Ana + Beto + órgão (2-de-3)");
-    let v_antes = w.versao();
-    let op4 = sw(&w, &beto, 4000, &[&ana, &beto, &o0, &o1]);
-    let guardado = match &op4 {
-        Op::Swap(s) => s.clone(),
-        _ => unreachable!(),
-    };
-    w.enviar("venda para o Beto por 4000", op4);
-    w.estado(&[&ana, &beto, &carla]);
-
-    println!("\n7) Beto revende o imóvel para a Ana por 3000 (o bem muda de versão de novo)");
-    let volta = Intent::swap(
-        CLASSE,
-        ATIVO,
-        addr(&beto),
-        addr(&ana),
-        3000,
-        w.versao(),
-        &META,
+    println!(
+        "\n4) Cada um só faz o que é seu: quem não é dono não oferece; só o comprador nomeado aceita"
     );
-    w.enviar(
-        "revenda Beto → Ana",
-        Op::Swap(SwapOp {
+    let o = w.oferta(&carla, 10);
+    w.enviar_como(&beto, "Beto (não é o dono) oferece", o, 1);
+    let o = w.oferta(&beto, 4000);
+    w.enviar_como(&ana, "Ana oferece ao Beto por 4000", o, 1);
+    let a = aceite(&w);
+    w.enviar_como(&carla, "Carla (não é o comprador) aceita", a, 1);
+    w.estado(&[&ana, &beto, &carla]);
+
+    println!("\n5) Quem aceita sem dinheiro não leva nada: o aceite é atômico");
+    w.enviar_como(
+        &ana,
+        "Ana cancela a oferta",
+        Op::Cancel(CancelOp {
             class: CLASSE.to_vec(),
             asset: ATIVO.to_vec(),
-            buyer: addr(&ana).to_vec(),
-            price: 3000,
-            approvals: w.assinar(&[&beto, &ana, &o0, &o1], &volta),
         }),
+        1,
+    );
+    let o = w.oferta(&carla, 4000);
+    w.enviar_como(&ana, "Ana oferece à Carla (50 moedas) por 4000", o, 1);
+    let a = aceite(&w);
+    w.enviar_como(&carla, "Carla aceita", a, 1);
+    w.enviar_como(
+        &ana,
+        "Ana cancela de novo",
+        Op::Cancel(CancelOp {
+            class: CLASSE.to_vec(),
+            asset: ATIVO.to_vec(),
+        }),
+        1,
     );
     w.estado(&[&ana, &beto, &carla]);
 
-    println!("\n8) Alguém reenvia as assinaturas ANTIGAS da venda Ana → Beto (versão {v_antes})");
-    w.enviar("repetição das aprovações antigas", Op::Swap(guardado));
+    println!("\n6) Negociação direta: oferta → aceite (preço em escrow) → janela → finalização");
+    let o = w.oferta(&beto, 4000);
+    w.enviar_como(&ana, "Ana oferece ao Beto por 4000", o, 1);
+    let a = aceite(&w);
+    w.enviar_como(&beto, "Beto aceita (4000 vão para o escrow)", a, 1);
+    w.estado(&[&ana, &beto, &carla]);
+    w.enviar_como(&carla, "alguém tenta finalizar cedo", finalizar(), 10);
+    w.agora += JANELA;
+    w.enviar_como(
+        &carla,
+        "passou a janela: a Carla (qualquer um) finaliza",
+        finalizar(),
+        1,
+    );
+    w.estado(&[&ana, &beto, &carla]);
+    w.enviar_como(&carla, "finalizar de novo", finalizar(), 1);
+
+    println!("\n7) Beto revende para a Ana por 3000, mas o ÓRGÃO VETA dentro da janela");
+    let o = w.oferta(&ana, 3000);
+    w.enviar_como(&beto, "Beto oferece à Ana por 3000", o, 1);
+    let a = aceite(&w);
+    w.enviar_como(&ana, "Ana aceita (3000 vão para o escrow)", a, 1);
+    let dono = asset(&w.l, CLASSE, ATIVO).unwrap();
+    let motivo = "penhora judicial ainda nao lancada";
+    let veto = Intent::veto(
+        CLASSE,
+        ATIVO,
+        dono.owner.as_slice().try_into().unwrap(),
+        addr(&ana),
+        3000,
+        dono.version,
+        motivo,
+    );
+    w.enviar(
+        "o quórum do órgão veta, com motivo público",
+        Op::Veto(VetoOp {
+            class: CLASSE.to_vec(),
+            asset: ATIVO.to_vec(),
+            reason: motivo.into(),
+            approvals: w.assinar(&[&o0, &o1], &veto),
+        }),
+    );
     w.estado(&[&ana, &beto, &carla]);
     println!("\nFim.");
 }

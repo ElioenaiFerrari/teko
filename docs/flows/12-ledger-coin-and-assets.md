@@ -14,7 +14,7 @@ Validadores (stake + histórico), emissor (elegibilidade de eleitores), órgão 
 
 ![Dois livros com os mesmos validadores: votos (implementado) e economia (planejado), com moeda, bens, emissor e órgão registrador](../diagrams/ledger-domains.png)
 
-![Venda de bem contra pagamento: vendedor, comprador e órgão aprovam; o livro faz a troca atômica](../diagrams/delivery-vs-payment.png)
+![Negociação direta de um bem: oferta do vendedor, aceite do comprador com o preço em escrow, janela de veto do órgão e finalização por qualquer um](../diagrams/asset-trade.png)
 
 ## O núcleo do livro (implementado)
 - Uma transação (`Tx`) leva `chain_id`, `nonce`, módulo, `payload`, chave pública e assinatura. O endereço é o hash da chave.
@@ -49,13 +49,13 @@ O livro guarda **inteiros em ypy**; **1 TEKO = 1.000.000 ypy** (6 casas decimais
 ## Os bens (implementados)
 - **Classes** nascem na gênese e são governadas por um **órgão registrador** com quórum M-de-N. A devnet tem **duas**: `imovel` e `veiculo`, cada uma com o seu órgão (o de uma não registra a outra).
 - **Registro** do bem: só com o quórum do órgão. O `id` do bem é o **chassi** (veículo) ou a **matrícula** (imóvel).
-- **Transferência:** exige **três consentimentos** (dono, comprador e quórum do órgão). O consentimento é uma assinatura sobre uma intenção que inclui rede, partes, preço e a **versão** do bem; por isso não pode ser repetido depois de qualquer mudança.
+- **Negociação direta com janela de veto** ([ADR-0036](../adr/0036-bens-negociacao-direta-com-janela-de-veto.md)): dono e comprador negociam **sem o órgão**, cada um com a **própria transação**, assinada no dispositivo (a assinatura da transação é o consentimento). O dono **oferece** a um comprador nomeado (preço, versão e hash dos metadados); o comprador **aceita** os termos que viu e o preço vai a um **escrow** (endereço sem chave); abre-se a **janela de veto** da classe (20 min na devnet, medida pelo horário do bloco); dentro dela o **quórum do órgão pode vetar** (motivo público) e o preço volta; passada a janela, **qualquer um** envia `Finalize` e o bem vai ao comprador e o preço ao vendedor, tudo atômico. Gravame ou sua liberação durante a janela cancela a negociação. A rede recusa na hora (com o motivo) o que falharia agora.
 - **Metadados** ([ADR-0032](../adr/0032-classes-de-bens-e-metadados-amarrados.md)): placa, RENAVAM, modelo, endereço etc. ficam **fora da chain**, num registro canônico definido por um esquema por classe (`teko_crypto::asset_meta`). Na chain vai só o **hash** de 32 bytes, o que protege os dados do dono. O consentimento de venda **inclui esse hash**: o dispositivo mostra placa e modelo (ou matrícula e endereço) e assina o hash; se a Suite trocar o registro, o livro recusa.
 
 ![Metadados do bem: o registro fica fora da chain, o hash vai à chain, o dispositivo valida, mostra e assina o hash, e o livro de bens recusa se o hash diferir](../diagrams/asset-metadata-binding.png)
 
 - **Gravames** (penhora etc.) só o órgão coloca e retira, e bloqueiam a venda.
-- **Venda contra pagamento:** o bem e a moeda trocam de mãos na mesma transação, ou nada acontece (diagrama abaixo).
+- **Troca atômica:** na finalização o bem e a moeda trocam de mãos juntos, ou nada acontece.
 - **Para ver funcionando:** `make assets-demo` ou a tela **Bens** da Suite (ambiente de teste). Decisão e limites (inclusive o **problema do oráculo**): [ADR-0022](../adr/0022-bens-registro-com-orgao-e-troca-atomica.md).
 
 ## Passo a passo (previsto)
@@ -75,7 +75,7 @@ Problema do oráculo (o registro digital não prova o mundo físico), concentra�
 Núcleo: `crates/teko-ledger` (`tx.rs`, `state.rs`, `ledger.rs`). Moeda: `crates/teko-coin`. Bens: `crates/teko-assets` (`module.rs`, `types.rs`). Consenso: `crates/teko-bft`.
 
 ## Testes que cobrem
-Núcleo: `crates/teko-ledger/tests/ledger.rs`. Moeda: `crates/teko-coin/tests/coin.rs` (inclui proptest de conservação da oferta). Bens: `crates/teko-assets/tests/assets.rs` (inclui proptest de donos e oferta).
+Núcleo: `crates/teko-ledger/tests/ledger.rs`. Moeda: `crates/teko-coin/tests/coin.rs` (inclui proptest de conservação da oferta). Bens: `crates/teko-assets/tests/trade.rs` (máquina de estados, escrow, veto e proptest de conservação) e `tests/assets.rs`/`tests/devnet.rs`.
 
 ## Limites honestos
 Sem valor real, sem validade jurídica e sem integração com registros oficiais (por exemplo, cartórios). Início da rede (quem valida no começo) está **pendente de decisão** (ADR-0021).

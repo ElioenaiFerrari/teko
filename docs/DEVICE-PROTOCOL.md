@@ -63,7 +63,8 @@ Legenda — **Confirma?**: exige confirmação física no dispositivo. Todas as 
 | `RestoreWallet` → `ButtonRequest(WalletRestore…)` → `WalletReady` | Idem | **Sim** (24 palavras digitadas + conferir o endereço) | "Digite as 24 palavras AQUI"; mostra o endereço derivado |
 | `CheckWalletBackup` → `ButtonRequest(WalletCheck)` → `WalletBackupOk` ou `Failure` | Desbloqueado, com carteira | **Sim** (redigitar a frase) | "Verificar backup"; só diz se confere |
 | `SignTransfer{chain_id, to_address, amount, fee, nonce}` → `ButtonRequest(SignTransfer)` → `TransferSigned{signature, public_key}` | Desbloqueado, com carteira | **Sim** | "ENVIAR MOEDAS": destino, valor, taxa, total e rede (o dispositivo monta a transação e assina o que mostrou) |
-| `SignAssetConsent{chain_id, kind, class, asset, from_address, to_address, price, version, metadata}` (o `metadata` é o registro canônico do bem: o dispositivo o valida, mostra o resumo e assina o hash, [ADR-0032](adr/0032-classes-de-bens-e-metadados-amarrados.md)) → `ButtonRequest(SignAssetConsent)` → `AssetConsentSigned{signature, public_key}` | Desbloqueado, com carteira; a carteira precisa ser o vendedor ou o comprador | **Sim** | "VENDA DE BEM"/"TRANSFERIR BEM": papel, bem, partes, preço, versão e rede |
+| `SignAssetOffer{chain_id, class, asset, buyer_address, price, version, metadata, window_secs, fee, nonce}` (o `metadata` é o registro canônico do bem: o dispositivo o valida, mostra o resumo e assina o hash, [ADR-0032](adr/0032-classes-de-bens-e-metadados-amarrados.md)) → `ButtonRequest(SignAssetOffer)` → `TransferSigned{signature, public_key}` | Desbloqueado, com carteira; a carteira será o vendedor | **Sim** | "OFERECER BEM": papel, bem, resumo dos metadados, comprador, preço, **janela de veto**, taxa, versão e rede; o dispositivo monta a **transação inteira** do dono (ADR-0036) |
+| `SignAssetAccept{chain_id, class, asset, seller_address, price, version, metadata, window_secs, fee, nonce}` → `ButtonRequest(SignAssetAccept)` → `TransferSigned{signature, public_key}` | Desbloqueado, com carteira; a carteira será o comprador | **Sim** | "ACEITAR OFERTA": os mesmos campos; o aceite leva os **termos vistos** (preço, versão, hash) e o preço vai a um escrow até a janela passar ou o órgão vetar |
 | `SignStake{chain_id, action, amount, fee, nonce}` → `ButtonRequest(SignStake)` → `TransferSigned{signature, public_key}` | Desbloqueado, com carteira | **Sim** | "TRAVAR STAKE"/"SAIR DO STAKE"/"RESGATAR STAKE": ação, valor, taxa, rede e aviso de penalidade |
 | `GetAddress` → `Address{address, public_key}` | Desbloqueado, com carteira | Não (dados públicos) | — |
 | `Wipe` → `ButtonRequest` → `WipeDone` | todos exceto Virgem | **Sim** (pressionar e segurar) | "APAGAR TUDO? Irreversível." |
@@ -135,7 +136,7 @@ Mensagens de erro **nunca** incluem material secreto nem diferenciam causas de f
 | SignBallot (stub) | ✖ | ✖ | ✖ | ✖ | ✖ | ✔(c) |
 | SetupWallet / RestoreWallet | ✖ | ✖ | ✖ | ✖ | ✖ | ✔(c)\* |
 | CheckWalletBackup / GetAddress | ✖ | ✖ | ✖ | ✖ | ✖ | ✔ (c) |
-| SignTransfer / SignAssetConsent / SignStake | ✖ | ✖ | ✖ | ✖ | ✖ | ✔(c)\*\* |
+| SignTransfer / SignAssetOffer / SignAssetAccept / SignStake | ✖ | ✖ | ✖ | ✖ | ✖ | ✔(c)\*\* |
 
 \*\* Exige carteira pronta (`Features.wallet_ready`).
 

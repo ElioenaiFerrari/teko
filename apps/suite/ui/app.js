@@ -263,7 +263,8 @@
     wallet_passphrase: ['Escolha no dispositivo: usar passphrase?', 'Uma senha extra protege a frase, mas esquecê-la significa perder os fundos. Decida no dispositivo.'],
     wallet_restore: ['Restaure a carteira no dispositivo', 'Digite as 24 palavras NO DISPOSITIVO e confira o endereço mostrado. Esta janela nunca vê as palavras.'],
     sign_stake: ['Confirme o stake no dispositivo', 'Confira a ação, o valor e a taxa que o dispositivo mostra. Quem trava stake pode ser penalizado se votar duas vezes.'],
-    sign_asset_consent: ['Confirme o seu consentimento no dispositivo', 'Confira o BEM, o vendedor, o comprador, o preço e a versão que o dispositivo mostra. Só confirme se for exatamente o negócio combinado.'],
+    sign_asset_offer: ['Confirme a sua OFERTA no dispositivo', 'Confira o BEM, o comprador, o preço, a janela de veto e a versão que o dispositivo mostra. Esta é a SUA transação, assinada na sua carteira. Só confirme se for exatamente o negócio combinado.'],
+    sign_asset_accept: ['Confirme o ACEITE no dispositivo', 'Confira o BEM, o vendedor, o preço e a janela de veto. O preço sai da sua carteira para um escrow e só volta se o órgão vetar. Só confirme se for exatamente o negócio combinado.'],
     sign_transfer: ['Confirme o envio no dispositivo', 'Confira o ENDEREÇO de destino, o valor e a taxa que o dispositivo mostra. Só confirme se for exatamente o que você quer enviar.'],
     wallet_check: ['Verifique o backup no dispositivo', 'Digite a frase do seu papel no dispositivo. Ele só diz se confere ou não.'],
     unknown: ['Aguardando o dispositivo', 'Olhe a tela do dispositivo.'],
@@ -1287,6 +1288,14 @@
       await guarded(async () => { await call('asset_lien', { class: b.dataset.class, asset: b.dataset.id, on: b.dataset.on === '1' }); toast(b.dataset.on === '1' ? 'Órgão simulado registrou a penhora.' : 'Órgão simulado liberou o gravame.', 'ok'); });
       S.assetsTried = false; S.lastKey = ''; render(); loadAssets();
     },
+    async assetfinalize(b) {
+      await guarded(async () => { await call('asset_finalize', { class: b.dataset.class, asset: b.dataset.id }); toast('Transferência concluída: o bem foi ao comprador e o preço ao vendedor.', 'ok'); });
+      S.assetsTried = false; S.walletTried = false; S.balance = null; S.history = null; S.lastKey = ''; render(); loadAssets();
+    },
+    async assetveto(b) {
+      await guarded(async () => { await call('asset_veto', { class: b.dataset.class, asset: b.dataset.id }); toast('Órgão simulado vetou: o preço voltou ao comprador e o bem continua com o dono.', 'ok'); });
+      S.assetsTried = false; S.walletTried = false; S.balance = null; S.history = null; S.lastKey = ''; render(); loadAssets();
+    },
     async assetsell(b) { await trade(b.dataset.class, b.dataset.id, true); },
     async assetbuy(b) { await trade(b.dataset.class, b.dataset.id, false); },
     async walletcheck() {
@@ -1418,7 +1427,7 @@
     let bal = null;
     await guarded(async () => { bal = await call('asset_trade', { class: cls, asset: id, price, selling }, { delay: 300 }); });
     if (bal !== null) {
-      toast(selling ? `Vendido por ${money(price)} TEKO. Seu saldo: ${money(bal)} TEKO.` : `Comprado por ${money(price)} TEKO. Seu saldo: ${money(bal)} TEKO.`, 'ok');
+      toast(selling ? `Oferta de ${money(price)} TEKO assinada e aceita. A transferência fica pendente na janela de veto do órgão.` : `Aceite assinado: ${money(price)} TEKO em escrow. A transferência fica pendente na janela de veto do órgão. Seu saldo: ${money(bal)} TEKO.`, 'ok');
       S.assetsTried = false; S.walletTried = false; S.balance = null; S.history = null; S.lastKey = ''; render(); loadAssets();
     }
   }
@@ -1620,13 +1629,40 @@
       </div></div>`;
   }
 
+  function fmtLeft(sec) {
+    if (sec <= 0) return 'a janela terminou';
+    if (sec < 120) return `${sec} s`;
+    if (sec < 7200) return `${Math.ceil(sec / 60)} min`;
+    return `${Math.ceil(sec / 3600)} h`;
+  }
+
+  function pendingCard(a) {
+    if (!a.pending || !a.pending.length) return '';
+    const rows = a.pending.map((t) => {
+      const data = `data-class="${esc(t.class)}" data-id="${esc(t.asset)}"`;
+      const mine = t.role === 'seller' ? 'Você está vendendo' : 'Você está comprando';
+      if (!t.accepted) return `<div class="fw__item"><div><h3>${esc(CLASS_LABEL[t.class] || t.class)} · ${esc(t.asset)}</h3><p>${mine} por ${esc(money(t.price))} TEKO · ${chip('oferecida, aguardando o aceite', 'warn', 'alert')}</p></div></div>`;
+      const left = t.release_at - a.now;
+      const ready = left <= 0;
+      return `<div class="fw__item"><div><h3>${esc(CLASS_LABEL[t.class] || t.class)} · ${esc(t.asset)}</h3>
+        <p>${mine} por ${esc(money(t.price))} TEKO · ${ready ? chip('janela de veto encerrada', 'ok', 'check') : chip(`pendente: faltam ${fmtLeft(left)}`, 'warn', 'alert')}</p>
+        <p class="muted">O preço está em escrow. Se o órgão vetar dentro da janela, ele volta ao comprador e o bem continua com o dono; senão, qualquer um conclui.</p></div>
+        <div class="row" style="flex-wrap:wrap;gap:8px">
+          <button class="btn" data-act="assetfinalize" ${data}${ready ? '' : ' disabled title="a janela de veto ainda está aberta"'}>${ico('check')}Concluir transferência</button>
+          <button class="btn btn--ghost btn--sm" data-act="assetveto" ${data}${ready ? ' disabled' : ''}>${ico('lock')}Órgão: vetar (teste)</button>
+        </div></div>`;
+    }).join('');
+    return `<article class="card"><div class="card__head"><div class="card__ico card__ico--onca">${ico('alert')}</div><h2>Negociações em andamento</h2></div><div class="fw">${rows}</div></article>`;
+  }
+
   function vAssets() {
     const a = S.assets;
-    const head0 = head('Bens', 'Patrimônio e negócios', 'Bens registrados em seu nome. Cada negócio exige o SEU consentimento no dispositivo, o do comprador e o do órgão registrador.');
+    const head0 = head('Bens', 'Patrimônio e negócios', 'Bens registrados em seu nome. Você e o comprador negociam direto, cada um com a PRÓPRIA transação assinada no dispositivo; o preço fica em escrow numa janela em que o órgão pode vetar, e depois qualquer um conclui.');
     if (!a) return `${head0}<article class="card"><div class="row">${ico('spin', 'spin')}<span>Lendo…</span></div></article>`;
     if (!a.available) return `${head0}<article class="card">${callout('info', 'shield', 'Indisponível nesta versão', `<p>${esc(a.reason || 'O livro de bens ainda não está na rede.')}</p>`)}</article>`;
     return `${head0}
       ${callout('warn', 'alert', 'Ambiente de teste', '<p>O <strong>órgão registrador</strong> e a <strong>contraparte</strong> abaixo são <strong>simulados</strong> (chaves de teste em <code>dev/</code>) e o livro é local. Seu consentimento, porém, é assinado <strong>no seu dispositivo</strong>, que mostra o bem, as partes, o preço e a versão. Moedas de teste: <code>make fund</code>.</p>')}
+      ${pendingCard(a)}
       <article class="card">
         <div class="card__head"><div class="card__ico card__ico--onca">${ico('home')}</div><h2>Meu patrimônio</h2></div>
         <p class="muted">Seu saldo: <strong>${esc(money(a.balance))}</strong> TEKO de teste.</p>

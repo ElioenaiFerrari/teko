@@ -185,3 +185,25 @@ pub fn equivocate(dir: &Path, index: usize, wait: Duration) -> Result<Report, St
         applied,
     })
 }
+
+/// Simulates the registrar quorum (órgão) of `class` VETOING the pending trade of `asset` inside its
+/// veto window (ADR-0036), with a public `reason`. The simulated órgão keys are the TEST keys of the
+/// network folder; the buyer's price returns from the escrow and the asset stays with its owner.
+pub fn veto(dir: &Path, class: &str, asset: &str, reason: &str) -> Result<String, String> {
+    use teko_assets::devnet::{self, METADATA_DIR};
+    let net = load_network(dir).map_err(|e| e.to_string())?;
+    if net.profile.kind.name() == "mainnet" {
+        return Err("a mainnet está travada: simulações só em devnet e testnet".into());
+    }
+    let mut world = teko_node::NodeWorld::open(dir).map_err(|e| e.to_string())?;
+    let mut cast = devnet::Cast::load(dir)
+        .map_err(|e| e.to_string())?
+        .with_store(dir.join(METADATA_DIR));
+    for c in devnet::CLASSES {
+        cast = cast.with_registrars(c, teko_node::load_class_registrar_keys(dir, c));
+    }
+    devnet::veto_pending(&mut world, &cast, class, asset, reason)?;
+    Ok(format!(
+        "O órgão simulado de {class} vetou a negociação de {asset}: o preço voltou ao comprador e o bem continua com o dono."
+    ))
+}

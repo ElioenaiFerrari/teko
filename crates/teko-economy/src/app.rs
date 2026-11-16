@@ -42,6 +42,21 @@ impl EconApp {
         self.mempool.len()
     }
 
+    /// How many waiting transactions would execute in the next block. A height only starts for
+    /// those: a transaction that became unexecutable (state or time moved) must not make empty
+    /// blocks, and is dropped when a block is decided.
+    pub fn executable_len(&self) -> usize {
+        if self.mempool.is_empty() {
+            return 0;
+        }
+        let at = (self.clock)().max(self.chain.last_timestamp() + 1);
+        let owner = teko_coin::owner_of(self.chain.ledger(), &self.me);
+        self.chain
+            .ledger()
+            .select_valid_at(at, &owner, self.mempool.clone())
+            .len()
+    }
+
     /// How many transactions of `sender` are waiting in the mempool.
     pub fn queued_from(&self, sender: &teko_ledger::Address) -> u64 {
         self.mempool
@@ -74,6 +89,20 @@ impl EconApp {
             Ok(()) => return Err("nonce já em uso por uma transação pendente".into()),
             Err(e) => return Err(format!("{e:?}")),
         }
+        // Admission by EXECUTION (ADR-0036): a transaction that would fail NOW (for example a trade
+        // finalized inside its veto window) is refused with the reason, not parked in the mempool.
+        let owner = teko_coin::owner_of(self.chain.ledger(), &self.me);
+        let at = (self.clock)().max(self.chain.last_timestamp() + 1);
+        if let Err(e) = self
+            .chain
+            .ledger()
+            .dry_run_tx_at(at, &owner, &self.mempool, &tx)
+        {
+            return Err(match e {
+                TxError::Module(m) => m,
+                other => format!("{other:?}"),
+            });
+        }
         self.seen.insert(id);
         self.mempool.push(tx);
         Ok(true)
@@ -84,16 +113,12 @@ impl EconApp {
     pub fn on_decided(&mut self, d: DecidedBlock) -> Result<(), EconError> {
         self.chain.apply_decided(d)?;
         let ledger = self.chain.ledger();
-        // Keep what can still be included: valid now, or waiting for an earlier nonce.
-        let keep: Vec<Tx> = self
-            .mempool
-            .drain(..)
-            .filter(|t| match ledger.check_tx(t) {
-                Ok(()) => true,
-                Err(TxError::BadNonce { expected, got }) => got > expected,
-                Err(_) => false,
-            })
-            .collect();
+        // Keep what would still execute in the next block (a nonce-queued transaction executes after
+        // its predecessor, which the selection simulates); the rest is dropped, since a transaction
+        // that fails now was refused at admission and only state or time moved since.
+        let at = (self.clock)().max(self.chain.last_timestamp() + 1);
+        let owner = teko_coin::owner_of(ledger, &self.me);
+        let keep: Vec<Tx> = ledger.select_valid_at(at, &owner, std::mem::take(&mut self.mempool));
         self.seen = keep.iter().map(Tx::id).collect();
         self.mempool = keep;
         Ok(())

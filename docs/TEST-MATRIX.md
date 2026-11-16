@@ -303,3 +303,23 @@ Legenda: **P** = `proptest` (muitos casos), **U** = unitário, **E** = ponta a p
 | A penalidade recai sobre o dono ao qual a chave da instituição está ligada | coin: `an_institution_is_punished_through_the_owner_its_key_is_linked_to` |
 | Sem `vote_chain_id` configurado a penalidade fica desligada; o payload faz ida e volta | coin: `vote_chain_penalties_are_off_...`, `the_vote_slash_payload_round_trips` |
 | Ponta a ponta: uma instituição que assina dois prevotes em conflito é detectada ao vivo pelo nó, a evidência vai à economia e 10% da caução é queimada | node: `an_institution_that_equivocates_on_the_vote_chain_loses_ten_percent_of_its_bond_in_the_economy` |
+
+## Bens: negociação direta com janela de veto (ADR-0036)
+
+| Garantia | Teste |
+|---|---|
+| O horário do bloco chega ao livro e réplicas concordam; o dry run prevê a raiz | ledger: `modules_see_the_block_time_and_replicas_agree_on_it`, `the_selection_of_a_proposer_sees_the_same_time...` |
+| Oferta, aceite (preço em escrow) e finalização só depois da janela, por qualquer um; não finaliza duas vezes | assets: `offer_accept_and_finalize_move_the_asset_and_the_money_only_after_the_window` |
+| Só o dono oferece; só o comprador nomeado aceita; oferta presa à versão e ao hash dos metadados; uma oferta por bem | assets: `only_the_owner_offers_only_the_named_buyer_accepts_and_stale_offers_are_refused` |
+| O aceite leva os termos vistos: cancelar e reofertar não o sequestra | assets: `an_acceptance_binds_the_terms_the_buyer_saw...` |
+| Aceitar sem dinheiro falha por inteiro; o dono cancela só antes do aceite | assets: `accepting_without_the_money...`, `the_seller_can_cancel_only_before_the_buyer_accepts` |
+| O quórum veta dentro da janela (preço devolvido, bem fica); veto tardio, sem quórum ou para outro motivo é recusado | assets: `the_organ_quorum_vetoes...`, `a_veto_after_the_window_or_for_another_offer_is_refused` |
+| Gravame (ou sua liberação) cancela a negociação e devolve o preço; sem gravame o bem volta a poder ser oferecido | assets: `any_change_to_the_asset_cancels...`, `after_the_organ_releases_the_lien...` |
+| Moeda e bens se conservam, escrow incluído, em qualquer sequência de ações | assets: `money_and_ownership_are_conserved_under_any_sequence` (proptest) |
+| Os bytes que o dispositivo monta são exatamente os que o módulo decodifica | assets: `the_payloads_the_device_builds_are_byte_for_byte...` |
+| O dispositivo mostra, pede o botão e assina a transação do dono/comprador; recusa parte errada, janela zero, valores absurdos e metadados que não são do bem | device-core: `an_offer_and_an_acceptance_signed_on_the_device_run_in_the_real_ledger...`, `trade_requests_are_validated...`, `a_vehicle_offer_shows_plate_and_model...` |
+| Com o dispositivo real do emulador: oferta e aceite saem da carteira do usuário, a janela é cruzada e o bem muda de dono | client: `selling_and_buying_an_asset_with_my_device_signing_my_own_transactions...` |
+| Se eu rejeito o aceite, a oferta da contraparte é retirada (nada fica bloqueado) | assets/devnet: `if_i_reject_the_acceptance_the_counterpartys_offer_is_withdrawn...` |
+| Em nós reais: negociação pendente na janela, finalização antes dela recusada na hora (com o motivo) sem bloco vazio, e concluída depois | node: `a_trade_between_wallets_waits_in_the_veto_window_in_real_nodes_and_completes_after_it` |
+| O veto simulado do órgão devolve o preço ao comprador em nós reais | devnet-sim: `the_simulated_organ_vetoes_a_pending_trade...` |
+

@@ -50,10 +50,12 @@ pub enum ButtonKind {
     WalletPassphrase = 20,
     /// "Send N coins to ADDRESS?" prompt (everything shown comes from the device).
     SignTransfer = 21,
-    /// "Consent to sell/buy asset X?" prompt.
-    SignAssetConsent = 22,
+    /// "Offer asset X to Y for P?" prompt (the owner's own transaction, ADR-0036).
+    SignAssetOffer = 22,
     /// "Bond / unbond / claim stake?" prompt.
     SignStake = 23,
+    /// "Accept the offer of asset X for P?" prompt (the buyer's own transaction, ADR-0036).
+    SignAssetAccept = 24,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, prost::Enumeration)]
@@ -168,37 +170,66 @@ pub struct SignStake {
     #[prost(uint64, tag = "5")]
     pub nonce: u64,
 }
-/// Asks the device to sign the CONSENT of one party (seller or buyer) to move an asset.
-/// The device shows the asset, parties, price and version and signs only after the
-/// physical confirmation; it refuses if the wallet is neither the seller nor the buyer.
+/// Asks the device to build, show and sign the OWNER's `Offer` of an asset to one named buyer
+/// (ADR-0036). It is the owner's OWN transaction: the device derives the whole transaction from
+/// these fields, shows them and signs only after the physical confirmation. It refuses if this
+/// wallet is not the seller.
 #[derive(Clone, PartialEq, prost::Message)]
-pub struct SignAssetConsent {
+pub struct SignAssetOffer {
     #[prost(string, tag = "1")]
     pub chain_id: String,
-    /// 2 = transfer, 3 = swap (delivery versus payment).
-    #[prost(uint32, tag = "2")]
-    pub kind: u32,
-    #[prost(string, tag = "3")]
+    #[prost(string, tag = "2")]
     pub class: String,
-    #[prost(string, tag = "4")]
+    #[prost(string, tag = "3")]
     pub asset: String,
-    /// `tekow1…` of the current owner (seller).
-    #[prost(string, tag = "5")]
-    pub from_address: String,
-    /// `tekow1…` of the buyer.
-    #[prost(string, tag = "6")]
-    pub to_address: String,
-    /// Price in coin units (swap only; 0 for a plain transfer).
-    #[prost(uint64, tag = "7")]
+    /// `tekow1…` of the buyer the offer names (only that wallet can accept).
+    #[prost(string, tag = "4")]
+    pub buyer_address: String,
+    /// Price in coin units (0 = no payment).
+    #[prost(uint64, tag = "5")]
     pub price: u64,
-    /// Asset version the consent is bound to.
-    #[prost(uint64, tag = "8")]
+    /// Asset version the offer is bound to.
+    #[prost(uint64, tag = "6")]
     pub version: u64,
-    /// The asset's canonical metadata RECORD (ADR-0032). The device validates it,
-    /// checks that it names this asset, SHOWS a summary (plate, model...) and signs
-    /// its hash, so the consent covers WHICH asset it is, not only its id.
-    #[prost(bytes = "vec", tag = "9")]
+    /// The asset's canonical metadata RECORD (ADR-0032). The device validates it, checks that it
+    /// names this asset, SHOWS a summary (plate, model...) and signs its hash.
+    #[prost(bytes = "vec", tag = "7")]
     pub metadata: Vec<u8>,
+    /// Seconds the trade waits in the class's veto window after the buyer accepts (shown).
+    #[prost(uint64, tag = "8")]
+    pub window_secs: u64,
+    #[prost(uint64, tag = "9")]
+    pub fee: u64,
+    /// Number of transactions the account already executed.
+    #[prost(uint64, tag = "10")]
+    pub nonce: u64,
+}
+/// Asks the device to build, show and sign the BUYER's `Accept` of an offer, on exactly the terms
+/// shown (price, version, metadata): the price goes to the escrow. It refuses if this wallet is
+/// not the buyer the offer names.
+#[derive(Clone, PartialEq, prost::Message)]
+pub struct SignAssetAccept {
+    #[prost(string, tag = "1")]
+    pub chain_id: String,
+    #[prost(string, tag = "2")]
+    pub class: String,
+    #[prost(string, tag = "3")]
+    pub asset: String,
+    /// `tekow1…` of the seller (shown so the buyer knows who offered).
+    #[prost(string, tag = "4")]
+    pub seller_address: String,
+    #[prost(uint64, tag = "5")]
+    pub price: u64,
+    #[prost(uint64, tag = "6")]
+    pub version: u64,
+    #[prost(bytes = "vec", tag = "7")]
+    pub metadata: Vec<u8>,
+    #[prost(uint64, tag = "8")]
+    pub window_secs: u64,
+    #[prost(uint64, tag = "9")]
+    pub fee: u64,
+    #[prost(uint64, tag = "10")]
+    pub nonce: u64,
 }
 /// Asks the device to sign a coin transfer. The device BUILDS the transaction itself
 /// from these fields, shows it on its screen (destination, amount, fee, network) and
@@ -333,15 +364,8 @@ pub struct Address {
 }
 #[derive(Clone, PartialEq, prost::Message)]
 pub struct WalletBackupOk {}
-/// Signature of the transfer built by the device (public data).
-/// A signed consent (public data).
-#[derive(Clone, PartialEq, prost::Message)]
-pub struct AssetConsentSigned {
-    #[prost(bytes = "vec", tag = "1")]
-    pub signature: Vec<u8>,
-    #[prost(bytes = "vec", tag = "2")]
-    pub public_key: Vec<u8>,
-}
+/// Signature of the transaction built by the device (public data): coin transfer, stake, asset
+/// offer or asset acceptance.
 #[derive(Clone, PartialEq, prost::Message)]
 pub struct TransferSigned {
     #[prost(bytes = "vec", tag = "1")]
@@ -620,8 +644,9 @@ define_messages! {
         CheckWalletBackup(CheckWalletBackup) = 0x001B,
         GetAddress(GetAddress) = 0x001C,
         SignTransfer(SignTransfer) = 0x001D,
-        SignAssetConsent(SignAssetConsent) = 0x001E,
+        SignAssetOffer(SignAssetOffer) = 0x001E,
         SignStake(SignStake) = 0x001F,
+        SignAssetAccept(SignAssetAccept) = 0x0020,
     }
 }
 
@@ -653,7 +678,6 @@ define_messages! {
         Address(Address) = 0x0117,
         WalletBackupOk(WalletBackupOk) = 0x0118,
         TransferSigned(TransferSigned) = 0x0119,
-        AssetConsentSigned(AssetConsentSigned) = 0x011A,
     }
 }
 

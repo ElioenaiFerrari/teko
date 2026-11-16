@@ -56,13 +56,75 @@ pub fn coin_stake_payload(action: u8, amount: u64) -> Vec<u8> {
     p
 }
 
-/// Intent kinds that a wallet owner or buyer signs (values match `teko-assets`).
-pub const INTENT_TRANSFER: u8 = 2;
-pub const INTENT_SWAP: u8 = 3;
+/// Module id of the assets module in `Tx::module`.
+pub const MODULE_ASSETS: u32 = 2;
 
-/// Hash that an asset CONSENT signs: network, action, class, asset, parties, price and
-/// the asset version. Shared by the device (which signs it) and `teko-assets` (which
-/// verifies it), so a consent cannot be replayed on another chain, action or version.
+fn put_varint(out: &mut Vec<u8>, mut v: u64) {
+    while v >= 0x80 {
+        out.push((v as u8 & 0x7F) | 0x80);
+        v >>= 7;
+    }
+    out.push(v as u8);
+}
+
+/// A protobuf `bytes` field (wire type 2); an EMPTY value is omitted, as `prost` does.
+fn put_bytes(out: &mut Vec<u8>, tag: u8, v: &[u8]) {
+    if !v.is_empty() {
+        out.push(tag << 3 | 2);
+        put_varint(out, v.len() as u64);
+        out.extend_from_slice(v);
+    }
+}
+
+/// A protobuf `uint64` field (wire type 0); ZERO is omitted, as `prost` does.
+fn put_u64(out: &mut Vec<u8>, tag: u8, v: u64) {
+    if v != 0 {
+        out.push(tag << 3);
+        put_varint(out, v);
+    }
+}
+
+/// Payload of an assets `Offer` (op 7 ‖ protobuf `OfferOp`): the owner offers `asset` to `buyer`
+/// at `price`, bound to the asset `version` and its `metadata_hash` (ADR-0036). The DEVICE builds
+/// this from the fields it shows, byte for byte what `teko-assets` encodes.
+pub fn asset_offer_payload(
+    class: &[u8],
+    asset: &[u8],
+    buyer: &[u8; 32],
+    price: u64,
+    version: u64,
+    metadata_hash: &[u8; 32],
+) -> Vec<u8> {
+    let mut p = Vec::from([7u8]);
+    put_bytes(&mut p, 1, class);
+    put_bytes(&mut p, 2, asset);
+    put_bytes(&mut p, 3, buyer);
+    put_u64(&mut p, 4, price);
+    put_u64(&mut p, 5, version);
+    put_bytes(&mut p, 6, metadata_hash);
+    p
+}
+
+/// Payload of an assets `Accept` (op 8 ‖ protobuf `AcceptOp`): the buyer accepts the offer on
+/// exactly the terms it saw.
+pub fn asset_accept_payload(
+    class: &[u8],
+    asset: &[u8],
+    price: u64,
+    version: u64,
+    metadata_hash: &[u8; 32],
+) -> Vec<u8> {
+    let mut p = Vec::from([8u8]);
+    put_bytes(&mut p, 1, class);
+    put_bytes(&mut p, 2, asset);
+    put_u64(&mut p, 3, price);
+    put_u64(&mut p, 4, version);
+    put_bytes(&mut p, 5, metadata_hash);
+    p
+}
+
+/// Hash that a registrar QUORUM approval signs: network, action, class, asset, parties, price and
+/// the asset version, so an approval cannot be replayed on another chain, action or version.
 #[allow(clippy::too_many_arguments)]
 pub fn asset_intent_hash(
     chain_id: &str,

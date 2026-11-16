@@ -172,7 +172,8 @@ fn prompt_name(kind: ButtonKind) -> &'static str {
         ButtonKind::WalletCheck => "wallet_check",
         ButtonKind::WalletPassphrase => "wallet_passphrase",
         ButtonKind::SignTransfer => "sign_transfer",
-        ButtonKind::SignAssetConsent => "sign_asset_consent",
+        ButtonKind::SignAssetOffer => "sign_asset_offer",
+        ButtonKind::SignAssetAccept => "sign_asset_accept",
         ButtonKind::SignStake => "sign_stake",
         ButtonKind::Unspecified => "unknown",
     }
@@ -740,6 +741,23 @@ pub struct AssetsView {
     counterparty_balance: u64,
     counterparty_assets: Vec<AssetItem>,
     balance: u64,
+    /// Trades in progress that involve my wallet (offered, or pending in the veto window).
+    pending: Vec<PendingItem>,
+    /// This machine's clock (unix seconds), to count down the veto window.
+    now: u64,
+}
+
+/// A trade in progress (ADR-0036).
+#[derive(serde::Serialize)]
+pub struct PendingItem {
+    class: String,
+    asset: String,
+    /// `seller` | `buyer`: which side is MY wallet.
+    role: &'static str,
+    price: u64,
+    accepted: bool,
+    /// Unix seconds from which anyone may finalize (0 until the buyer accepts).
+    release_at: u64,
 }
 
 #[cfg_attr(feature = "dev-simulation", allow(dead_code))]
@@ -766,6 +784,8 @@ fn assets_view_impl(_address: &str) -> Result<AssetsView, UiError> {
         counterparty_balance: 0,
         counterparty_assets: Vec::new(),
         balance: 0,
+        pending: Vec::new(),
+        now: 0,
     })
 }
 
@@ -808,6 +828,20 @@ fn assets_view_impl(address: &str) -> Result<AssetsView, UiError> {
         counterparty_balance: econ.balance(&cp),
         counterparty_assets: items(&cp),
         balance: econ.balance(&me),
+        pending: devnet::pending_trades(&**econ, &me)
+            .into_iter()
+            .map(|t| PendingItem {
+                role: if t.seller == me { "seller" } else { "buyer" },
+                class: t.class,
+                asset: t.asset,
+                price: t.price,
+                accepted: t.accepted,
+                release_at: t.release_at,
+            })
+            .collect(),
+        now: std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_or(0, |d| d.as_secs()),
     })
 }
 
@@ -878,8 +912,9 @@ fn lien_impl(class: &str, asset: &str, on: bool) -> Result<(), UiError> {
         .map_err(|e| ui_err("Rejected", e))
 }
 
-/// Sells my asset to (or buys it from) the simulated counterparty. My consent is signed
-/// on MY device, which shows the asset, parties, price and version.
+/// Sells my asset to (or buys it from) the simulated counterparty (ADR-0036): MY device builds, shows
+/// and signs MY OWN transaction (the offer, or my acceptance); the trade then waits in the class's veto
+/// window. Returns my coin balance.
 #[tauri::command]
 pub async fn asset_trade(
     app: AppHandle,
@@ -913,7 +948,7 @@ async fn trade_impl(
     price: u64,
     selling: bool,
 ) -> Result<u64, UiError> {
-    use teko_assets::devnet::{self, ConsentRequest};
+    use teko_assets::devnet::{self, TradeAction, TradeRequest};
     let dir = resolve_dev_dir();
     with_device(app, suite.inner().clone(), move |c| {
         let v = |m: String| ClientError::Verification(m);
@@ -925,38 +960,118 @@ async fn trade_impl(
         let chain = ctx.world.chain_id().to_string();
         let mut device_error: Option<ClientError> = None;
         let result = {
-            // my device is handed the metadata record: it shows plate/model and signs
-            // the record's hash
-            let mut consent = |r: &ConsentRequest<'_>| {
-                let s =
+            // my device is handed the metadata record: it shows plate/model and signs the record's
+            // hash, and it builds and signs MY OWN transaction (offer or acceptance)
+            let mut device = |r: &TradeRequest<'_>| {
+                let seller =
                     teko_crypto::wallet_address(r.seller).map_err(|_| "endereço".to_string())?;
-                let b = teko_crypto::wallet_address(r.buyer).map_err(|_| "endereço".to_string())?;
-                c.wallet_sign_asset_consent(
-                    &chain, r.kind, r.class, r.asset, &s, &b, r.price, r.version, r.metadata,
-                )
+                let buyer =
+                    teko_crypto::wallet_address(r.buyer).map_err(|_| "endereço".to_string())?;
+                match r.action {
+                    TradeAction::Offer => c.wallet_sign_asset_offer(
+                        &chain,
+                        r.class,
+                        r.asset,
+                        &buyer,
+                        r.price,
+                        r.version,
+                        r.metadata,
+                        r.window_secs,
+                        r.fee,
+                        r.nonce,
+                    ),
+                    TradeAction::Accept => c.wallet_sign_asset_accept(
+                        &chain,
+                        r.class,
+                        r.asset,
+                        &seller,
+                        r.price,
+                        r.version,
+                        r.metadata,
+                        r.window_secs,
+                        r.fee,
+                        r.nonce,
+                    ),
+                }
                 .map_err(|e| {
                     let msg = e.to_string();
                     device_error = Some(e);
                     msg
                 })
             };
-            devnet::trade_with_counterparty(
-                &mut *ctx.world,
-                &ctx.cast,
-                &me,
-                &class,
-                &asset,
-                price,
-                selling,
-                &mut consent,
-            )
+            if selling {
+                devnet::sell_to_counterparty(
+                    &mut *ctx.world,
+                    &ctx.cast,
+                    &me,
+                    &class,
+                    &asset,
+                    price,
+                    &mut device,
+                )
+            } else {
+                devnet::buy_from_counterparty(
+                    &mut *ctx.world,
+                    &ctx.cast,
+                    &me,
+                    &class,
+                    &asset,
+                    price,
+                    &mut device,
+                )
+            }
         };
         if let Some(e) = device_error {
             return Err(e);
         }
-        result.map_err(v)
+        result.map_err(v)?;
+        Ok(ctx.world.balance(&me))
     })
     .await
+}
+
+/// Completes a trade whose veto window is over (ANYONE may: here the relayer sends it).
+#[tauri::command]
+pub async fn asset_finalize(class: String, asset: String) -> Result<(), UiError> {
+    finalize_impl(&class, &asset)
+}
+
+#[cfg(not(feature = "dev-simulation"))]
+fn finalize_impl(_c: &str, _a: &str) -> Result<(), UiError> {
+    Err(assets_unavailable())
+}
+
+#[cfg(feature = "dev-simulation")]
+fn finalize_impl(class: &str, asset: &str) -> Result<(), UiError> {
+    use teko_assets::devnet;
+    let mut ctx = economy_open(&resolve_dev_dir()).map_err(|e| ui_err("Io", e))?;
+    devnet::finalize_pending(&mut *ctx.world, &ctx.cast, class, asset)
+        .map_err(|e| ui_err("Rejected", e))
+}
+
+/// TEST: the SIMULATED órgão (registrar quorum) vetoes a pending trade, with a public reason.
+#[tauri::command]
+pub async fn asset_veto(class: String, asset: String) -> Result<(), UiError> {
+    veto_impl(&class, &asset)
+}
+
+#[cfg(not(feature = "dev-simulation"))]
+fn veto_impl(_c: &str, _a: &str) -> Result<(), UiError> {
+    Err(assets_unavailable())
+}
+
+#[cfg(feature = "dev-simulation")]
+fn veto_impl(class: &str, asset: &str) -> Result<(), UiError> {
+    use teko_assets::devnet;
+    let mut ctx = economy_open(&resolve_dev_dir()).map_err(|e| ui_err("Io", e))?;
+    devnet::veto_pending(
+        &mut *ctx.world,
+        &ctx.cast,
+        class,
+        asset,
+        "veto de teste do órgão simulado",
+    )
+    .map_err(|e| ui_err("Rejected", e))
 }
 
 /// Staking screen data. DEVELOPMENT ONLY (local devnet economy).

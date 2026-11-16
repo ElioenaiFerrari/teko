@@ -190,6 +190,8 @@ pub fn init_economy(
             name: class.into(),
             threshold: 2,
             registrars: regs,
+            // the devnet window is short so a trade can be tested in minutes (ADR-0036)
+            window_secs: 1_200,
         });
     }
     fs::write(&path, g.to_text())?;

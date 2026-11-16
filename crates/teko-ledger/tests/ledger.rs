@@ -24,6 +24,11 @@ impl Module for Kv {
             ctx.set(b"partial", vec![1]);
             return Err(ModuleError::new("asked to fail"));
         }
+        if payload == b"time" {
+            // the block time the module sees (ADR-0036: windows are measured in TIME)
+            ctx.set(b"time", ctx.time.to_be_bytes().to_vec());
+            return Ok(());
+        }
         if payload == b"bump" {
             let n = ctx
                 .get(b"counter")
@@ -303,4 +308,48 @@ fn check_block_is_a_dry_run_that_predicts_the_real_root() {
         })
     ));
     assert!(l.check_block(2, &P, &[tx(&a, 0, 1, b"x\0y")]).is_err());
+}
+
+#[test]
+fn modules_see_the_block_time_and_replicas_agree_on_it() {
+    let a = key(30);
+    let block = [tx(&a, 0, 1, b"time")];
+    let (mut l1, mut l2) = (ledger(), ledger());
+    // the dry run with the block time predicts the root of the real run with the same time
+    let (predicted, _) = l1.check_block_at(1, 1_700_000_123, &P, &block).unwrap();
+    l1.apply_block_at(1, 1_700_000_123, &P, &block).unwrap();
+    assert_eq!(l1.state_root(), predicted);
+    assert_eq!(
+        l1.read(1, b"time"),
+        Some(&1_700_000_123u64.to_be_bytes()[..])
+    );
+    // another replica given the same block and time reaches the same state
+    l2.apply_block_at(1, 1_700_000_123, &P, &block).unwrap();
+    assert_eq!(l1.state_root(), l2.state_root());
+    // a different time is a different state: time is consensus data, not a local clock
+    let mut l3 = ledger();
+    l3.apply_block_at(1, 1_700_000_124, &P, &block).unwrap();
+    assert_ne!(l1.state_root(), l3.state_root());
+}
+
+#[test]
+fn the_selection_of_a_proposer_sees_the_same_time_as_the_block_it_proposes() {
+    let a = key(31);
+    let l = ledger();
+    let kept = l.select_valid_at(1_700_000_500, &P, vec![tx(&a, 0, 1, b"time")]);
+    assert_eq!(kept.len(), 1);
+    let mut l = l;
+    l.apply_block_at(1, 1_700_000_500, &P, &kept).unwrap();
+    assert_eq!(
+        l.read(1, b"time"),
+        Some(&1_700_000_500u64.to_be_bytes()[..])
+    );
+}
+
+#[test]
+fn the_legacy_entry_points_run_with_time_zero() {
+    let a = key(32);
+    let mut l = ledger();
+    l.apply_block(1, &P, &[tx(&a, 0, 1, b"time")]).unwrap();
+    assert_eq!(l.read(1, b"time"), Some(&0u64.to_be_bytes()[..]));
 }

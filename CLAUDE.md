@@ -84,7 +84,7 @@ cargo run -p teko-suite                # terminal 2: a Suite (Tauri v2)
 make docs-check                        # confere links, imagens e crates no README
 make fund ADDR=tekow1… AMOUNT=1000    # TEKO de TESTE na carteira (devnet local; decimais ok; 1 TEKO = 1.000.000 ypy, ADR-0029)
 make diagrams                         # regenera os diagramas (docs/diagrams)
-make devnet FOUNDER=tekow1…            # (1ª vez) FOUNDER = sua carteira: recebe as recompensas do fundador (ADR-0028)
+make devnet FOUNDER=tekow1… [NODES=4]  # (1ª vez; NODES = instituições, padrão 4) FOUNDER = sua carteira: recebe as recompensas do fundador (ADR-0028)
 make devnet-veto CLASS=imovel ASSET=<id>  # SIMULA o órgão vetando uma negociação de bem pendente (ADR-0036); só dev
 make devnet-equivocate                 # SIMULA a equivocação do validador de teste (penalidade/Slash); só dev
 make tally-time                        # apura o quadro (release) e mostra o tempo; TEKO_VERIFY_THREADS=1 = sequencial

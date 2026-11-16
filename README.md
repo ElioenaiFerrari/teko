@@ -56,7 +56,7 @@ make emulator       # terminal 1: tela e botões do dispositivo (PIN aqui)
 make suite          # terminal 2: onboarding (PIN, carteira com frase de 24 palavras, ID Cívico); copie o endereço tekow1… da aba Carteira
 
 # 2) Só então a rede, com a SUA carteira como fundadora (ela recebe as recompensas)
-make devnet FOUNDER=tekow1… [ALLOC=1000]   # rede de TESTE: votos e economia em BFT (a cadeia só cresce com voto ou transação); a sua carteira recebe as primeiras moedas (ALLOC TEKO, padrão 1.000) já na gênese, para poder agir sem nenhum bloco antes
+make devnet FOUNDER=tekow1… [ALLOC=1000] [NODES=4]   # rede de TESTE com 4 instituições por padrão (NODES=3 sobe 3, que não toleram falha; vale na criação da rede): votos e economia em BFT (a cadeia só cresce com voto ou transação); a sua carteira recebe as primeiras moedas (ALLOC TEKO, padrão 1.000) já na gênese, para poder agir sem nenhum bloco antes
 make devnet-dkg     # cerimônia de chave entre os validadores (cédulas cifradas)
 make election       # cria a eleição de exemplo (7 pleitos) e a liga à rede
                     # → reinicie o emulador (terminal 1): ele lê o trust.txt só na partida

@@ -23,20 +23,24 @@ suite: ## Abre a Teko Suite (janela desktop)
 	$(CARGO) run -q -p teko-suite
 
 NET ?= dev/net
+# Instituições (nós) da rede de TESTE, definido na criação da rede. Com 4 uma pode ficar fora do ar sem parar a
+# rede; com 3 o quórum (mais de 2/3) exige os 3 (ADR-0034). Para mudar depois: make devnet-stop devnet-reset e `rm -r dev/net`.
+NODES ?= 4
 NODE = target/debug/teko-node
 
-devnet: ## Sobe a rede de TESTE local (votos e economia em BFT; nenhum bloco nasce sozinho). Primeira vez: make devnet FOUNDER=tekow1… [ALLOC=1000] (sua carteira recebe as primeiras moedas, na gênese)
+devnet: ## Sobe a rede de TESTE local com NODES=4 instituições (votos e economia em BFT; nenhum bloco nasce sozinho). Primeira vez: make devnet FOUNDER=tekow1… [ALLOC=1000] (sua carteira recebe as primeiras moedas, na gênese)
 	$(CARGO) build -q -p teko-node
-	@test -f $(NET)/network.txt || $(NODE) init --dir $(NET) --network devnet $(if $(FOUNDER),--founder $(FOUNDER)) $(if $(FOUNDER_TARGET),--founder-target $(FOUNDER_TARGET)) $(if $(ALLOC),--alloc $(ALLOC))
+	@test -f $(NET)/network.txt || $(NODE) init --dir $(NET) --network devnet --nodes $(NODES) $(if $(FOUNDER),--founder $(FOUNDER)) $(if $(FOUNDER_TARGET),--founder-target $(FOUNDER_TARGET)) $(if $(ALLOC),--alloc $(ALLOC))
+	@if [ "$(origin NODES)" = "command line" ]; then n=$$(ls -d $(NET)/node-* 2>/dev/null | wc -l | tr -d ' '); [ "$$n" = "$(NODES)" ] || echo "AVISO: NODES=$(NODES) foi ignorado: a rede em $(NET) já existe com $$n nós (a quantidade é definida só na criação). Para recriar com $(NODES): make devnet-stop && mv $(NET) $(NET).bak && make devnet FOUNDER=… NODES=$(NODES)"; fi
 	@$(NODE) stop --dir $(NET) >/dev/null 2>&1; \
-	for i in 0 1 2; do $(NODE) run --dir $(NET) --index $$i >$(NET)/node-$$i/node.log 2>&1 & done; \
+	for d in $(NET)/node-*; do i=$${d##*node-}; $(NODE) run --dir $(NET) --index $$i >$(NET)/node-$$i/node.log 2>&1 & done; \
 	sleep 1; $(NODE) status --dir $(NET)
 	@echo; echo "Próximo: make election (liga a eleição à rede) → reinicie o emulador → make publish → abra a Suite"
 
-devnet-dkg: ## Cerimônia de chave da eleição entre os 3 validadores (cédulas cifradas). Rode depois de make devnet
+devnet-dkg: ## Cerimônia de chave da eleição entre os validadores (cédulas cifradas). Rode depois de make devnet
 	@$(NODE) dkg --dir $(NET)
 
-devnet-stop: ## Para os 3 validadores (os blocos ficam em dev/net/node-*/votes.blocks e economy.blocks)
+devnet-stop: ## Para os validadores (os blocos ficam em dev/net/node-*/votes.blocks e economy.blocks)
 	@$(NODE) stop --dir $(NET) 2>/dev/null || true
 	@# Rede apagada ou .pid perdido: mata nós órfãos pelo nome (senão eles seguem ocupando as portas)
 	@pkill -f 'teko-node run --dir $(NET)' 2>/dev/null && echo 'nós órfãos parados' || true

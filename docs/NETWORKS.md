@@ -6,7 +6,7 @@ Status: **implementado como prova de conceito local**. A rede de votos roda em *
 
 | Rede | Para quê | Estado |
 |---|---|---|
-| `devnet` | Sua máquina: 3 validadores em loopback (3 instituições **não toleram falha**; use 4 para tolerar 1) | ✅ `make devnet` |
+| `devnet` | Sua máquina: **4** validadores em loopback por padrão (`make devnet NODES=3` sobe 3, que **não toleram falha**; com 4 uma pode cair) | ✅ `make devnet` |
 | `testnet` | Várias máquinas, dados fictícios, regras iguais às de produção | ✅ perfil e `init`; rodar em várias máquinas exige editar `peers.txt` e habilitar escuta fora de loopback (não é o padrão) |
 | `mainnet` | A eleição de verdade | 🔒 **TRAVADA**: `NetworkProfile::new(Mainnet)` e `network=mainnet` no arquivo são recusados |
 
@@ -34,8 +34,8 @@ Ao lado da cadeia de votos, cada nó roda o **livro de economia** (moeda, bens, 
 **Ordem importa:** o fundador é a **sua carteira**, que só existe depois do onboarding no dispositivo e na Suite (`make emulator` e `make suite`; o endereço `tekow1…` está na aba Carteira). Só então suba a rede com `make devnet FOUNDER=tekow1…`. Se subiu a rede antes, `make devnet-stop && make devnet-founder FOUNDER=tekow1…` troca o fundador e zera a economia.
 
 ```
-make devnet            # sobe 3 validadores (cria dev/net na 1ª vez; nenhum bloco nasce até haver transação ou voto)
-make devnet-dkg       # (cédulas cifradas) cerimônia de chave entre os 3 validadores
+make devnet            # sobe NODES=4 validadores (cria dev/net na 1ª vez; nenhum bloco nasce até haver transação ou voto)
+make devnet-dkg       # (cédulas cifradas) cerimônia de chave entre os validadores (limiar: maioria estrita, 3 de 4)
 make election          # liga a eleição à rede (chain_id) e fixa o dispositivo nela
                        # → reinicie o emulador (ele lê o trust.txt na partida)
 make publish           # a eleição entra por blocos

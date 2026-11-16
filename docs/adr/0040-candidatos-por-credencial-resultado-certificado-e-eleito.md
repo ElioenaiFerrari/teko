@@ -14,12 +14,14 @@ Candidatos eram linhas de texto no manifesto, a chain de votos não registrava q
 6. **2º turno** (`election-admin runoff`): a partir do resultado `RUNOFF` certificado, a governança assina uma **revisão do manifesto** que **acrescenta** o pleito `<id>-2t` (campo `parent`, exatamente 2 opções = os finalistas, com seu calendário e sua chave de registro); os eleitores se registram de novo (assinatura cega) e votam; o resultado é por maioria simples e vira `eleito` pelo mesmo `ClaimElected`.
 7. **Ferramentas de teste:** `make candidates` (órgão simulado emite as candidaturas de exemplo), `make election` (monta da chain, com a lista de exemplo para pleitos sem candidaturas), `make claim` (leva os resultados certificados à economia) e `make runoff CONTEST=…`. O Emissor ganhou a aba **Candidaturas** (formulário e lote). A Suite mostra `número – nome` e o selo **"candidatura conferida na chain"** por opção.
 
+> **Atualização (ADR-0043):** o empate que a regra não desfaz é decidido por **sorteio verificável** (só fica sem eleito se ninguém votou em candidato).
+
 > **Atualização (ADR-0042):** a maioria absoluta passa a contar só votos em **candidatos**; branco e nulo são opções explícitas fora da base. O 2º turno tem 2 candidatos (mais branco e nulo).
 
 ## Consequências e limites honestos
 - **Confiança:** a economia acredita em **mais de 2/3 das instituições** da chain de votos (mesma confiança do BFT); elas poderiam, juntas, assinar um resultado falso, e a economia não consegue recontar (não tem as cédulas). Quem quiser conferir de verdade recalcula a apuração do quadro (a Suite e o explorador fazem).
 - **Conjunto de instituições estático** (copiado na gênese); trocá-lo é PENDENTE. Com 3 instituições, "mais de 2/3" exige as 3.
-- **Vaga única apenas.** Proporcional e várias vagas, **desempate legal** (hoje: sem eleito) e o 2º turno só entre os dois primeiros são decisões PENDENTES.
+- **Vaga única apenas.** Proporcional e várias vagas, o 2º turno só entre os dois primeiros são decisões PENDENTES.
 - Uma candidatura revogada depois do pleito assinado continua na cédula (o pleito não muda); o selo avisa, e o remédio é cancelar o pleito com motivo e abrir outro.
 - Sem validade jurídica; sem auditoria; só devnet.
 

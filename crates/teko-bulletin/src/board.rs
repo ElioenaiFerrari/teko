@@ -24,6 +24,9 @@ impl EntryKind {
     pub const DKG: EntryKind = EntryKind(6);
     /// One institution's signed RESULT of a contest (ADR-0040); the tally ignores it.
     pub const OUTCOME: EntryKind = EntryKind(7);
+    /// One institution's share of the verifiable draw that breaks a tie (ADR-0043); the tally reads it
+    /// only to learn the seed.
+    pub const DRAW: EntryKind = EntryKind(8);
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]

@@ -79,6 +79,51 @@ pub fn outcomes(admin: &Admin) -> Result<Vec<CertifiedOutcome>, String> {
         .collect())
 }
 
+/// Redoes the verifiable draw of an outcome from the BOARD alone (ADR-0043): replays the verified
+/// board, takes the shares of the draw that checked out against the key ceremony, recombines the
+/// seed and decides the contest again; the result must be the very bytes the institutions signed.
+/// Does not trust the outcome, the nodes or anyone's signature.
+pub fn verify_draw(admin: &Admin, o: &ElectionOutcome) -> Result<String, String> {
+    use teko_election::{contest_hash, decide_with, needs_draw};
+    if !o.drawn {
+        return Err("este resultado não foi sorteado".into());
+    }
+    let board = admin.read_board().map_err(|e| e.to_string())?;
+    let mut t = admin.new_tallier();
+    crate::feed_new(&mut t, &board);
+    let m = t.manifest().cloned().ok_or("o quadro não tem manifesto")?;
+    let contest = m
+        .contest(&o.contest_id)
+        .ok_or("pleito desconhecido")?
+        .clone();
+    let snap = t.snapshot();
+    let ct = snap.contest(&o.contest_id).ok_or("pleito sem apuração")?;
+    let need = needs_draw(&contest, ct).ok_or("a apuração verificada não tem empate a sortear")?;
+    let seed = t.draw_seed(&o.contest_id).ok_or_else(|| {
+        let (have, want) = t.draw_progress(&o.contest_id);
+        format!("faltam partes do sorteio no quadro: {have} de {want}")
+    })?;
+    if seed.as_slice() != o.draw_seed.as_slice() {
+        return Err("a semente do quadro NÃO é a do resultado".into());
+    }
+    let again = decide_with(
+        &o.vote_chain_id,
+        &m.election_id,
+        &contest,
+        &contest_hash(&contest),
+        ct,
+        Some(&seed),
+    )
+    .ok_or("a regra não decide este pleito")?;
+    if again.encode_to_vec() != o.encode_to_vec() {
+        return Err("refeito do quadro, o resultado é OUTRO".into());
+    }
+    Ok(format!(
+        "sorteio refeito do quadro: empatados {:?}, ordem sorteada {:?}",
+        need.tied, o.draw_tied
+    ))
+}
+
 /// Sends the `ClaimElected` of every certified ELECTED outcome to the economy chain. Anyone could
 /// do it: the ledger believes the institutions' signatures, not the sender. Returns what it did.
 pub fn claim_elected(dir: &Path) -> Result<Vec<String>, String> {

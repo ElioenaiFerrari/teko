@@ -96,6 +96,9 @@ pub enum ErrorCode {
     WrongPhase = 18,
     /// This device already signed a ballot for this contest.
     AlreadyVoted = 19,
+    /// The stored civic credential is in the OLD format (before ADR-0038): the citizen must reset the
+    /// device and have the organ issue the ID again.
+    LegacyCredential = 20,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, prost::Enumeration)]

@@ -349,6 +349,7 @@
       case 'Timeout': return 'Tempo esgotado no dispositivo. Tente de novo.';
       case 'PinLocked': return `Muitas tentativas. Aguarde ${Math.ceil((e.retry_after_ms || 0) / 1000)} s antes de tentar de novo.`;
       case 'DeviceWiped': return 'Excesso de tentativas: o dispositivo foi apagado. É preciso reemissão presencial.';
+      case 'LegacyCredential': return 'Seu ID cívico está no formato antigo. Rode make reset, refaça o onboarding e peça ao órgão (app Emissor) para emitir o ID de novo.';
       case 'Transport': return 'Perdi a conexão com o dispositivo. Verifique se o emulador está aberto.';
       default: return e.message;
     }
@@ -890,17 +891,23 @@
       return { verified: chip('candidatura conferida na chain', 'ok', 'check'), pending: chip('candidatura em contestação', 'warn'), expired: chip('candidatura expirada', 'bad'), revoked: chip('candidatura REVOGADA', 'bad', 'alert'), mismatch: chip('não confere com a chain', 'bad', 'alert'), unknown: chip('candidatura não está na chain', 'warn') }[st] || '';
     };
     const kinds = c.option_kinds || [];
-    const optRow = (n, i) => `
-      <label class="option${kinds[i] ? ' option--special' : ''}"><input type="radio" name="cand-${esc(c.contest_id)}" value="${i}" ${S.picks[c.contest_id] === i ? 'checked' : ''} ${canVote ? '' : 'disabled'}>
-        <span>${kinds[i] === 1 ? '<strong>Voto em branco</strong> <span class="muted">(não conta para nenhum candidato)</span>' : kinds[i] === 2 ? '<strong>Voto nulo</strong> <span class="muted">(não conta para nenhum candidato)</span>' : `${(c.option_numbers || [])[i] ? `<strong>${esc(c.option_numbers[i])}</strong> – ` : ''}${esc(n)} ${badge(i)}`}</span></label>`;
-    const opts = c.option_names.map((n, i) => (kinds[i] ? '' : optRow(n, i))).join('')
-      + (kinds.some((k) => k) ? '<div class="muted" style="margin:8px 0 2px">Ou:</div>' + c.option_names.map((n, i) => (kinds[i] ? optRow(n, i) : '')).join('') : '');
+    const optRow = (n, i) => {
+      const special = kinds[i] === 1 || kinds[i] === 2;
+      const label = kinds[i] === 1 ? '<span class="option__name">Voto em branco</span><span class="muted">não conta para nenhum candidato</span>'
+        : kinds[i] === 2 ? '<span class="option__name">Voto nulo</span><span class="muted">não conta para nenhum candidato</span>'
+        : `<span class="option__name">${(c.option_numbers || [])[i] ? `<strong>${esc(c.option_numbers[i])}</strong> – ` : ''}${esc(n)}</span>${badge(i)}`;
+      return `<label class="option${special ? ' option--special' : ''}"><input type="radio" name="cand-${esc(c.contest_id)}" value="${i}" ${S.picks[c.contest_id] === i ? 'checked' : ''} ${canVote ? '' : 'disabled'}><span>${label}</span></label>`;
+    };
+    const candRows = c.option_names.map((n, i) => (kinds[i] ? '' : optRow(n, i))).join('');
+    const specialRows = c.option_names.map((n, i) => (kinds[i] ? optRow(n, i) : '')).join('');
+    const opts = candRows;
     return `<article class="card" ${c.eligible ? '' : 'style="opacity:.82"'}>
       <div class="card__head"><div class="card__ico card__ico--${c.scope === 'national' ? 'arara' : c.scope === 'state' ? 'onca' : 'boto'}">${ico(c.scope === 'national' ? 'globe' : 'ballot')}</div>
         <div><h2>${esc(c.title)}</h2>
         <div class="row" style="gap:6px;margin-top:6px">${chip(scopeLabel(c), 'info')}${chip(phaseLabel, phaseKind)}${c.eligible ? chip(c.scope === 'national' ? 'Todos votam' : 'Seu domicílio', 'ok', 'check') : chip('Fora do seu domicílio', 'bad', 'lock')}${c.voted ? chip('Você já votou', 'ok', 'badge') : ''}${c.registration_required ? chip('Registro anônimo', 'info', 'shield') : ''}</div></div></div>
       <p class="muted">Votação: ${esc(fmtDate(c.voting_opens))} até ${esc(fmtDate(c.voting_closes))}</p>
       <div class="options" role="radiogroup" aria-label="Candidatos: ${esc(c.title)}">${opts}</div>
+      ${specialRows ? `<div class="muted options-or">Ou, sem escolher candidato:</div><div class="options options--special" role="radiogroup" aria-label="Branco ou nulo: ${esc(c.title)}">${specialRows}</div>` : ''}
       ${why ? `<p class="muted">${esc(why)}</p>` : ''}
       ${canVote && c.registration_required ? '<p class="muted">Este pleito exige registro anônimo: o dispositivo pedirá <strong>duas confirmações</strong> (registro e voto).</p>' : ''}
       ${canVote ? `<div class="row"><button class="btn btn--gold" data-act="vote" data-contest="${esc(c.contest_id)}">${ico('ballot')}Votar neste pleito</button></div>` : ''}

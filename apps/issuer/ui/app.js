@@ -13,6 +13,71 @@
   const asErr = (e) => (e && typeof e === 'object' && 'message' in e ? e : { code: 'Internal', message: String(e) });
   const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
+  // ───────────────────────── seleção com busca (valores fixos, nada de texto livre) ─────────────────────────
+  const G = window.TEKO_GEO || { ufs: [], municipios: {}, paises: [] };
+  const geoCountries = () => G.paises.map(([v, n]) => ({ value: v, label: n, hint: v }));
+  const geoStates = () => G.ufs.map(([v, n]) => ({ value: v, label: n, hint: v }));
+  const geoCities = (uf) => (G.municipios[uf] || []).map(([v, n]) => ({ value: String(v), label: n, hint: uf }));
+  const fold = (s) => String(s).normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase();
+  const COMBO_CITY_OF = { 'c-uf': 'c-mun', 'k-uf': 'k-mun' };   // estado -> o município que ele filtra
+  const comboData = {};   // id -> opções; só a escolha feita NA LISTA vale (nada de texto livre)
+  function combo(id, items, value, placeholder) {
+    comboData[id] = items;
+    const cur = items.find((i) => i.value === value);
+    return `<div class="combo" data-combo="${id}" data-value="${esc(cur ? cur.value : '')}">
+      <input class="input" id="${id}" role="combobox" aria-expanded="false" aria-controls="${id}-list" aria-autocomplete="list" autocomplete="off" spellcheck="false" placeholder="${esc(placeholder)}" value="${esc(cur ? cur.label : '')}">
+      <ul class="combo__list" id="${id}-list" role="listbox" hidden></ul></div>`;
+  }
+  const comboValue = (id) => { const w = document.querySelector(`[data-combo="${id}"]`); return w ? w.dataset.value : ''; };
+  function comboOpen(w, query) {
+    const id = w.dataset.combo, list = $('.combo__list', w), input = $('input', w);
+    const q = fold(query || '');
+    const hits = (comboData[id] || []).filter((i) => !q || fold(i.label).includes(q) || fold(i.hint).startsWith(q)).slice(0, 60);
+    list.innerHTML = hits.length
+      ? hits.map((i, k) => `<li class="combo__opt" role="option" data-v="${esc(i.value)}" aria-selected="${k === 0}"><span>${esc(i.label)}</span><small>${esc(i.hint)}</small></li>`).join('')
+      : '<li class="combo__empty">Nada encontrado</li>';
+    list.hidden = false; input.setAttribute('aria-expanded', 'true');
+  }
+  function comboClose(w) { $('.combo__list', w).hidden = true; $('input', w).setAttribute('aria-expanded', 'false'); }
+  function comboPick(w, value) {
+    const id = w.dataset.combo, item = (comboData[id] || []).find((i) => i.value === value);
+    if (!item) return;
+    w.dataset.value = item.value; $('input', w).value = item.label; comboClose(w);
+    if (COMBO_CITY_OF[id]) {   // o município depende do estado
+      const m = document.querySelector(`[data-combo="${COMBO_CITY_OF[id]}"]`);
+      if (m) { comboData[COMBO_CITY_OF[id]] = geoCities(item.value); m.dataset.value = ''; $('input', m).value = ''; $('input', m).focus(); comboOpen(m, ''); }
+    }
+  }
+  document.addEventListener('input', (e) => { const w = e.target.closest && e.target.closest('.combo'); if (w) { w.dataset.value = ''; comboOpen(w, e.target.value); } });
+  document.addEventListener('focusin', (e) => { const w = e.target.closest && e.target.closest('.combo'); if (w && e.target.tagName === 'INPUT') { e.target.select(); comboOpen(w, ''); } });
+  document.addEventListener('mousedown', (e) => {
+    const opt = e.target.closest && e.target.closest('.combo__opt');
+    if (opt) { e.preventDefault(); comboPick(opt.closest('.combo'), opt.dataset.v); return; }
+    document.querySelectorAll('.combo').forEach((w) => { if (!w.contains(e.target)) comboClose(w); });
+  });
+  document.addEventListener('focusout', (e) => {
+    const w = e.target.closest && e.target.closest('.combo'); if (!w) return;
+    setTimeout(() => {   // saiu do campo sem escolher: volta à última escolha válida
+      if (w.contains(document.activeElement)) return;
+      comboClose(w);
+      const item = (comboData[w.dataset.combo] || []).find((i) => i.value === w.dataset.value);
+      $('input', w).value = item ? item.label : '';
+    }, 0);
+  });
+  document.addEventListener('keydown', (e) => {
+    const w = e.target.closest && e.target.closest('.combo'); if (!w) return;
+    const list = $('.combo__list', w), opts = [...list.querySelectorAll('.combo__opt')];
+    const at = opts.findIndex((o) => o.getAttribute('aria-selected') === 'true');
+    if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+      e.preventDefault(); if (list.hidden) comboOpen(w, ''); else if (opts.length) {
+        const n = (at + (e.key === 'ArrowDown' ? 1 : -1) + opts.length) % opts.length;
+        opts.forEach((o, k) => o.setAttribute('aria-selected', k === n)); opts[n].scrollIntoView({ block: 'nearest' });
+      }
+    } else if (e.key === 'Enter') { if (!list.hidden && opts[at]) { e.preventDefault(); comboPick(w, opts[at].dataset.v); } }
+    else if (e.key === 'Escape') { comboClose(w); }
+  });
+
+
   const toast = (msg, kind = 'bad') => {
     const el = document.createElement('div');
     el.className = `toast toast--${kind}`;
@@ -131,8 +196,9 @@
     },
     pickrequest(el) { S.civicFile = el.dataset.file; render(); },
     async civicissue() {
-      S.civicForm = { name: $('#c-name').value, birth: $('#c-birth').value, nat: $('#c-nat').value, uf: $('#c-uf').value, mun: $('#c-mun').value, reg: $('#c-reg').value, days: Number($('#c-days').value) };
+      S.civicForm = { name: $('#c-name').value, birth: $('#c-birth').value, nat: comboValue('c-nat'), uf: comboValue('c-uf'), mun: comboValue('c-mun'), reg: $('#c-reg').value, days: Number($('#c-days').value) };
       if (!S.civicFile) { toast('Escolha um pedido verificado.'); return; }
+      if (!S.civicForm.nat || !S.civicForm.uf || !S.civicForm.mun) { toast('Escolha a nacionalidade, o estado e o município na lista.'); return; }
       try {
         S.result = await call('civic_issue', { form: { request_file: S.civicFile, name: S.civicForm.name, birth_date: S.civicForm.birth, nationality: S.civicForm.nat, state: S.civicForm.uf, municipality: S.civicForm.mun, registry_id: S.civicForm.reg || null, valid_days: S.civicForm.days } });
         toast('Proposta enviada. Ela conta como a primeira aprovação.', 'ok');
@@ -145,7 +211,7 @@
       render();
     },
     async candissue() {
-      const f = { eleicao: $('#k-eleicao').value.trim(), days: Number($('#k-days').value), cargo: $('#k-cargo').value, uf: $('#k-uf').value.trim(), mun: $('#k-mun').value.trim(), numero: $('#k-numero').value.trim(), nome: $('#k-nome').value.trim(), holder: $('#k-holder').value.trim(), batch: $('#k-batch').value };
+      const f = { eleicao: $('#k-eleicao').value.trim(), days: Number($('#k-days').value), cargo: $('#k-cargo').value, uf: comboValue('k-uf'), mun: comboValue('k-mun'), numero: $('#k-numero').value.trim(), nome: $('#k-nome').value.trim(), holder: $('#k-holder').value.trim(), batch: $('#k-batch').value };
       S.candForm = f;
       // one candidate from the fields, plus one per line of the batch: cargo|uf|municipio|numero|nome|chave
       const items = [];
@@ -253,9 +319,9 @@
       <article class="card"><div class="issue-form">
         <label class="field"><span>Nome completo</span><input class="input" id="c-name" value="${esc(f.name)}" autocomplete="off"></label>
         <label class="field"><span>Data de nascimento</span><input class="input" id="c-birth" type="date" value="${esc(f.birth)}"></label>
-        <label class="field"><span>Nacionalidade (2 letras)</span><input class="input" id="c-nat" maxlength="2" value="${esc(f.nat)}"></label>
-        <label class="field"><span>Domicílio eleitoral: UF</span><input class="input" id="c-uf" maxlength="2" value="${esc(f.uf)}"></label>
-        <label class="field"><span>Domicílio eleitoral: município (IBGE, 7 dígitos)</span><input class="input" id="c-mun" maxlength="7" value="${esc(f.mun)}"></label>
+        <div class="field"><label for="c-nat">Nacionalidade</label>${combo('c-nat', geoCountries(), f.nat, 'Digite para buscar o país')}</div>
+        <div class="field"><label for="c-uf">Domicílio eleitoral: estado</label>${combo('c-uf', geoStates(), f.uf, 'Digite para buscar o estado')}</div>
+        <div class="field"><label for="c-mun">Domicílio eleitoral: município</label>${combo('c-mun', geoCities(f.uf), f.mun, 'Escolha o estado e busque o município')}</div>
         <label class="field"><span>Registro anterior (só numa REEMISSÃO: mantém o mesmo cidadão)</span><input class="input mono" id="c-reg" placeholder="TK-…" value="${esc(f.reg)}"></label>
         <label class="field"><span>Validade (dias, no máximo ${Math.floor(org.validity_secs / 86400)})</span><input class="input" id="c-days" type="number" min="1" value="${f.days}"></label>
         ${callout('info', 'Reemissão.', 'Se o cidadão perdeu o dispositivo: <strong>revogue</strong> a credencial antiga (aba Credenciais) e emita a nova informando o mesmo registro.')}
@@ -274,8 +340,8 @@
         <label class="field"><span>Eleição (id)</span><input class="input mono" id="k-eleicao" value="${esc(f.eleicao)}"></label>
         <label class="field"><span>Validade (dias a partir de agora)</span><input class="input" id="k-days" type="number" min="1" value="${f.days}"></label>
         <label class="field"><span>Cargo</span><select class="input" id="k-cargo">${['presidente', 'governador', 'prefeito'].map((c) => `<option ${c === f.cargo ? 'selected' : ''}>${c}</option>`).join('')}</select></label>
-        <label class="field"><span>UF (governador e prefeito)</span><input class="input" id="k-uf" maxlength="2" value="${esc(f.uf)}"></label>
-        <label class="field"><span>Município IBGE (prefeito)</span><input class="input" id="k-mun" maxlength="7" value="${esc(f.mun)}"></label>
+        <div class="field"><label for="k-uf">Estado (governador e prefeito)</label>${combo('k-uf', geoStates(), f.uf, 'Digite para buscar o estado')}</div>
+        <div class="field"><label for="k-mun">Município (prefeito)</label>${combo('k-mun', geoCities(f.uf), f.mun, 'Escolha o estado e busque o município')}</div>
         <label class="field"><span>Número</span><input class="input" id="k-numero" value="${esc(f.numero)}"></label>
         <label class="field"><span>Nome</span><input class="input" id="k-nome" value="${esc(f.nome)}"></label>
         <label class="field"><span>Chave de credencial do candidato (hex)</span><input class="input mono" id="k-holder" value="${esc(f.holder)}" autocomplete="off" spellcheck="false"></label>

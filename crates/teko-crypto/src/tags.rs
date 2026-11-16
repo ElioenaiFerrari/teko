@@ -22,6 +22,10 @@ pub const ELECTION_MANIFEST: &str = "teko/v2/election-manifest";
 pub const ELECTION_TRANSITION: &str = "teko/v2/election-transition";
 /// What the institutions of the vote chain sign about the result of one contest (ADR-0040).
 pub const ELECTION_OUTCOME: &str = "teko/v2/election-outcome";
+/// Hash-to-point input of the verifiable draw that breaks a tie (ADR-0043).
+pub const DRAW_POINT: &str = "teko/v2/draw-point";
+/// The seed of the verifiable draw, from the combined threshold-VRF point (ADR-0043).
+pub const DRAW_SEED: &str = "teko/v2/draw-seed";
 pub const BULLETIN_LEAF: &str = "teko/v2/bulletin-leaf";
 pub const BULLETIN_NODE: &str = "teko/v2/bulletin-node";
 pub const BULLETIN_HEAD: &str = "teko/v2/bulletin-head";

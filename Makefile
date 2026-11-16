@@ -1,6 +1,6 @@
 # Teko — atalhos. Rode `make` (ou `make help`) para ver tudo.
 .DEFAULT_GOAL := help
-.PHONY: candidates claim runoff issuer devnet-cosign help setup emulator suite reset demo issuer-help preview fmt lint test check build clean-dev verify-fw release-check repro fund docs-check diagrams coin-demo assets-demo devnet close devnet-dkg devnet-economy explorer devnet-equivocate devnet-veto tally-time devnet-founder devnet-stop devnet-status devnet-reset devnet-blocks devnet-blocks-sim dev testnet-help election publish simulate simulate-live tally reset-board
+.PHONY: candidates claim runoff issuer devnet-cosign help setup emulator suite reset demo issuer-help preview fmt lint test check build clean-dev verify-fw release-check repro fund docs-check diagrams coin-demo assets-demo devnet close devnet-dkg devnet-economy explorer devnet-equivocate devnet-veto tally-time devnet-founder devnet-stop devnet-status devnet-reset devnet-blocks devnet-blocks-sim dev tie testnet-help election publish simulate simulate-live tally reset-board
 
 CARGO ?= cargo
 PIN   ?= 482913
@@ -81,6 +81,11 @@ devnet-status: ## Altura, entradas, mempool e pares de cada validador
 
 devnet-blocks: ## Lista os blocos, verificados aqui (assinaturas, encadeamento e raiz Merkle)
 	@$(NODE) blocks --dir $(NET)
+
+VOTES ?= 5,5
+tie: ## SIMULAÇÃO (só dev): planta votos exatos num pleito aberto para forçar um EMPATE (desempate por sorteio verificável). Uso: make tie CONTEST=governador-sp [VOTES=5,5]. Depois: make close
+	@test -n "$(CONTEST)" || { echo "uso: make tie CONTEST=<pleito> [VOTES=5,5]"; exit 2; }
+	@$(CARGO) run -q -p election-admin-cli -- simulate-exact --contest $(CONTEST) --votes $(VOTES)
 
 KIND  ?= economy
 COUNT ?= 5

@@ -16,6 +16,7 @@
 extern crate alloc;
 
 mod ballot;
+pub mod draw;
 mod eligibility;
 mod error;
 mod lifecycle;
@@ -42,8 +43,8 @@ pub use manifest::{
     sign_manifest, validate_manifest, validate_revision, verify_manifest, verify_manifest_chain,
 };
 pub use outcome::{
-    ElectionOutcome, OutcomeKind, SignedOutcome, count_outcome_signers, decide, outcome_bytes,
-    sign_outcome,
+    ElectionOutcome, OutcomeKind, SignedOutcome, count_outcome_signers, decide, decide_with,
+    needs_draw, outcome_bytes, sign_outcome,
 };
 pub use policy::GovernancePolicy;
 pub use registration::{

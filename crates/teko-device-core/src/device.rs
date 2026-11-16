@@ -1664,6 +1664,7 @@ impl<H: Hal, R: Rng + CryptoRng> Device<H, R> {
         let verifier = sanitize(verifier, 60)
             .filter(|v| !v.trim().is_empty())
             .ok_or_else(|| fail(ErrorCode::InvalidArgument, "nome do verificador inválido"))?;
+        self.require_civic_bundle()?;
         let (bundle, claims) = self
             .civic_claims()
             .ok_or_else(|| fail(ErrorCode::Internal, "credencial ilegível"))?;
@@ -1719,6 +1720,18 @@ impl<H: Hal, R: Rng + CryptoRng> Device<H, R> {
         Ok(Response::AttributeProof(AttributeProof {
             presentation: presentation.encode_to_vec(),
         }))
+    }
+
+    /// A device onboarded before the civic ID moved to the organ (ADR-0038) keeps a credential in
+    /// the OLD format: nothing that needs the ID can use it, and the answer must say what to do.
+    fn require_civic_bundle(&self) -> Result<(), Failure> {
+        if self.civic_claims().is_some() {
+            return Ok(());
+        }
+        Err(fail(
+            ErrorCode::LegacyCredential,
+            "seu ID cívico está no formato antigo: rode `make reset`, refaça o onboarding e peça a reemissão ao órgão",
+        ))
     }
 
     /// The stored civic credential: the bundle and its claims (with their salts).
@@ -2042,6 +2055,7 @@ impl<H: Hal, R: Rng + CryptoRng> Device<H, R> {
         contest_id: &str,
     ) -> Result<Response, Failure> {
         let contest = self.registration_context(election_id, contest_id)?;
+        self.require_civic_bundle()?;
         let scope = contest.scope.clone().unwrap_or_default();
         let mut lines = Vec::from([String::from("Pleito:")]);
         lines.extend(wrap(&contest.title, 28));

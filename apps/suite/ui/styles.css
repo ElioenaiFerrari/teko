@@ -297,7 +297,11 @@ input[type="checkbox"] { width: 20px; height: 20px; accent-color: var(--primary)
 .options { display: grid; gap: 10px; grid-template-columns: repeat(auto-fit, minmax(190px, 1fr)); }
 .option { position: relative; }
 .option input { position: absolute; opacity: 0; }
-.option span { display: flex; align-items: center; gap: 10px; min-height: 52px; padding: 10px 14px; border: 1px solid var(--border); border-radius: 14px; background: var(--surface); cursor: pointer; font-weight: 600; }
+.option > span { display: flex; flex-direction: column; align-items: flex-start; justify-content: center; gap: 6px; min-height: 52px; height: 100%; padding: 10px 14px; border: 1px solid var(--border); border-radius: 14px; background: var(--surface); cursor: pointer; font-weight: 600; }
+.option__name { display: block; overflow-wrap: anywhere; }
+.option .chip { font-weight: 500; }
+.options--special { margin-top: 0; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); }
+.options-or { margin: 12px 0 8px; }
 .option input:checked + span { border-color: var(--primary); background: var(--tint-primary); box-shadow: 0 0 0 2px var(--primary) inset; }
 .option input:focus-visible + span { outline: 3px solid var(--ring); outline-offset: 2px; }
 

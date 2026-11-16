@@ -51,5 +51,8 @@ done > /tmp/docs-check-en.$$
 while read -r l; do falha "título em inglês: ${l#EN }"; done < <(cat /tmp/docs-check-en.$$)
 rm -f /tmp/docs-check-en.$$
 
+# 6) os dados geográficos (UFs, municípios, países) são os mesmos na Suite e no Emissor
+cmp -s apps/suite/ui/geo.js apps/issuer/ui/geo.js || falha "apps/issuer/ui/geo.js difere de apps/suite/ui/geo.js (copie um sobre o outro)"
+
 if [ "$erros" -gt 0 ]; then echo "docs-check: $erros problema(s)"; exit 1; fi
 echo "docs-check: ok"

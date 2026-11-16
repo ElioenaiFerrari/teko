@@ -134,6 +134,9 @@ fn outcome(
         accepted: 100,
         blank_votes: 0,
         null_votes: 0,
+        drawn: false,
+        draw_tied: vec![],
+        draw_seed: vec![],
     }
 }
 
@@ -592,5 +595,43 @@ fn a_network_without_vote_chain_institutions_accepts_no_claim() {
         claim(&mut w, &o, &[0, 1, 2])
             .unwrap_err()
             .contains("no vote chain")
+    );
+}
+
+#[test]
+fn a_drawn_winner_elects_like_any_other_the_ledger_trusts_the_institutions_signatures() {
+    let mut w = world(4);
+    let (id, holder) = candidacy(
+        &mut w,
+        &cand(Cargo::Governador, "SP", "13", "Ana", "geral-2026"),
+        1,
+    );
+    // a tie at the top, broken by the verifiable draw (ADR-0043): same kind, plus the evidence
+    let mut o = outcome(
+        &id,
+        Office::Governor,
+        Scope::state("SP"),
+        "geral-2026",
+        "governador-sp",
+    );
+    o.totals = vec![50, 50];
+    o.drawn = true;
+    o.draw_tied = vec![0, 1];
+    o.draw_seed = vec![9; 32];
+    claim(&mut w, &o, &[0, 1, 2]).unwrap();
+    assert_eq!(elected_of(&w, &holder).len(), 1);
+    // a tie still waiting for the draw (no seed) elects nobody
+    let mut tie = outcome(
+        &id,
+        Office::Governor,
+        Scope::state("SP"),
+        "geral-2026",
+        "governador-rj",
+    );
+    tie.kind = OutcomeKind::Tie as i32;
+    assert!(
+        claim(&mut w, &tie, &[0, 1, 2])
+            .unwrap_err()
+            .contains("decided")
     );
 }

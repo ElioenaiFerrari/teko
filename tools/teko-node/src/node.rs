@@ -52,6 +52,8 @@ struct State {
     results_sent: HashMap<String, Instant>,
     /// Contests whose signed OUTCOME this validator already published (ADR-0040).
     outcomes_sent: HashMap<String, Instant>,
+    /// When this validator last published its share of the draw of a tied contest (ADR-0043).
+    draws_sent: HashMap<String, Instant>,
 }
 
 pub(crate) struct Shared {
@@ -119,6 +121,7 @@ impl Node {
                 fed: 0,
                 results_sent: HashMap::new(),
                 outcomes_sent: HashMap::new(),
+                draws_sent: HashMap::new(),
             }),
             cfg,
             stop: AtomicBool::new(false),
@@ -268,6 +271,7 @@ fn results_loop(s: &Arc<Shared>) {
     while !s.stop.load(Ordering::SeqCst) {
         thread::sleep(tick);
         decrypt_closed_contests(s, interval);
+        publish_draws(s, interval);
         publish_outcomes(s, interval);
         punish_vote_equivocations(s);
     }
@@ -293,7 +297,7 @@ fn punish_vote_equivocations(s: &Arc<Shared>) {
 /// signs it with its consensus key and publishes the signature on the board. The vote chain does
 /// not judge it: what makes it count is that more than 2/3 of the institutions sign the SAME bytes.
 fn publish_outcomes(s: &Arc<Shared>, interval: Duration) {
-    use teko_election::{SignedOutcome, contest_hash, decide, sign_outcome};
+    use teko_election::{SignedOutcome, contest_hash, decide_with, sign_outcome};
     let list: Vec<(String, Vec<u8>)> = {
         let st = lock(s);
         let Some(t) = st.tallier.as_ref() else {
@@ -317,7 +321,19 @@ fn publish_outcomes(s: &Arc<Shared>, interval: Duration) {
                 continue;
             };
             let h = contest_hash(contest);
-            if let Some(o) = decide(&s.cfg.profile.chain_id, &m.election_id, contest, &h, c) {
+            // a tie the rule cannot break waits for the seed of the verifiable draw (ADR-0043)
+            if t.awaits_draw(&c.contest_id) {
+                continue;
+            }
+            let seed = t.draw_seed(&c.contest_id);
+            if let Some(o) = decide_with(
+                &s.cfg.profile.chain_id,
+                &m.election_id,
+                contest,
+                &h,
+                c,
+                seed.as_ref(),
+            ) {
                 let sig = sign_outcome(&s.cfg.key, &o);
                 out.push((
                     c.contest_id.clone(),
@@ -335,6 +351,63 @@ fn publish_outcomes(s: &Arc<Shared>, interval: Duration) {
             }],
         };
         lock(s).outcomes_sent.insert(contest_id, Instant::now());
+        let _ = crate::votes::submit(s, &body, true);
+    }
+}
+
+/// The DRAW service (ADR-0043): when a contest of this node's own verified replica is CLOSED,
+/// revealed and really TIED, this validator publishes its share of the verifiable draw (`d_i * H`
+/// with a proof against its verification key). Nothing is published for a contest without a tie, and
+/// the shares alone reveal nothing: only `threshold` of them together give the seed.
+fn publish_draws(s: &Arc<Shared>, interval: Duration) {
+    use teko_ballot_crypto::draw::{draw_share, hash_to_point};
+    use teko_election::draw::{DrawShareEntry, draw_ctx, draw_input};
+    let list = {
+        let st = lock(s);
+        let (Some(t), Some(ks)) = (st.tallier.as_ref(), st.tally.as_ref()) else {
+            return;
+        };
+        let Some(m) = t.manifest() else {
+            return;
+        };
+        let retry = interval * 20;
+        t.pending_draws(ks.index)
+            .into_iter()
+            .filter(|(c, _, _)| st.draws_sent.get(c).is_none_or(|at| at.elapsed() > retry))
+            .map(|x| (m.election_id.clone(), x))
+            .collect::<Vec<_>>()
+    };
+    for (election_id, (contest_id, hash, need)) in list {
+        let (index, secret) = {
+            let st = lock(s);
+            match st.tally.as_ref() {
+                Some(k) => (k.index, k.secret),
+                None => continue,
+            }
+        };
+        let input = draw_input(&election_id, &contest_id, &hash, &need);
+        let Some(h) = hash_to_point(&input) else {
+            continue;
+        };
+        let ctx = draw_ctx(&election_id, &contest_id, &input, index);
+        let mut rng = rand::rand_core::UnwrapErr(rand::rngs::SysRng);
+        let (share, proof) = draw_share(&secret, &h, &ctx, &mut rng);
+        let entry = DrawShareEntry {
+            election_id,
+            contest_id: contest_id.clone(),
+            contest_hash: hash.to_vec(),
+            input,
+            validator_index: index,
+            share: teko_ballot_crypto::point_to_bytes(&share).to_vec(),
+            proof: proof.to_bytes().to_vec(),
+        };
+        let body = SubmitEntries {
+            entries: vec![teko_chain::BlockEntry {
+                kind: u32::from(EntryKind::DRAW.0),
+                payload: prost::Message::encode_to_vec(&entry),
+            }],
+        };
+        lock(s).draws_sent.insert(contest_id, Instant::now());
         let _ = crate::votes::submit(s, &body, true);
     }
 }
@@ -381,6 +454,7 @@ fn decrypt_closed_contests(s: &Arc<Shared>, interval: Duration) {
                     EntryKind::BALLOT => Some(LogKind::Ballot),
                     EntryKind::DKG => Some(LogKind::Dkg),
                     EntryKind::RESULT => Some(LogKind::Result),
+                    EntryKind::DRAW => Some(LogKind::Draw),
                     _ => None,
                 };
                 match kind {

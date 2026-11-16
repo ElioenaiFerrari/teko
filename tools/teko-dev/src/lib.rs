@@ -127,6 +127,14 @@ static P_LIVE: [Param; 2] = [
 ];
 static P_ELECTION: [Param; 1] = [p("ELECTION", "Id da eleição (opcional)", "")];
 static P_RUNOFF: [Param; 1] = [req("CONTEST", "Pleito (ex.: governador-sp)", "")];
+static P_TIE: [Param; 2] = [
+    req("CONTEST", "Pleito aberto (ex.: governador-sp)", ""),
+    p(
+        "VOTES",
+        "Votos por opção, separados por vírgula (5,5 empata as 2 primeiras)",
+        "5,5",
+    ),
+];
 static P_COSIGN: [Param; 1] = [p("TYPE", "Tipo de credencial (opcional, ex.: cnh-b)", "")];
 static P_VETO: [Param; 2] = [
     req("CLASS", "Classe do bem", "imovel"),
@@ -284,6 +292,15 @@ pub static CATALOG: &[Item] = &[
         Any,
         C,
         "",
+    ),
+    item(
+        "Eleição",
+        "Forçar um empate (plantar votos)",
+        &["tie"],
+        &P_TIE,
+        Any,
+        C,
+        "só dev: depois feche e veja o sorteio verificável nos resultados",
     ),
     item(
         "Eleição",

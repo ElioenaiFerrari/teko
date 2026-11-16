@@ -70,6 +70,7 @@ pub fn log_kind(k: EntryKind) -> Option<LogKind> {
         EntryKind::DKG => Some(LogKind::Dkg),
         EntryKind::RESULT => Some(LogKind::Result),
         EntryKind::BALLOT => Some(LogKind::Ballot),
+        EntryKind::DRAW => Some(LogKind::Draw),
         _ => None,
     }
 }
@@ -599,6 +600,11 @@ impl Admin {
                 tally_key: manifest.tally_key.clone(),
             });
         }
+        if out.is_empty() {
+            return Err(AdminError::Simulation(
+                "nenhum pleito com a votação aberta: rode `make election` e `make publish`, ou `make devnet-reset` se a eleição já terminou".into(),
+            ));
+        }
         Ok((manifest.election_id, out))
     }
 
@@ -621,8 +627,10 @@ impl Admin {
         seed: u64,
         rng: &mut Prng,
         planted: &mut std::collections::BTreeMap<String, Vec<u64>>,
+        forced: Option<u32>,
     ) -> Vec<Entry> {
-        let Some((ballot, chosen)) = Self::make_ballot(election, c, voter, seed, rng) else {
+        let Some((ballot, chosen)) = Self::make_ballot(election, c, voter, seed, rng, forced)
+        else {
             return Vec::new();
         };
         let mut out = Vec::with_capacity(2);
@@ -666,6 +674,7 @@ impl Admin {
         voter: u64,
         seed: u64,
         rng: &mut Prng,
+        forced: Option<u32>,
     ) -> Option<(SubmittedBallot, u32)> {
         let root = tagged_hash(
             "teko/sim/voter-root",
@@ -673,11 +682,12 @@ impl Admin {
         );
         let key = derive_voter_key(&root, election, &c.id).ok()?;
         let u = rng.unit();
-        let option_index = c
-            .cdf
-            .iter()
-            .position(|x| u <= *x)
-            .unwrap_or(c.cdf.len() - 1) as u32;
+        let option_index = forced.unwrap_or_else(|| {
+            c.cdf
+                .iter()
+                .position(|x| u <= *x)
+                .unwrap_or(c.cdf.len() - 1) as u32
+        });
         let voter_key = public_key_bytes(&key);
         // Encrypted election: build a REAL encrypted ballot with real proofs (what the
         // device does); the body then names no option, only the ciphertext hash.
@@ -738,6 +748,7 @@ impl Admin {
                     seed,
                     &mut rng,
                     &mut planted,
+                    None,
                 ));
             }
         }
@@ -755,6 +766,69 @@ impl Admin {
         Ok(SimReport {
             ballots,
             contests: contests.len() as u64,
+            planted: planted.into_iter().collect(),
+        })
+    }
+
+    /// DEV ONLY: plants EXACTLY `votes[i]` ballots for option `i` of ONE open contest (a short list
+    /// is padded with zeros), to make ties on purpose (ADR-0043). Every voter is distinct and
+    /// registered like a real one; the board is marked as simulated.
+    #[cfg(feature = "operator")]
+    pub fn simulate_exact(
+        &self,
+        contest_id: &str,
+        votes: &[u64],
+        seed: u64,
+    ) -> Result<SimReport, AdminError> {
+        let (election, contests) = self.sim_contests(seed)?;
+        let c = contests
+            .iter()
+            .find(|c| c.id == contest_id)
+            .ok_or_else(|| {
+                AdminError::Simulation(format!(
+                    "o pleito `{contest_id}` não está com a votação aberta"
+                ))
+            })?;
+        if votes.len() > c.cdf.len() {
+            return Err(AdminError::Simulation(format!(
+                "o pleito tem {} opções e foram dados {} números",
+                c.cdf.len(),
+                votes.len()
+            )));
+        }
+        let start = self.next_index();
+        let mut rng = Prng(seed.wrapping_add(start));
+        let mut entries = Vec::new();
+        let mut planted = std::collections::BTreeMap::new();
+        let mut voter = start + 9_000_000_000;
+        for (option, n) in votes.iter().enumerate() {
+            for _ in 0..*n {
+                voter += 1;
+                entries.extend(Self::voter_entries(
+                    &election,
+                    c,
+                    voter,
+                    seed,
+                    &mut rng,
+                    &mut planted,
+                    Some(option as u32),
+                ));
+            }
+        }
+        let ballots = entries
+            .iter()
+            .filter(|e| e.kind == EntryKind::BALLOT)
+            .count() as u64;
+        if !entries.is_empty() {
+            self.append_entries(entries)?;
+        }
+        fs::write(
+            self.dir.join(SIM_MARKER),
+            (start + votes.iter().sum::<u64>().max(1)).to_string(),
+        )?;
+        Ok(SimReport {
+            ballots,
+            contests: 1,
             planted: planted.into_iter().collect(),
         })
     }
@@ -801,6 +875,7 @@ impl Admin {
                     seed,
                     &mut rng,
                     &mut std::collections::BTreeMap::new(),
+                    None,
                 ));
             }
             sent += entries

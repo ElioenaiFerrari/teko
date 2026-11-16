@@ -11,6 +11,7 @@ use teko_attestation::SignerSignature;
 use teko_attestation::multisig::count_distinct_valid;
 use teko_crypto::{SigningKey, public_key_bytes, sign_tagged, tags};
 
+use crate::draw::{DrawGoal, DrawNeed, draw_order};
 use crate::eligibility::Scope;
 use crate::lifecycle::Phase;
 use crate::manifest::{Contest, Office, OptionKind};
@@ -68,6 +69,14 @@ pub struct ElectionOutcome {
     pub blank_votes: u64,
     #[prost(uint64, tag = "16")]
     pub null_votes: u64,
+    /// A tie was broken by the verifiable DRAW (ADR-0043): the tied options in the order the seed
+    /// drew them, and the seed. Anyone can redo the draw from the board.
+    #[prost(bool, tag = "17")]
+    pub drawn: bool,
+    #[prost(uint32, repeated, tag = "18")]
+    pub draw_tied: Vec<u32>,
+    #[prost(bytes = "vec", tag = "19")]
+    pub draw_seed: Vec<u8>,
 }
 
 /// What an institution publishes on the board: the outcome and its signature. The entry kind is
@@ -109,6 +118,39 @@ pub fn decide(
     contest_hash: &[u8],
     tally: &ContestTally,
 ) -> Option<ElectionOutcome> {
+    decide_with(
+        vote_chain_id,
+        election_id,
+        contest,
+        contest_hash,
+        tally,
+        None,
+    )
+}
+
+/// What the rule says about a contest, before any draw.
+enum Plan {
+    Elect(usize),
+    Runoff(usize, usize),
+    /// A tie the rule cannot break: the draw decides.
+    Draw {
+        need: DrawNeed,
+        /// Options that are ahead of the tied group and keep their places (finalists only).
+        ahead: Vec<usize>,
+    },
+    /// Nobody voted for a candidate.
+    Nobody,
+}
+
+struct Analysis {
+    totals: Vec<u64>,
+    valid: u64,
+    round: u32,
+    plan: Plan,
+}
+
+/// The rule, on the verified totals. `None` when there is nothing to decide yet.
+fn analyze(contest: &Contest, tally: &ContestTally) -> Option<Analysis> {
     if !contest.office().is_single_seat() {
         return None;
     }
@@ -133,18 +175,96 @@ pub fn decide(
         return None;
     }
     order.sort_by(|a, b| totals[*b].cmp(&totals[*a]).then(a.cmp(b)));
-    let (first, second) = (order[0], order[1]);
     let valid: u64 = order.iter().map(|i| totals[*i]).sum();
+    let round = if contest.parent.is_empty() { 1 } else { 2 };
+    // the options tied with the one at `rank`, ascending by ballot index
+    let tie_group = |rank: usize| -> Vec<usize> {
+        let v = totals[order[rank]];
+        let mut g: Vec<usize> = order.iter().copied().filter(|i| totals[*i] == v).collect();
+        g.sort_unstable();
+        g
+    };
+    let need = |group: &[usize], take: usize, goal: DrawGoal| DrawNeed {
+        tied: group.iter().map(|i| *i as u32).collect(),
+        take: take as u32,
+        goal,
+        votes: totals[group[0]],
+    };
+    let (first, second) = (order[0], order[1]);
+    let plan = if valid == 0 {
+        Plan::Nobody
+    } else if contest.runoff && round == 1 {
+        if totals[first] * 2 > valid {
+            Plan::Elect(first)
+        } else if order.len() == 2 {
+            // two candidates, no majority: an exact tie, and a runoff between the same two would
+            // change nothing, so the draw ELECTS
+            Plan::Draw {
+                need: need(&tie_group(0), 1, DrawGoal::Winner),
+                ahead: Vec::new(),
+            }
+        } else if totals[second] == totals[order[2]] {
+            // the second place is tied with a third: the draw fills the open finalist slots
+            let group = tie_group(1);
+            let ahead: Vec<usize> = order
+                .iter()
+                .copied()
+                .filter(|i| totals[*i] > totals[second])
+                .collect();
+            let take = 2 - ahead.len();
+            Plan::Draw {
+                need: need(&group, take, DrawGoal::Finalists),
+                ahead,
+            }
+        } else {
+            Plan::Runoff(first, second)
+        }
+    } else if totals[first] > totals[second] {
+        Plan::Elect(first)
+    } else {
+        Plan::Draw {
+            need: need(&tie_group(0), 1, DrawGoal::Winner),
+            ahead: Vec::new(),
+        }
+    };
+    Some(Analysis {
+        totals,
+        valid,
+        round,
+        plan,
+    })
+}
+
+/// The tie the draw has to break, if the rule leaves one (`None` if the contest is not decidable
+/// yet or has no such tie). The nodes use it to know that they must publish their share.
+pub fn needs_draw(contest: &Contest, tally: &ContestTally) -> Option<DrawNeed> {
+    match analyze(contest, tally)?.plan {
+        Plan::Draw { need, .. } => Some(need),
+        _ => None,
+    }
+}
+
+/// Like `decide`, with the SEED of the verifiable draw when there is one. A tie the rule cannot
+/// break stays a `Tie` without a seed; with the seed it is resolved (ADR-0043). With no tie the
+/// seed is ignored, so every institution reaches the same bytes.
+pub fn decide_with(
+    vote_chain_id: &str,
+    election_id: &str,
+    contest: &Contest,
+    contest_hash: &[u8],
+    tally: &ContestTally,
+    draw_seed: Option<&[u8; 32]>,
+) -> Option<ElectionOutcome> {
+    let a = analyze(contest, tally)?;
     let votes_of = |k: OptionKind| -> u64 {
         contest
             .options
             .iter()
-            .zip(&totals)
+            .zip(&a.totals)
             .filter(|(o, _)| o.kind() == k)
             .map(|(_, v)| *v)
             .sum()
     };
-    let round = if contest.parent.is_empty() { 1 } else { 2 };
     let mut out = ElectionOutcome {
         vote_chain_id: String::from(vote_chain_id),
         election_id: String::from(election_id),
@@ -152,42 +272,56 @@ pub fn decide(
         contest_hash: contest_hash.to_vec(),
         office: contest.office,
         scope: contest.scope.clone(),
-        round,
+        round: a.round,
         kind: OutcomeKind::Tie as i32,
         winner_option: 0,
         winner_credential_id: Vec::new(),
         finalists: Vec::new(),
         finalist_credentials: Vec::new(),
-        totals: totals.clone(),
+        totals: a.totals.clone(),
         accepted: tally.accepted,
         blank_votes: votes_of(OptionKind::Blank),
         null_votes: votes_of(OptionKind::Null),
+        drawn: false,
+        draw_tied: Vec::new(),
+        draw_seed: Vec::new(),
     };
     let elect = |i: usize, out: &mut ElectionOutcome| {
         out.kind = OutcomeKind::Elected as i32;
         out.winner_option = i as u32;
         out.winner_credential_id = contest.options[i].credential_id.clone();
     };
-    if valid == 0 {
-        return Some(out); // nobody voted for a candidate: nothing to elect
-    }
-    if contest.runoff && round == 1 {
-        if totals[first] * 2 > valid {
-            elect(first, &mut out);
-        } else if order.len() == 2 {
-            // two candidates, no majority: an exact tie
-        } else if totals[second] == totals[order[2]] {
-            // the second place is tied with a third: the finalist cannot be chosen by the rule
-        } else {
-            out.kind = OutcomeKind::Runoff as i32;
-            out.finalists = alloc::vec![first as u32, second as u32];
-            out.finalist_credentials = alloc::vec![
-                contest.options[first].credential_id.clone(),
-                contest.options[second].credential_id.clone()
-            ];
+    let runoff = |f: [usize; 2], out: &mut ElectionOutcome| {
+        out.kind = OutcomeKind::Runoff as i32;
+        out.finalists = alloc::vec![f[0] as u32, f[1] as u32];
+        out.finalist_credentials = alloc::vec![
+            contest.options[f[0]].credential_id.clone(),
+            contest.options[f[1]].credential_id.clone()
+        ];
+    };
+    let _ = a.valid;
+    match a.plan {
+        Plan::Nobody => {}
+        Plan::Elect(i) => elect(i, &mut out),
+        Plan::Runoff(x, y) => runoff([x, y], &mut out),
+        Plan::Draw { need, ahead } => {
+            if let Some(seed) = draw_seed {
+                let order = draw_order(seed, &need.tied);
+                out.drawn = true;
+                out.draw_seed = seed.to_vec();
+                out.draw_tied = order.clone();
+                match need.goal {
+                    DrawGoal::Winner => elect(order[0] as usize, &mut out),
+                    DrawGoal::Finalists => {
+                        let mut f = ahead;
+                        f.extend(order.iter().take(need.take as usize).map(|i| *i as usize));
+                        if let [x, y] = f[..] {
+                            runoff([x, y], &mut out);
+                        }
+                    }
+                }
+            }
         }
-    } else if totals[first] > totals[second] {
-        elect(first, &mut out);
     }
     Some(out)
 }
@@ -222,6 +356,7 @@ pub fn count_outcome_signers(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::draw::{DrawGoal, DrawNeed};
     use crate::manifest::{ElectionOption, OptionKind};
     use crate::tally::{ContestTally, OptionTally, RejectCounts};
     use proptest::prelude::*;
@@ -389,6 +524,107 @@ mod tests {
         assert_eq!(run(&contest(2, true, ""), &[0, 0]).kind(), OutcomeKind::Tie);
     }
 
+    fn drawn(c: &Contest, votes: &[u64], seed: u8) -> ElectionOutcome {
+        decide_with(
+            "teko-devnet-1",
+            "geral-2026",
+            c,
+            &[9; 32],
+            &tally_of(c, votes),
+            Some(&[seed; 32]),
+        )
+        .unwrap()
+    }
+
+    fn need(c: &Contest, votes: &[u64]) -> Option<DrawNeed> {
+        needs_draw(c, &tally_of(c, votes))
+    }
+
+    #[test]
+    fn a_tie_at_the_top_is_decided_by_the_draw_and_only_among_the_tied() {
+        // two candidates, no majority: the draw ELECTS (a runoff of the same two would change nothing)
+        let c = contest(2, true, "");
+        let n = need(&c, &[50, 50]).unwrap();
+        assert_eq!(
+            (n.tied.clone(), n.take, n.goal),
+            (alloc::vec![0, 1], 1, DrawGoal::Winner)
+        );
+        assert_eq!(
+            run(&c, &[50, 50]).kind(),
+            OutcomeKind::Tie,
+            "no seed yet: still pending"
+        );
+        let mut winners = alloc::collections::BTreeSet::new();
+        for seed in 0..60u8 {
+            let o = drawn(&c, &[50, 50], seed);
+            assert_eq!(o.kind(), OutcomeKind::Elected);
+            assert!(o.drawn && o.draw_seed == alloc::vec![seed; 32]);
+            assert_eq!(o.draw_tied.len(), 2);
+            assert_eq!(o.winner_option, o.draw_tied[0], "the first drawn wins");
+            winners.insert(o.winner_option);
+            assert_eq!(drawn(&c, &[50, 50], seed), o, "same seed, same bytes");
+        }
+        assert_eq!(winners.len(), 2, "either can win");
+        // plurality contest and second round: a tie at the top, among the TIED only (3rd is not in it)
+        let c = contest(3, false, "");
+        for seed in 0..30u8 {
+            let o = drawn(&c, &[40, 40, 20], seed);
+            assert_eq!(o.kind(), OutcomeKind::Elected);
+            assert!(o.winner_option < 2);
+        }
+        assert_eq!(
+            drawn(&contest(2, false, "gov-sp-1t"), &[7, 7], 3).kind(),
+            OutcomeKind::Elected
+        );
+        // blank and null never enter the draw, even when they have as many votes
+        let c = contest_bn(2, true, "");
+        let n = need(&c, &[30, 30, 30, 30]).unwrap();
+        assert_eq!(n.tied, alloc::vec![0, 1]);
+        for seed in 0..20u8 {
+            assert!(drawn(&c, &[30, 30, 30, 30], seed).winner_option < 2);
+        }
+    }
+
+    #[test]
+    fn a_tie_for_the_finalist_slot_is_drawn_and_what_the_rule_decides_is_untouched() {
+        let c = contest(3, true, "");
+        // [40,30,30]: 0 is a finalist for sure, the draw fills the other slot among 1 and 2
+        let n = need(&c, &[40, 30, 30]).unwrap();
+        assert_eq!(
+            (n.tied.clone(), n.take, n.goal),
+            (alloc::vec![1, 2], 1, DrawGoal::Finalists)
+        );
+        let mut second = alloc::collections::BTreeSet::new();
+        for seed in 0..60u8 {
+            let o = drawn(&c, &[40, 30, 30], seed);
+            assert_eq!(o.kind(), OutcomeKind::Runoff);
+            assert_eq!(o.finalists[0], 0);
+            second.insert(o.finalists[1]);
+        }
+        assert_eq!(second, alloc::collections::BTreeSet::from([1, 2]));
+        // [40,40,40]: two of the three, never the same twice
+        let c = contest(3, true, "");
+        for seed in 0..40u8 {
+            let o = drawn(&c, &[40, 40, 40], seed);
+            assert_eq!(o.kind(), OutcomeKind::Runoff);
+            assert_ne!(o.finalists[0], o.finalists[1]);
+        }
+        let c4 = contest(4, true, "");
+        let n = need(&c4, &[30, 30, 30, 10]).unwrap();
+        assert_eq!((n.tied.len(), n.take), (3, 2));
+        // a tie that does not decide anything needs no draw: the seed is ignored
+        assert!(need(&c, &[40, 40, 20]).is_none());
+        assert!(need(&c, &[51, 25, 24]).is_none());
+        assert!(need(&c, &[40, 35, 25]).is_none());
+        for votes in [[40, 40, 20], [51, 25, 24], [40, 35, 25]] {
+            assert_eq!(drawn(&c, &votes, 7), run(&c, &votes));
+        }
+        // nobody voted for a candidate: there is nothing to draw
+        let c = contest(2, true, "");
+        assert!(need(&c, &[0, 0]).is_none());
+        assert_eq!(drawn(&c, &[0, 0], 1).kind(), OutcomeKind::Tie);
+    }
+
     #[test]
     fn a_contest_without_runoff_and_a_second_round_elect_by_plurality() {
         let o = run(&contest(3, false, ""), &[40, 35, 25]);
@@ -448,6 +684,37 @@ mod tests {
     }
 
     proptest! {
+        #[test]
+        fn with_a_seed_every_decidable_contest_is_decided_among_the_right_candidates(
+            votes in proptest::collection::vec(0u64..40, 2..8), runoff in any::<bool>(), seed in any::<u8>()
+        ) {
+            let c = contest(votes.len(), runoff, "");
+            let o = drawn(&c, &votes, seed);
+            let valid: u64 = votes.iter().sum();
+            if valid == 0 {
+                prop_assert_eq!(o.kind(), OutcomeKind::Tie);
+            } else {
+                prop_assert_ne!(o.kind(), OutcomeKind::Tie);
+                let max = *votes.iter().max().unwrap();
+                match o.kind() {
+                    OutcomeKind::Elected => {
+                        // the winner has the most votes (a drawn one is among those tied for it)
+                        prop_assert_eq!(votes[o.winner_option as usize], max);
+                        if runoff && !o.drawn { prop_assert!(max * 2 > valid); }
+                    }
+                    OutcomeKind::Runoff => {
+                        prop_assert_eq!(o.finalists.len(), 2);
+                        prop_assert_ne!(o.finalists[0], o.finalists[1]);
+                        let b = votes[o.finalists[1] as usize];
+                        for (i, v) in votes.iter().enumerate() {
+                            if !o.finalists.contains(&(i as u32)) { prop_assert!(*v <= b); }
+                        }
+                    }
+                    _ => prop_assert!(false),
+                }
+            }
+        }
+
         #[test]
         fn there_is_never_more_than_one_winner_and_the_winner_has_the_most_votes(
             votes in proptest::collection::vec(0u64..1000, 2..8), runoff in any::<bool>()

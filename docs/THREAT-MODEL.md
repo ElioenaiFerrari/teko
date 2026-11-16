@@ -152,6 +152,7 @@ Não implementadas; ver `PHASE-2-VOTING.md`. Cada linha vira teste quando houver
 | V3 | Voto duplo | Nullifier por eleição verificado no quadro | Falha do esquema de nullifier para P-256 (lacuna §4.3) |
 | V4 | Host troca o candidato | Cédula confirmada no dispositivo com nome **do manifesto M-de-N** | Usuário não confere a tela |
 | V4e | Branco/nulo usados para barrar uma maioria ou virar finalista | Ficam fora da base da maioria e nunca lideram (ADR-0042); o pleito assinado fixa quais especiais existem | O total de brancos e nulos é público |
+| V4f | Instituição ou quem ordena o quadro tenta escolher o vencedor do sorteio de desempate | VRF de limiar: a saída é única para quaisquer `t` partes, ninguém conhece a chave e a entrada só vem do pleito e do empate; qualquer um refaz o sorteio do quadro (ADR-0043) | `t` instituições juntas sabem a semente antes dos outros; exige eleição cifrada |
 | V4b | Dispositivo cifra OUTRA opção que a da tela | **Desafio de Benaloh**: compromisso antes da escolha; auditoria revela e o computador abre a cédula (ADR-0041); pego com chance ½ por auditoria | Garantia estatística: o eleitor precisa auditar |
 | V4c | Cédula não entrou no quadro ou o bloco não é final | O **dispositivo** confere sozinho certificado > 2/3, bloco e inclusão da própria folha (`CheckMyBallot`) | Confiança nas instituições do `trust.txt` |
 | V4d | Cédula registrada mas não contada | A Suite refaz a apuração e mostra o veredito da cédula | O dispositivo não refaz a soma |

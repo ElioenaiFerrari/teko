@@ -15,6 +15,8 @@ USO:
   election-admin simulate [--dir dev] --voters N [--seed S]
       Anexa N eleitores SINTÉTICOS de uma vez (rotula o quadro como 'dados simulados').
   election-admin simulate [--dir dev] --rate R --duration S [--seed S]
+  election-admin simulate-exact [--dir dev] --contest ID --votes a,b,c [--seed S]
+      (SÓ dev) planta votos EXATOS por opção num pleito aberto, para forçar um empate (ADR-0043)
       Anexa ~R cédulas/s durante S segundos: abra a tela de Resultados da Suite e veja os gráficos andarem.
   election-admin tally [--dir dev] [--top 10] [--contest ID]
       Apura o quadro e mostra o ranking de cada pleito.
@@ -121,6 +123,13 @@ fn run(args: Vec<String>) -> Result<(), String> {
                     },
                     o.totals
                 );
+                if o.drawn {
+                    // anyone can redo the draw from the board; never take the signature's word
+                    match election_admin::elected::verify_draw(&a, o) {
+                        Ok(m) => println!("    🎲 sorteio verificável: {m} ✔"),
+                        Err(e) => println!("    🎲 sorteio NÃO verificado: {e}"),
+                    }
+                }
             }
         }
         "claim-elected" => {
@@ -181,6 +190,26 @@ fn run(args: Vec<String>) -> Result<(), String> {
                     r.ballots, r.contests
                 );
             }
+        }
+        "simulate-exact" => {
+            let a = admin()?;
+            let contest = f.get("contest").ok_or("faltou --contest")?;
+            let votes: Vec<u64> = f
+                .get("votes")
+                .ok_or("faltou --votes (ex.: 5,5 para empatar as duas primeiras opções)")?
+                .split(',')
+                .map(|x| {
+                    x.trim()
+                        .parse::<u64>()
+                        .map_err(|_| "--votes: números separados por vírgula")
+                })
+                .collect::<Result<_, _>>()?;
+            let seed = num(&f, "seed")?.unwrap_or(2027);
+            let r = a.simulate_exact(contest, &votes, seed).map_err(e)?;
+            println!(
+                "{} cédulas SINTÉTICAS plantadas em `{contest}`: {votes:?} (DADOS SIMULADOS, para forçar um empate; depois: make close)",
+                r.ballots
+            );
         }
         "tally" => {
             let a = admin()?;

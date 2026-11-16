@@ -94,6 +94,20 @@ def verify_my_vote():
     d.legend([(MUTED, "mensagem", False), (GREEN, "conferência", True), (BOTO, "registro", False)])
     return d
 
+def tie_draw():
+    d = D("tie-draw", 1100, 0, "Desempate por sorteio verificável", "Ninguém sozinho controla o sorteio; qualquer um o refaz a partir do quadro", "ELEIÇÕES")
+    A = [("a", "Apuração", "totais decifrados", "focal", 100), ("i", "Instituições", "parte da chave", "onca", 400), ("q", "Quadro", "chain de votos", "boto", 690), ("x", "Qualquer um", "e a economia", "link", 970)]
+    M = [("a", "i", "empate que a regra não desfaz (só candidatos)", "bad", False),
+         ("i", "q", "cada uma publica d_i · H com prova (DRAW)", "default", False),
+         ("q", "q", "t partes combinam: P = d · H, igual com quaisquer t", "accent", False),
+         ("i", "q", "assinam os MESMOS bytes: vencedor/finalistas + semente", "boto", False),
+         ("x", "q", "refaz o sorteio do quadro: tem de dar os mesmos bytes", "ok", True),
+         ("x", "q", "economia: ClaimElected comum", "default", False)]
+    N = [(1, "i", "H sai só do pleito e do empate: ninguém escolhe", 330), (2, "q", "Sem t instituições, ninguém sabe a semente", 330)]
+    d.sequence(A, M, notas=N, passo=36)
+    d.legend([(MUTED, "mensagem", False), (GREEN, "conferência", True), (BOTO, "registro", False), (RED, "empate", False)])
+    return d
+
 def dkg_ceremony():
     d = D("dkg-ceremony", 1100, 0, "Cerimônia de chave (DKG)", "A chave de decifração nasce dividida: ninguém a possui inteira", "CERIMÔNIA")
     A = [("a", "Validador A", "teko-node", "boto", 130), ("b", "Validador B", "teko-node", "boto", 400), ("c", "Validador C", "teko-node", "boto", 670), ("q", "Quadro", "público", "plain", 950)]

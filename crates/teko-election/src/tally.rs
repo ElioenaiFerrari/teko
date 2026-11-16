@@ -21,13 +21,17 @@ use teko_ballot_crypto::{
     solve_small_dlog, verify_decryption,
 };
 
+use teko_ballot_crypto::draw::{combine_draw, draw_seed, hash_to_point, verify_draw_share};
+
 use crate::ballot::{BallotBody, ballot_ctx, ciphertext_hash, verify_ballot};
+use crate::draw::{DrawNeed, DrawShareEntry, draw_ctx, draw_input};
 use crate::eligibility::Scope;
 use crate::lifecycle::{ElectionStatus, Phase, Transition, apply};
 use crate::manifest::{
     ElectionManifest, Office, OptionKind, ResultsVisibility, contest_hash, validate_revision,
     verify_manifest,
 };
+use crate::outcome::needs_draw;
 use crate::policy::GovernancePolicy;
 use crate::registration::{RegistrationVerifier, SubmittedRegistration, registration_message};
 use crate::result::{DecryptionShares, decrypt_ctx};
@@ -44,6 +48,8 @@ pub enum LogKind {
     Dkg,
     /// A validator's decryption shares for a closed, encrypted contest.
     Result,
+    /// A validator's share of the verifiable draw of a tie (ADR-0043).
+    Draw,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -302,6 +308,8 @@ pub struct Tallier {
     ceremonies: Vec<(Vec<u8>, VerifiedCeremony)>,
     /// Decryption shares accepted so far: contest -> `(validator index, point per option)`.
     shares: BTreeMap<String, Vec<(u32, Vec<Point>)>>,
+    /// Verified shares of the draw of each tied contest: contest -> `(validator index, d_i * H)`.
+    draws: BTreeMap<String, Vec<(u32, Point)>>,
     bad_results: u64,
     ignored: u64,
     orphans: u64,
@@ -325,6 +333,7 @@ impl Tallier {
             sums: BTreeMap::new(),
             ceremonies: Vec::new(),
             shares: BTreeMap::new(),
+            draws: BTreeMap::new(),
             bad_results: 0,
             ignored: 0,
             orphans: 0,
@@ -448,6 +457,9 @@ impl Tallier {
             }
             LogKind::Dkg => self.feed_dkg(e.payload),
             LogKind::Result => self.feed_result(e.payload),
+            LogKind::Draw => {
+                let _ = self.feed_draw(e.payload);
+            }
             LogKind::Ballot => {
                 let watched = self.watch.contains(&payload_hash(e.payload));
                 let (Some(m), Some(s)) = (self.manifest.as_ref(), self.status.as_ref()) else {
@@ -494,6 +506,122 @@ impl Tallier {
     /// The verdict on a watched ballot, once it has been fed.
     pub fn verdict_of(&self, payload: &[u8]) -> Option<BallotVerdict> {
         self.verdicts.get(&payload_hash(payload)).copied()
+    }
+
+    /// A validator's share of the draw of a tie (ADR-0043). Accepted only for a contest that is
+    /// CLOSED, revealed and really tied, for THIS tie (the input binds the tied options and their
+    /// votes), with a valid proof against the verification key of the key ceremony; one per validator.
+    fn feed_draw(&mut self, payload: &[u8]) -> Option<()> {
+        let d = DrawShareEntry::decode(payload).ok()?;
+        let m = self.manifest.as_ref()?;
+        let contest = m
+            .contest(&d.contest_id)
+            .filter(|_| d.election_id == m.election_id)?;
+        let hash = contest_hash(contest);
+        if m.tally_key.is_empty() || d.contest_hash.as_slice() != hash.as_slice() {
+            return None;
+        }
+        let ct = self
+            .contests
+            .iter()
+            .find(|c| c.contest_id == d.contest_id)?;
+        let need = needs_draw(contest, ct)?;
+        let input = draw_input(&d.election_id, &d.contest_id, &hash, &need);
+        if d.input != input {
+            return None;
+        }
+        let (_, cer) = self.ceremonies.iter().find(|(k, _)| *k == m.tally_key)?;
+        let vk = cer
+            .verification_keys
+            .iter()
+            .find(|(j, _)| *j == d.validator_index)?
+            .1;
+        let h = hash_to_point(&input)?;
+        let share = point_from_bytes(&d.share)?;
+        let proof = DecryptProof::from_bytes(&d.proof)?;
+        let ctx = draw_ctx(&d.election_id, &d.contest_id, &input, d.validator_index);
+        if !verify_draw_share(&vk, &h, &share, &proof, &ctx) {
+            return None;
+        }
+        let list = self.draws.entry(d.contest_id).or_default();
+        if list.iter().any(|(j, _)| *j == d.validator_index) {
+            return None; // one share per validator and tie
+        }
+        list.push((d.validator_index, share));
+        Some(())
+    }
+
+    /// The seed of the draw of a tied contest, once `threshold` valid shares are on the board.
+    /// Any `threshold` shares give the SAME point, so every honest node gets the same seed.
+    pub fn draw_seed(&self, contest_id: &str) -> Option<[u8; 32]> {
+        let m = self.manifest.as_ref()?;
+        let contest = m.contest(contest_id)?;
+        let ct = self.contests.iter().find(|c| c.contest_id == contest_id)?;
+        let need = needs_draw(contest, ct)?;
+        let (_, cer) = self.ceremonies.iter().find(|(k, _)| *k == m.tally_key)?;
+        let list = self.draws.get(contest_id)?;
+        if list.len() < cer.threshold {
+            return None;
+        }
+        let mut firsts: Vec<(u32, Point)> = list.clone();
+        firsts.sort_by_key(|(j, _)| *j);
+        firsts.truncate(cer.threshold);
+        let p = combine_draw(&firsts)?;
+        let input = draw_input(&m.election_id, contest_id, &contest_hash(contest), &need);
+        Some(draw_seed(&p, &input))
+    }
+
+    /// The contest is tied, a draw is possible (encrypted election with its key ceremony on the
+    /// board) and the seed is not there yet: an outcome would be premature.
+    pub fn awaits_draw(&self, contest_id: &str) -> bool {
+        let Some(m) = self.manifest.as_ref() else {
+            return false;
+        };
+        let (Some(contest), Some(ct)) = (
+            m.contest(contest_id),
+            self.contests.iter().find(|c| c.contest_id == contest_id),
+        ) else {
+            return false;
+        };
+        !m.tally_key.is_empty()
+            && self.ceremonies.iter().any(|(k, _)| *k == m.tally_key)
+            && needs_draw(contest, ct).is_some()
+            && self.draw_seed(contest_id).is_none()
+    }
+
+    /// How many valid shares of the draw of this contest are in, and how many are needed.
+    pub fn draw_progress(&self, contest_id: &str) -> (usize, usize) {
+        let need = self
+            .manifest
+            .as_ref()
+            .and_then(|m| self.ceremonies.iter().find(|(k, _)| *k == m.tally_key))
+            .map_or(0, |(_, c)| c.threshold);
+        (self.draws.get(contest_id).map_or(0, Vec::len), need)
+    }
+
+    /// The ties this validator still has to publish its share of: `(contest id, contest hash, tie)`.
+    /// Only contests of an encrypted election whose key ceremony is on the board (no ceremony, no draw).
+    pub fn pending_draws(&self, validator_index: u32) -> Vec<(String, [u8; 32], DrawNeed)> {
+        let Some(m) = self.manifest.as_ref() else {
+            return Vec::new();
+        };
+        if m.tally_key.is_empty() || !self.ceremonies.iter().any(|(k, _)| *k == m.tally_key) {
+            return Vec::new();
+        }
+        self.contests
+            .iter()
+            .filter(|c| {
+                !self
+                    .draws
+                    .get(&c.contest_id)
+                    .is_some_and(|v| v.iter().any(|(j, _)| *j == validator_index))
+            })
+            .filter_map(|c| {
+                let contest = m.contest(&c.contest_id)?;
+                let need = needs_draw(contest, c)?;
+                Some((c.contest_id.clone(), contest_hash(contest), need))
+            })
+            .collect()
     }
 
     fn feed_manifest(&mut self, payload: &[u8]) {
@@ -1788,6 +1916,156 @@ mod tests {
                 rng,
             );
             (LogKind::Result, r.encode_to_vec())
+        }
+
+        fn draw_entry(
+            m: &ElectionManifest,
+            ks: &KeyShare,
+            need: &crate::draw::DrawNeed,
+            rng: &mut StdRng,
+        ) -> (LogKind, Vec<u8>) {
+            use teko_ballot_crypto::draw::{draw_share, hash_to_point};
+            let c = m.contest(PRESIDENT).unwrap();
+            let hash = contest_hash(c);
+            let input = crate::draw::draw_input(&m.election_id, PRESIDENT, &hash, need);
+            let h = hash_to_point(&input).unwrap();
+            let ctx = crate::draw::draw_ctx(&m.election_id, PRESIDENT, &input, ks.index);
+            let (share, proof) = draw_share(&ks.secret, &h, &ctx, rng);
+            let e = crate::draw::DrawShareEntry {
+                election_id: m.election_id.clone(),
+                contest_id: PRESIDENT.into(),
+                contest_hash: hash.to_vec(),
+                input,
+                validator_index: ks.index,
+                share: point_to_bytes(&share).to_vec(),
+                proof: proof.to_bytes().to_vec(),
+            };
+            (LogKind::Draw, e.encode_to_vec())
+        }
+
+        #[test]
+        fn a_tie_is_drawn_from_the_validators_shares_and_any_threshold_of_them_gives_the_same_seed()
+        {
+            let k = keys(3, 41);
+            let pol = policy(&k, 2);
+            let (kshares, record) = ceremony(7);
+            let mut m = manifest();
+            m.tally_key = record.group_key.clone();
+            m.signatures = [0usize, 1]
+                .iter()
+                .map(|i| sign_manifest(&k[*i], &m))
+                .collect();
+            let st = steps(&m, &k, PRESIDENT, 0);
+            let mut rng = StdRng::seed_from_u64(9);
+            // 2 votes for option 0, 2 for option 1, 0 for option 2: a tie at the top
+            let voted: Vec<Voted> = [0usize, 1, 0, 1]
+                .iter()
+                .enumerate()
+                .map(|(i, c)| enc_ballot(&m, PRESIDENT, i as u8 + 1, *c, &mut rng))
+                .collect();
+            let sums = sum_ballots(3, &voted.iter().map(|v| &v.eb).collect::<Vec<_>>());
+            let mut log: Log = vec![
+                (LogKind::Manifest, m.encode_to_vec()),
+                (LogKind::Dkg, record.encode_to_vec()),
+            ];
+            log.extend(st[..3].iter().map(tr));
+            for v in &voted {
+                log.push((LogKind::Ballot, v.sub.encode_to_vec()));
+            }
+            let run_t = |log: &Log| {
+                let mut t = Tallier::new(pol.clone());
+                for (kind, p) in log {
+                    t.feed(LogEntry {
+                        kind: *kind,
+                        payload: p,
+                    });
+                }
+                t
+            };
+            // before the close and before the totals are revealed there is nothing to draw
+            let need = crate::draw::DrawNeed {
+                tied: vec![0, 1],
+                take: 1,
+                goal: crate::draw::DrawGoal::Winner,
+                votes: 2,
+            };
+            let early = draw_entry(&m, &kshares[0], &need, &mut rng);
+            let mut l = log.clone();
+            l.push(early.clone());
+            assert!(run_t(&l).pending_draws(1).is_empty());
+            assert_eq!(run_t(&l).draw_progress(PRESIDENT).0, 0);
+            // close and reveal (2 of 3 shares): now the tie exists and every validator owes its share
+            log.push(tr(&st[3]));
+            log.push(shares_entry(&m, &kshares[0], &sums, &mut rng));
+            log.push(shares_entry(&m, &kshares[1], &sums, &mut rng));
+            let t = run_t(&log);
+            assert!(t.snapshot().contest(PRESIDENT).unwrap().revealed);
+            let pend = t.pending_draws(1);
+            assert_eq!(pend.len(), 1);
+            assert_eq!(pend[0].2, need);
+            assert_eq!(t.draw_seed(PRESIDENT), None);
+
+            // a share for ANOTHER tie, with a forged proof, or from an outsider is refused; one per validator
+            let other = crate::draw::DrawNeed {
+                votes: 3,
+                ..need.clone()
+            };
+            let mut l = log.clone();
+            l.push(draw_entry(&m, &kshares[0], &other, &mut rng));
+            let bad = KeyShare {
+                index: 2,
+                secret: kshares[1].secret + Scalar::ONE,
+                group_public_key: kshares[1].group_public_key,
+                verification_keys: kshares[1].verification_keys.clone(),
+            };
+            l.push(draw_entry(&m, &bad, &need, &mut rng));
+            let mut outsider = crate::draw::DrawShareEntry::decode(
+                draw_entry(&m, &kshares[2], &need, &mut rng).1.as_slice(),
+            )
+            .unwrap();
+            outsider.validator_index = 9;
+            l.push((LogKind::Draw, outsider.encode_to_vec()));
+            assert_eq!(
+                run_t(&l).draw_progress(PRESIDENT).0,
+                0,
+                "none of those counts"
+            );
+            // one valid share is not enough; two (the threshold) give a seed; a duplicate adds nothing
+            log.push(draw_entry(&m, &kshares[0], &need, &mut rng));
+            log.push(draw_entry(&m, &kshares[0], &need, &mut rng));
+            let t = run_t(&log);
+            assert_eq!(t.draw_progress(PRESIDENT), (1, 2));
+            assert!(t.draw_seed(PRESIDENT).is_none());
+            assert_eq!(t.pending_draws(1).len(), 0, "validator 1 has published");
+            assert_eq!(t.pending_draws(2).len(), 1);
+            // whichever two validators contribute, the seed is the same
+            let mut seeds = Vec::new();
+            for pair in [[0usize, 1], [1, 2], [0, 2]] {
+                let mut l = log[..log.len() - 2].to_vec();
+                for i in pair {
+                    l.push(draw_entry(&m, &kshares[i], &need, &mut rng));
+                }
+                seeds.push(run_t(&l).draw_seed(PRESIDENT).unwrap());
+            }
+            assert_eq!(seeds[0], seeds[1]);
+            assert_eq!(seeds[1], seeds[2]);
+            // ...and with it the contest is DECIDED among the tied, with the same bytes everywhere
+            let c = m.contest(PRESIDENT).unwrap();
+            let t = run_t(&log);
+            let snap = t.snapshot();
+            let ct = snap.contest(PRESIDENT).unwrap();
+            assert!(crate::outcome::needs_draw(c, ct).is_some());
+            let o = crate::outcome::decide_with(
+                "v",
+                &m.election_id,
+                c,
+                &contest_hash(c),
+                ct,
+                Some(&seeds[0]),
+            )
+            .unwrap();
+            assert_eq!(o.kind(), crate::outcome::OutcomeKind::Elected);
+            assert!(o.winner_option < 2 && o.drawn && o.draw_seed == seeds[0].to_vec());
         }
 
         #[test]

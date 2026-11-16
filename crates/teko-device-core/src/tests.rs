@@ -4066,3 +4066,35 @@ fn credential_operations_need_a_wallet() {
     )));
     assert_eq!(failure_code(&r), Some(ErrorCode::InvalidState));
 }
+
+#[test]
+fn a_device_with_a_credential_in_the_old_format_says_so_instead_of_failing_mysteriously() {
+    use crate::hal::SecureStorage;
+    use prost::Message as _;
+    let (w, hal, dev, _) = ready();
+    // what an old onboarding left in the storage: not a civic bundle
+    let mut p = crate::state::Persisted::decode(hal.raw_storage().unwrap().as_slice()).unwrap();
+    p.credential = vec![0x0a, 0x1d, b'A', b'u', b't', 0xFF, 0xFF, 0xFF];
+    drop(dev);
+    assert!(hal.clone().store(&p.encode_to_vec()));
+    let mut dev = boot(&w, &hal, 8);
+    hal.set_default_pin(Some(PIN));
+    assert!(matches!(
+        dev.handle(Request::Unlock(Unlock {})),
+        Response::Unlocked(_)
+    ));
+    let r = dev.handle(Request::ProveAttribute(ProveAttribute {
+        predicate: Some(Predicate {
+            kind: PredicateKind::Reveal as i32,
+            arg: 0,
+            name: "nationality".into(),
+        }),
+        verifier_nonce: vec![7; 16],
+        verifier_name: "Banco".into(),
+    }));
+    let Response::Failure(f) = r else {
+        panic!("{r:?}")
+    };
+    assert_eq!(f.code(), ErrorCode::LegacyCredential);
+    assert!(f.message.contains("make reset"), "{}", f.message);
+}

@@ -28,6 +28,7 @@ mod ballot;
 mod codec;
 pub mod dkg;
 pub mod dkg_wire;
+pub mod draw;
 mod elgamal;
 mod proofs;
 

@@ -387,3 +387,24 @@ fn the_block_simulators_filler_entries_never_change_a_count() {
         );
     }
 }
+
+#[test]
+fn simulating_with_no_open_contest_fails_and_says_what_to_do_instead_of_reporting_zero() {
+    let admin = setup("noopen");
+    admin.close_due(99_999_999_999).unwrap();
+    let e = admin.simulate_batch(10, 1).unwrap_err().to_string();
+    assert!(
+        e.contains("nenhum pleito com a votação aberta") && e.contains("make election"),
+        "{e}"
+    );
+    let e = admin
+        .simulate_live(5, Duration::from_millis(300), 1, |_| {})
+        .unwrap_err()
+        .to_string();
+    assert!(e.contains("nenhum pleito"), "{e}");
+    let e = admin
+        .simulate_exact("presidente", &[1, 1], 1)
+        .unwrap_err()
+        .to_string();
+    assert!(e.contains("nenhum pleito"), "{e}");
+}

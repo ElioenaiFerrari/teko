@@ -316,6 +316,9 @@ struct SimContest {
     registration: Option<(IssuerKey, Vec<u8>)>,
     /// The election's public key when ballots are ENCRYPTED (else empty).
     tally_key: Vec<u8>,
+    /// How many seats the contest has (ADR-0044) and where blank and null are on the ballot.
+    seats: usize,
+    special: Vec<usize>,
 }
 
 impl Admin {
@@ -598,6 +601,8 @@ impl Admin {
                 weight: synthetic_weight(&c.contest_id),
                 registration,
                 tally_key: manifest.tally_key.clone(),
+                seats: c.seat_count(),
+                special: c.special_positions(),
             });
         }
         if out.is_empty() {
@@ -661,8 +666,10 @@ impl Admin {
         let row = planted
             .entry(c.id.clone())
             .or_insert_with(|| vec![0; c.cdf.len()]);
-        if let Some(n) = row.get_mut(chosen as usize) {
-            *n += 1;
+        for pick in chosen {
+            if let Some(n) = row.get_mut(pick as usize) {
+                *n += 1;
+            }
         }
         out
     }
@@ -675,19 +682,38 @@ impl Admin {
         seed: u64,
         rng: &mut Prng,
         forced: Option<u32>,
-    ) -> Option<(SubmittedBallot, u32)> {
+    ) -> Option<(SubmittedBallot, Vec<u32>)> {
         let root = tagged_hash(
             "teko/sim/voter-root",
             &[&seed.to_be_bytes(), &voter.to_be_bytes()],
         );
         let key = derive_voter_key(&root, election, &c.id).ok()?;
         let u = rng.unit();
-        let option_index = forced.unwrap_or_else(|| {
+        // the voter's pick from the popularity curve
+        let pick = |u: f64| -> u32 {
             c.cdf
                 .iter()
                 .position(|x| u <= *x)
                 .unwrap_or(c.cdf.len() - 1) as u32
-        });
+        };
+        let first = forced.unwrap_or_else(|| pick(u));
+        // a SENATE ballot with 2 seats: half of the voters who pick a candidate add a second,
+        // DISTINCT one (blank and null always stand alone, ADR-0044)
+        let mut choices = vec![first];
+        if forced.is_none()
+            && c.seats > 1
+            && !c.special.contains(&(first as usize))
+            && rng.unit() < 0.5
+        {
+            for _ in 0..16 {
+                let second = pick(rng.unit());
+                if second != first && !c.special.contains(&(second as usize)) {
+                    choices.push(second);
+                    break;
+                }
+            }
+        }
+        let option_index = first;
         let voter_key = public_key_bytes(&key);
         // Encrypted election: build a REAL encrypted ballot with real proofs (what the
         // device does); the body then names no option, only the ciphertext hash.
@@ -697,13 +723,14 @@ impl Admin {
             let pk = teko_ballot_crypto::point_from_bytes(&c.tally_key)?;
             let ctx = teko_election::ballot_ctx(election, &c.id, &voter_key);
             let mut brng = rand::rand_core::UnwrapErr(rand::rngs::SysRng);
-            let eb = teko_ballot_crypto::encrypt_ballot(
-                &pk,
-                c.cdf.len(),
-                option_index as usize,
-                &ctx,
-                &mut brng,
-            )?;
+            let shape = teko_ballot_crypto::BallotShape {
+                n: c.cdf.len(),
+                seats: c.seats,
+                special: &c.special,
+            };
+            let positions: Vec<usize> = choices.iter().map(|x| *x as usize).collect();
+            let eb =
+                teko_ballot_crypto::encrypt_ballot_multi(&pk, &shape, &positions, &ctx, &mut brng)?;
             let bytes = eb.to_bytes();
             (0, teko_election::ciphertext_hash(&bytes), bytes)
         };
@@ -724,7 +751,7 @@ impl Admin {
                 signature: sign_ballot(&key, &body),
                 encrypted,
             },
-            option_index,
+            choices,
         ))
     }
 

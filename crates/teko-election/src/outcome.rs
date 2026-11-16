@@ -77,6 +77,14 @@ pub struct ElectionOutcome {
     pub draw_tied: Vec<u32>,
     #[prost(bytes = "vec", tag = "19")]
     pub draw_seed: Vec<u8>,
+    /// A SENATOR contest (ADR-0044): how many seats, and who got them (the options, best first, and
+    /// their candidacy credentials). Empty for every other office, whose bytes are unchanged.
+    #[prost(uint32, tag = "20")]
+    pub seats: u32,
+    #[prost(uint32, repeated, tag = "21")]
+    pub elected: Vec<u32>,
+    #[prost(bytes = "vec", repeated, tag = "22")]
+    pub elected_credentials: Vec<Vec<u8>>,
 }
 
 /// What an institution publishes on the board: the outcome and its signature. The entry kind is
@@ -132,6 +140,9 @@ pub fn decide(
 enum Plan {
     Elect(usize),
     Runoff(usize, usize),
+    /// A multi-seat contest: these options (best first) take the seats; fewer than the seats when
+    /// fewer candidates got votes (the rest stay vacant).
+    ElectMany(Vec<usize>),
     /// A tie the rule cannot break: the draw decides.
     Draw {
         need: DrawNeed,
@@ -151,7 +162,7 @@ struct Analysis {
 
 /// The rule, on the verified totals. `None` when there is nothing to decide yet.
 fn analyze(contest: &Contest, tally: &ContestTally) -> Option<Analysis> {
-    if !contest.office().is_single_seat() {
+    if !contest.office().is_majoritarian() {
         return None;
     }
     if !matches!(
@@ -160,11 +171,12 @@ fn analyze(contest: &Contest, tally: &ContestTally) -> Option<Analysis> {
     ) || (tally.encrypted && !tally.revealed)
         || tally.options.len() != contest.options.len()
         || tally.options.len() < 2
+        || tally.seats != contest.seat_count()
     {
         return None;
     }
     let totals: Vec<u64> = tally.options.iter().map(|o| o.votes).collect();
-    if totals.iter().sum::<u64>() != tally.accepted {
+    if !tally.totals_fit_the_ballots() {
         return None;
     }
     // only CANDIDATES compete and count for the majority; blank and null are reported apart (ADR-0042)
@@ -191,7 +203,28 @@ fn analyze(contest: &Contest, tally: &ContestTally) -> Option<Analysis> {
         votes: totals[group[0]],
     };
     let (first, second) = (order[0], order[1]);
-    let plan = if valid == 0 {
+    let plan = if contest.office() == Office::Senator {
+        // MULTI-SEAT (ADR-0044): only candidates WITH votes compete; the N best win; a tie at the cut
+        // is drawn; fewer than N with votes leaves seats vacant (nobody is drawn among zero votes)
+        let n = contest.seat_count();
+        let comp: Vec<usize> = order.iter().copied().filter(|i| totals[*i] > 0).collect();
+        if comp.is_empty() {
+            Plan::Nobody
+        } else if comp.len() <= n || totals[comp[n - 1]] > totals[comp[n]] {
+            Plan::ElectMany(comp.into_iter().take(n).collect())
+        } else {
+            let cut = totals[comp[n - 1]];
+            let mut group: Vec<usize> =
+                comp.iter().copied().filter(|i| totals[*i] == cut).collect();
+            group.sort_unstable();
+            let ahead: Vec<usize> = comp.iter().copied().filter(|i| totals[*i] > cut).collect();
+            let take = n - ahead.len();
+            Plan::Draw {
+                need: need(&group, take, DrawGoal::Seats),
+                ahead,
+            }
+        }
+    } else if valid == 0 {
         Plan::Nobody
     } else if contest.runoff && round == 1 {
         if totals[first] * 2 > valid {
@@ -285,6 +318,21 @@ pub fn decide_with(
         drawn: false,
         draw_tied: Vec::new(),
         draw_seed: Vec::new(),
+        seats: if contest.office() == Office::Senator {
+            contest.seat_count() as u32
+        } else {
+            0
+        },
+        elected: Vec::new(),
+        elected_credentials: Vec::new(),
+    };
+    let elect_many = |list: &[usize], out: &mut ElectionOutcome| {
+        out.kind = OutcomeKind::Elected as i32;
+        out.elected = list.iter().map(|i| *i as u32).collect();
+        out.elected_credentials = list
+            .iter()
+            .map(|i| contest.options[*i].credential_id.clone())
+            .collect();
     };
     let elect = |i: usize, out: &mut ElectionOutcome| {
         out.kind = OutcomeKind::Elected as i32;
@@ -303,6 +351,7 @@ pub fn decide_with(
     match a.plan {
         Plan::Nobody => {}
         Plan::Elect(i) => elect(i, &mut out),
+        Plan::ElectMany(list) => elect_many(&list, &mut out),
         Plan::Runoff(x, y) => runoff([x, y], &mut out),
         Plan::Draw { need, ahead } => {
             if let Some(seed) = draw_seed {
@@ -312,6 +361,11 @@ pub fn decide_with(
                 out.draw_tied = order.clone();
                 match need.goal {
                     DrawGoal::Winner => elect(order[0] as usize, &mut out),
+                    DrawGoal::Seats => {
+                        let mut list = ahead;
+                        list.extend(order.iter().take(need.take as usize).map(|i| *i as usize));
+                        elect_many(&list, &mut out);
+                    }
                     DrawGoal::Finalists => {
                         let mut f = ahead;
                         f.extend(order.iter().take(need.take as usize).map(|i| *i as usize));
@@ -425,6 +479,7 @@ mod tests {
                     kind: c.options[i].kind(),
                 })
                 .collect(),
+            seats: c.seat_count(),
         }
     }
 
@@ -540,6 +595,108 @@ mod tests {
         needs_draw(c, &tally_of(c, votes))
     }
 
+    /// A senator contest: `n` candidates, blank and null, with the given seats (ADR-0044).
+    fn senator(n: usize, seats: u32) -> Contest {
+        let mut c = contest_bn(n, false, "");
+        c.office = Office::Senator as i32;
+        c.seats = seats;
+        c
+    }
+
+    #[test]
+    fn a_senate_contest_elects_the_n_most_voted_candidates_with_blank_and_null_outside() {
+        // 2 seats, 4 candidates + blank + null
+        let c = senator(4, 2);
+        let o = run(&c, &[30, 25, 20, 10, 6, 3]);
+        assert_eq!(o.kind(), OutcomeKind::Elected);
+        assert_eq!((o.seats, o.elected.clone()), (2, alloc::vec![0, 1]));
+        assert_eq!(
+            o.elected_credentials,
+            alloc::vec![alloc::vec![1; 32], alloc::vec![2; 32]]
+        );
+        assert_eq!((o.blank_votes, o.null_votes), (6, 3));
+        assert!(!o.drawn && need(&c, &[30, 25, 20, 10, 6, 3]).is_none());
+        // best first even when the ballot order differs
+        let o = run(&c, &[10, 20, 30, 25, 0, 0]);
+        assert_eq!(o.elected, alloc::vec![2, 3]);
+        // one seat: the most voted
+        let c1 = senator(3, 1);
+        let o = run(&c1, &[10, 30, 20, 5, 0]);
+        assert_eq!((o.seats, o.elected.clone()), (1, alloc::vec![1]));
+        // the other offices keep their bytes: no seats, no list
+        let g = run(&contest(3, false, ""), &[10, 30, 20]);
+        assert_eq!((g.seats, g.elected.len()), (0, 0));
+    }
+
+    #[test]
+    fn a_tie_at_the_cut_of_the_seats_is_drawn_and_zero_votes_never_take_a_seat() {
+        let c = senator(4, 2);
+        // [30,20,20,5]: the leader is in, the draw fills the other seat among the two tied
+        let n = need(&c, &[30, 20, 20, 5, 0, 0]).unwrap();
+        assert_eq!(
+            (n.tied.clone(), n.take, n.goal),
+            (alloc::vec![1, 2], 1, DrawGoal::Seats)
+        );
+        assert_eq!(
+            run(&c, &[30, 20, 20, 5, 0, 0]).kind(),
+            OutcomeKind::Tie,
+            "pending the draw"
+        );
+        let mut second = alloc::collections::BTreeSet::new();
+        for seed in 0..60u8 {
+            let o = drawn(&c, &[30, 20, 20, 5, 0, 0], seed);
+            assert_eq!(o.kind(), OutcomeKind::Elected);
+            assert!(o.drawn && o.elected[0] == 0);
+            second.insert(o.elected[1]);
+            assert_eq!(o.draw_tied.len(), 2);
+        }
+        assert_eq!(second, alloc::collections::BTreeSet::from([1, 2]));
+        // three tied for two seats: two different ones
+        let c3 = senator(3, 2);
+        for seed in 0..40u8 {
+            let o = drawn(&c3, &[20, 20, 20, 0, 0], seed);
+            assert_ne!(o.elected[0], o.elected[1]);
+            assert!(o.elected.iter().all(|e| *e < 3));
+        }
+        // fewer candidates with votes than seats: the rest stay VACANT, nobody is drawn among zeros
+        let o = run(&c, &[30, 0, 0, 0, 5, 5]);
+        assert_eq!(o.elected, alloc::vec![0]);
+        assert!(need(&c, &[30, 0, 0, 0, 5, 5]).is_none());
+        // nobody voted for a candidate: nobody is elected
+        assert_eq!(run(&c, &[0, 0, 0, 0, 9, 9]).kind(), OutcomeKind::Tie);
+        // one seat: a tie at the top is drawn too
+        let c1 = senator(3, 1);
+        let n = need(&c1, &[20, 20, 5, 0, 0]).unwrap();
+        assert_eq!((n.take, n.goal), (1, DrawGoal::Seats));
+    }
+
+    #[test]
+    fn the_totals_of_a_multi_seat_contest_must_fit_the_ballots_that_were_counted() {
+        let c = senator(3, 2);
+        // 10 ballots; candidates got 12 votes, blank 1 (weighs 2), null 0: weighted 14 is in 10..=20
+        let mut t = tally_of(&c, &[6, 4, 2, 1, 0]);
+        t.accepted = 10;
+        assert!(decide("v", "e", &c, &[9; 32], &t).is_some());
+        // 10 ballots but 25 candidate votes: impossible with 2 seats (at most 20)
+        let mut t = tally_of(&c, &[10, 10, 5, 0, 0]);
+        t.accepted = 10;
+        assert!(decide("v", "e", &c, &[9; 32], &t).is_none());
+        // fewer weighted votes than ballots: every ballot has at least one vote
+        let mut t = tally_of(&c, &[3, 2, 0, 0, 0]);
+        t.accepted = 10;
+        assert!(decide("v", "e", &c, &[9; 32], &t).is_none());
+        // a one-seat contest still has to add up EXACTLY
+        let c1 = contest_bn(3, false, "");
+        let mut t = tally_of(&c1, &[6, 3, 2, 0, 0]);
+        t.accepted = 10;
+        assert!(decide("v", "e", &c1, &[9; 32], &t).is_none());
+        // the tally of another seat count is not this contest's
+        let mut t = tally_of(&c, &[6, 4, 2, 1, 0]);
+        t.accepted = 10;
+        t.seats = 1;
+        assert!(decide("v", "e", &c, &[9; 32], &t).is_none());
+    }
+
     #[test]
     fn a_tie_at_the_top_is_decided_by_the_draw_and_only_among_the_tied() {
         // two candidates, no majority: the draw ELECTS (a runoff of the same two would change nothing)
@@ -651,10 +808,19 @@ mod tests {
         let mut t = tally(&[3, 1]);
         t.accepted = 99; // totals that do not add up
         assert!(decide("c", "e", &c, &h, &t).is_none());
-        // a multi-seat office is PENDING
-        let mut sen = contest(3, false, "");
-        sen.office = Office::Senator as i32;
-        assert!(decide("c", "e", &sen, &h, &tally(&[3, 2, 1])).is_none());
+        // the PROPORTIONAL offices (deputies, councillors: they need parties) are still PENDING
+        for office in [
+            Office::FederalDeputy,
+            Office::StateDeputy,
+            Office::CityCouncillor,
+        ] {
+            let mut prop = contest(3, false, "");
+            prop.office = office as i32;
+            assert!(
+                decide("c", "e", &prop, &h, &tally(&[3, 2, 1])).is_none(),
+                "{office:?}"
+            );
+        }
     }
 
     #[test]
@@ -684,6 +850,29 @@ mod tests {
     }
 
     proptest! {
+        #[test]
+        fn a_senate_contest_never_elects_more_than_its_seats_nor_a_candidate_without_votes(
+            votes in proptest::collection::vec(0u64..30, 3..7), seats in 1u32..=2, seed in any::<u8>()
+        ) {
+            let c = senator(votes.len(), seats);
+            let mut v = votes.clone();
+            v.extend([0, 0]);
+            let o = drawn(&c, &v, seed);
+            prop_assert!(o.elected.len() <= seats as usize);
+            prop_assert!(o.elected.iter().all(|e| votes[*e as usize] > 0));
+            let mut sorted = o.elected.clone();
+            sorted.sort_unstable();
+            sorted.dedup();
+            prop_assert_eq!(sorted.len(), o.elected.len(), "no one twice");
+            // everyone not elected has no more votes than the LEAST voted of the elected
+            if let Some(least) = o.elected.iter().map(|e| votes[*e as usize]).min() {
+                for (i, x) in votes.iter().enumerate() {
+                    if !o.elected.contains(&(i as u32)) { prop_assert!(*x <= least); }
+                }
+            }
+            if votes.iter().all(|x| *x == 0) { prop_assert_eq!(o.kind(), OutcomeKind::Tie); }
+        }
+
         #[test]
         fn with_a_seed_every_decidable_contest_is_decided_among_the_right_candidates(
             votes in proptest::collection::vec(0u64..40, 2..8), runoff in any::<bool>(), seed in any::<u8>()

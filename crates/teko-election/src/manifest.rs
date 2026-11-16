@@ -16,9 +16,10 @@ use crate::text::sanitize_text;
 pub const BALLOT_KIND_PUBLIC: &str = "public";
 
 /// 3: options may reference the candidate's on-chain credential, contests may allow or be a runoff
-/// (ADR-0040). 4: an option may be BLANK or NULL (ADR-0042). Firmware of an older version re-encodes
+/// (ADR-0040). 4: an option may be BLANK or NULL (ADR-0042). 5: a contest may have SEVERAL seats
+/// (`Contest.seats`, ADR-0044). Firmware of an older version re-encodes
 /// without the new fields and refuses the signature.
-pub const FORMAT_VERSION: u32 = 4;
+pub const FORMAT_VERSION: u32 = 5;
 /// The fixed names of the special options.
 pub const BLANK_NAME: &str = "Branco";
 pub const NULL_NAME: &str = "Nulo";
@@ -70,10 +71,16 @@ impl Office {
         }
     }
 
-    /// One seat filled by majority: only these can be ELECTED automatically and have a runoff
-    /// (ADR-0040). Senator and the deputies and councillors (several seats, proportional) are PENDING.
+    /// One seat filled by majority: these can have a runoff (ADR-0040).
     pub fn is_single_seat(self) -> bool {
         matches!(self, Office::President | Office::Governor | Office::Mayor)
+    }
+
+    /// Decided automatically by votes in candidates: the single-seat offices (with a runoff) and the
+    /// SENATOR (1 or 2 seats, the most voted win, no runoff, ADR-0044). The deputies and councillors
+    /// (proportional, they need parties) are PENDING.
+    pub fn is_majoritarian(self) -> bool {
+        self.is_single_seat() || self == Office::Senator
     }
 }
 
@@ -155,9 +162,32 @@ pub struct Contest {
     /// round has exactly the two finalists.
     #[prost(string, tag = "9")]
     pub parent: String,
+    /// How many people the contest elects (ADR-0044): only a SENATOR sets it (1 or 2, explicit);
+    /// every other office leaves 0 (one seat), so their encoding and hash are unchanged.
+    #[prost(uint32, tag = "10")]
+    pub seats: u32,
 }
 
 impl Contest {
+    /// Positions of the BLANK and NULL options (what the ballot proofs weigh by the seats).
+    pub fn special_positions(&self) -> Vec<usize> {
+        self.options
+            .iter()
+            .enumerate()
+            .filter(|(_, o)| !o.is_candidate())
+            .map(|(i, _)| i)
+            .collect()
+    }
+
+    /// Seats filled: `seats` for a Senator, one for everybody else.
+    pub fn seat_count(&self) -> usize {
+        if self.seats == 0 {
+            1
+        } else {
+            self.seats as usize
+        }
+    }
+
     /// The candidates (not blank or null), in ballot order.
     pub fn candidates(&self) -> impl Iterator<Item = &ElectionOption> {
         self.options.iter().filter(|o| o.is_candidate())
@@ -260,8 +290,17 @@ fn validate_contest(c: &Contest) -> Result<(), ElectionError> {
             return Err(bad("a second round has exactly two candidates"));
         }
     }
-    if c.candidates().count() < 2 {
-        return Err(bad("need at least two candidates"));
+    // seats (ADR-0044): a Senator says 1 or 2; nobody else has more than one
+    match office {
+        Office::Senator if !(1..=2).contains(&c.seats) => {
+            return Err(bad("a senator contest has 1 or 2 seats"));
+        }
+        Office::Senator => {}
+        _ if c.seats != 0 => return Err(bad("only a senator contest sets seats")),
+        _ => {}
+    }
+    if c.candidates().count() < 2 || c.candidates().count() <= c.seat_count() {
+        return Err(bad("need more candidates than seats (and at least two)"));
     }
     for kind in [OptionKind::Blank, OptionKind::Null] {
         if c.options.iter().filter(|o| o.kind() == kind).count() > 1 {
@@ -340,6 +379,11 @@ pub fn validate_manifest(m: &ElectionManifest) -> Result<(), ElectionError> {
     }
     if m.revision == 0 {
         return Err(bad("revision starts at 1"));
+    }
+    if m.tally_key.is_empty() && m.contests.iter().any(|c| c.seats > 1) {
+        return Err(bad(
+            "a contest with several seats needs an encrypted election",
+        ));
     }
     if !m.tally_key.is_empty() {
         if teko_ballot_crypto::point_from_bytes(&m.tally_key).is_none() {
@@ -708,6 +752,56 @@ mod tests {
             validate_contest(&few).is_err(),
             "one candidate and two specials is not a contest"
         );
+    }
+
+    fn senate(seats: u32, cands: usize) -> Contest {
+        let names: Vec<alloc::string::String> =
+            (0..cands).map(|i| alloc::format!("Cand {i}")).collect();
+        let refs: Vec<&str> = names.iter().map(String::as_str).collect();
+        let mut c = manifest().contests[1].clone();
+        c.contest_id = "senador-sp".into();
+        c.office = Office::Senator as i32;
+        c.seats = seats;
+        c.options = fixtures::options(&refs, 100);
+        with_specials(c)
+    }
+
+    #[test]
+    fn a_senate_contest_has_one_or_two_seats_needs_more_candidates_than_seats_and_two_seats_need_encryption()
+     {
+        for seats in [1u32, 2] {
+            assert!(validate_contest(&senate(seats, 3)).is_ok(), "{seats} seats");
+        }
+        // seats are explicit for a senator, 1 or 2, and nobody else sets them
+        assert!(validate_contest(&senate(0, 3)).is_err());
+        assert!(validate_contest(&senate(3, 5)).is_err());
+        let mut gov = manifest().contests[1].clone();
+        gov.seats = 2;
+        assert!(validate_contest(&gov).is_err());
+        // more candidates than seats
+        assert!(validate_contest(&senate(2, 2)).is_err());
+        assert!(validate_contest(&senate(1, 1)).is_err());
+        // a senator has no runoff or second round
+        let mut r = senate(1, 3);
+        r.runoff = true;
+        assert!(validate_contest(&r).is_err());
+        // two seats need the election key (the range proof lives in the encrypted ballot)
+        let mut m = manifest();
+        m.contests.push(senate(2, 3));
+        assert!(validate_manifest(&m).is_err(), "no tally_key");
+        m.tally_key =
+            teko_ballot_crypto::point_to_bytes(&teko_ballot_crypto::Point::GENERATOR).to_vec();
+        assert!(validate_manifest(&m).is_ok());
+        // one seat does not need it
+        let mut m = manifest();
+        m.contests.push(senate(1, 3));
+        assert!(validate_manifest(&m).is_ok());
+        // the seats are signed: another count is another contest
+        assert_ne!(contest_hash(&senate(1, 3)), contest_hash(&senate(2, 3)));
+        // an office that never sets seats keeps its old encoding and hash
+        let g = manifest().contests[1].clone();
+        assert_eq!(g.seats, 0);
+        assert_eq!(g.seat_count(), 1);
     }
 
     #[test]

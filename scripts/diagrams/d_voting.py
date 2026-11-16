@@ -23,6 +23,20 @@ def ballot_anatomy():
     d.legend([(BOTO, "tudo isto é público no quadro", False)])
     return d
 
+def senate_ballot():
+    d = D("senate-ballot", 1100, 600, "Cédula de várias vagas (Senador)", "Uma prova só impõe a regra: 1 a N candidatos distintos, ou só branco, ou só nulo", "VOTAÇÃO")
+    d.region(40, 110, 1020, 150, "O que a cédula prova (N = número de vagas)", "boto")
+    d.node(70, 150, 300, 90, "Cada opção é 0 ou 1", "candidatos distintos", "plain", "prova 0/1")
+    d.node(400, 150, 300, 90, "Total ponderado T'", "candidatos + N × (branco + nulo)", "focal", "soma")
+    d.node(730, 150, 300, 90, "T' está em 1 até N", "OU de Chaum-Pedersen", "plain", "prova de faixa")
+    d.region(40, 285, 1020, 205, "Com 2 vagas (N = 2)", "optional")
+    rows = [("1 candidato: T' = 1", "ok"), ("2 candidatos distintos: T' = 2", "ok"), ("só branco ou só nulo: T' = 2", "ok"),
+            ("candidato + branco: T' = 3, recusada", "bad"), ("3 candidatos: T' = 3, recusada", "bad")]
+    for i, (t, k) in enumerate(rows):
+        d.node(70 + (i % 3) * 320, 325 + (i // 3) * 80, 300, 62, t, None, k)
+    d.legend([(GREEN, "cédula válida", False), (RED, "recusada pelas provas", False)])
+    return d
+
 def election_lifecycle():
     d = D("election-lifecycle", 1100, 520, "Ciclo de vida do pleito", "Cada transição exige M-de-N órgãos, ou o prazo, e fica no histórico", "ELEIÇÃO")
     d.arrow([(240, 178), (300, 178)], "default")

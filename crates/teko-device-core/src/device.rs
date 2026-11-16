@@ -452,9 +452,12 @@ impl<H: Hal, R: Rng + CryptoRng> Device<H, R> {
             Request::FinishRegistration(m) => {
                 self.finish_registration(&m.election_id, &m.contest_id, &m.blind_signature)
             }
-            Request::SignBallot(m) => {
-                self.sign_ballot(&m.election_id, &m.contest_id, m.option_index)
-            }
+            Request::SignBallot(m) => self.sign_ballot(
+                &m.election_id,
+                &m.contest_id,
+                m.option_index,
+                &m.option_indices,
+            ),
             Request::Wipe(_) => self.wipe(),
             Request::GetIdentityRequest(m) => {
                 self.get_identity_request(&m.authority_nonce, &m.authority_name)
@@ -1836,6 +1839,7 @@ impl<H: Hal, R: Rng + CryptoRng> Device<H, R> {
                     registration_required: !c.registration_key.is_empty(),
                     option_numbers: c.options.iter().map(|o| o.number.clone()).collect(),
                     option_kinds: c.options.iter().map(|o| o.kind as u32).collect(),
+                    seats: c.seat_count() as u32,
                     parent: c.parent.clone(),
                 }
             })
@@ -2124,6 +2128,7 @@ impl<H: Hal, R: Rng + CryptoRng> Device<H, R> {
         election_id: &str,
         contest_id: &str,
         option_index: u32,
+        option_indices: &[u32],
     ) -> Result<Response, Failure> {
         self.require_ready()?;
         let (manifest, status) = self.stored_election()?;
@@ -2162,11 +2167,51 @@ impl<H: Hal, R: Rng + CryptoRng> Device<H, R> {
                 "este dispositivo já votou neste pleito",
             ));
         }
-        let option = contest
-            .options
+        // WHAT the voter chose: one option (one seat) or up to `seats` DISTINCT ones (ADR-0044)
+        let wanted: Vec<u32> = if option_indices.is_empty() {
+            Vec::from([option_index])
+        } else if option_index != 0 {
+            return Err(fail(
+                ErrorCode::InvalidArgument,
+                "use option_index ou option_indices, não os dois",
+            ));
+        } else {
+            option_indices.to_vec()
+        };
+        let seats = contest.seat_count();
+        let mut positions: Vec<usize> = Vec::new();
+        for w in &wanted {
+            let pos = contest
+                .options
+                .iter()
+                .position(|o| o.index == *w)
+                .ok_or_else(|| fail(ErrorCode::InvalidArgument, "opção inexistente"))?;
+            if positions.contains(&pos) {
+                return Err(fail(ErrorCode::InvalidArgument, "a mesma opção duas vezes"));
+            }
+            positions.push(pos);
+        }
+        let options: Vec<&teko_election::ElectionOption> = positions
             .iter()
-            .find(|o| o.index == option_index)
-            .ok_or_else(|| fail(ErrorCode::InvalidArgument, "opção inexistente"))?;
+            .filter_map(|p| contest.options.get(*p))
+            .collect();
+        let specials = options.iter().filter(|o| !o.is_candidate()).count();
+        let candidates = options.len() - specials;
+        // 1..=seats candidates, OR exactly one blank/null alone (the ballot proof enforces the same)
+        let rule_ok = (specials == 1 && candidates == 0)
+            || (specials == 0 && (1..=seats).contains(&candidates));
+        if !rule_ok {
+            return Err(fail(
+                ErrorCode::InvalidArgument,
+                "escolha de 1 até o número de vagas em candidatos distintos, ou só branco, ou só nulo",
+            ));
+        }
+        if seats > 1 && manifest.tally_key.is_empty() {
+            return Err(fail(
+                ErrorCode::InvalidArgument,
+                "pleito de várias vagas exige eleição cifrada",
+            ));
+        }
 
         // EVERYTHING shown comes from the verified manifest, never from the host.
         let mut lines = Vec::from([String::from("Eleição:")]);
@@ -2174,18 +2219,28 @@ impl<H: Hal, R: Rng + CryptoRng> Device<H, R> {
         lines.push(String::from("Pleito:"));
         lines.extend(wrap(&contest.title, 28));
         lines.push(jurisdiction_label(&scope));
-        lines.push(String::from("SEU VOTO:"));
-        // blank and null are shown with the DEVICE's own words, never the manifest's (ADR-0042)
-        let label = match option.kind() {
-            OptionKind::Blank => String::from("VOTO EM BRANCO"),
-            OptionKind::Null => String::from("VOTO NULO"),
-            OptionKind::Candidate if option.number.is_empty() => option.name.clone(),
-            OptionKind::Candidate => format!("{} - {}", option.number, option.name),
-        };
-        lines.extend(wrap(&label, 28));
-        if !option.is_candidate() {
-            lines.push(String::from("(não conta para nenhum"));
-            lines.push(String::from("candidato)"));
+        if seats > 1 {
+            lines.push(format!(
+                "SEUS VOTOS ({} de {} vagas):",
+                options.len(),
+                seats
+            ));
+        } else {
+            lines.push(String::from("SEU VOTO:"));
+        }
+        for option in &options {
+            // blank and null are shown with the DEVICE's own words, never the manifest's (ADR-0042)
+            let label = match option.kind() {
+                OptionKind::Blank => String::from("VOTO EM BRANCO"),
+                OptionKind::Null => String::from("VOTO NULO"),
+                OptionKind::Candidate if option.number.is_empty() => option.name.clone(),
+                OptionKind::Candidate => format!("{} - {}", option.number, option.name),
+            };
+            lines.extend(wrap(&label, 28));
+            if !option.is_candidate() {
+                lines.push(String::from("(não conta para nenhum"));
+                lines.push(String::from("candidato)"));
+            }
         }
         let encrypted_mode = !manifest.tally_key.is_empty();
         if encrypted_mode {
@@ -2195,11 +2250,6 @@ impl<H: Hal, R: Rng + CryptoRng> Device<H, R> {
             lines.push(String::from("(protótipo: voto em claro,"));
             lines.push(String::from("sem sigilo até o fim)"));
         }
-        let position = contest
-            .options
-            .iter()
-            .position(|o| o.index == option_index)
-            .ok_or_else(|| fail(ErrorCode::InvalidArgument, "opção inexistente"))?;
         self.confirm(
             ButtonKind::SignBallot,
             Screen::new("CONFIRMAR VOTO?", lines),
@@ -2215,10 +2265,20 @@ impl<H: Hal, R: Rng + CryptoRng> Device<H, R> {
             let pk = teko_ballot_crypto::point_from_bytes(&manifest.tally_key)
                 .ok_or_else(|| fail(ErrorCode::Internal, "chave da eleição inválida"))?;
             let ctx = ballot_ctx(election_id, contest_id, &voter_pk);
-            let n = contest.options.len();
-            let (eb, mut rs) =
-                teko_ballot_crypto::encrypt_ballot_with(&pk, n, position, &ctx, &mut self.rng)
-                    .ok_or_else(|| fail(ErrorCode::Internal, "cifra da cédula falhou"))?;
+            let special = contest.special_positions();
+            let shape = teko_ballot_crypto::BallotShape {
+                n: contest.options.len(),
+                seats,
+                special: &special,
+            };
+            let (eb, mut rs) = teko_ballot_crypto::encrypt_ballot_multi_with(
+                &pk,
+                &shape,
+                &positions,
+                &ctx,
+                &mut self.rng,
+            )
+            .ok_or_else(|| fail(ErrorCode::Internal, "cifra da cédula falhou"))?;
             let bytes = eb.to_bytes();
             let hash = teko_election::ciphertext_hash(&bytes);
             // CAST OR AUDIT (ADR-0041): the device COMMITS to this ciphertext first (the host gets
@@ -2275,9 +2335,10 @@ impl<H: Hal, R: Rng + CryptoRng> Device<H, R> {
                         rs.zeroize();
                         // the voting record is untouched: auditing does not use the vote
                         Ok(Response::BallotAudited(teko_protocol::BallotAudited {
-                            option_position: position as u32,
+                            option_position: positions.first().map_or(0, |p| *p as u32),
                             randomness,
                             voter_key: voter_pk.clone(),
+                            option_positions: positions.iter().map(|p| *p as u32).collect(),
                         }))
                     }
                     Err(f) => {
@@ -2290,7 +2351,7 @@ impl<H: Hal, R: Rng + CryptoRng> Device<H, R> {
             rs.zeroize();
             (0, hash, bytes)
         } else {
-            (option_index, Vec::new(), Vec::new())
+            (wanted.first().copied().unwrap_or(0), Vec::new(), Vec::new())
         };
         let signature = sign_ballot(
             &key,

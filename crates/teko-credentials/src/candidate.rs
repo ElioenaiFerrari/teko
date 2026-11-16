@@ -3,13 +3,14 @@
 //! that match a contest; this module holds the pure rules (claims, matching, selection), used by
 //! the organ's app that issues them, by the builder of the election manifest and by auditors.
 
-/// The offices of a single seat with a majority rule that can be elected today (multi-seat offices
-/// are PENDING, ADR-0040).
+/// The offices that can be elected today by a majority rule: the single-seat ones (ADR-0040) and
+/// the senator (1 or 2 seats, ADR-0044). The proportional ones are PENDING.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Cargo {
     Presidente,
     Governador,
     Prefeito,
+    Senador,
 }
 
 /// Where an office is contested.
@@ -26,6 +27,7 @@ impl Cargo {
             "presidente" => Some(Cargo::Presidente),
             "governador" => Some(Cargo::Governador),
             "prefeito" => Some(Cargo::Prefeito),
+            "senador" => Some(Cargo::Senador),
             _ => None,
         }
     }
@@ -35,13 +37,14 @@ impl Cargo {
             Cargo::Presidente => "presidente",
             Cargo::Governador => "governador",
             Cargo::Prefeito => "prefeito",
+            Cargo::Senador => "senador",
         }
     }
 
     pub fn level(self) -> Level {
         match self {
             Cargo::Presidente => Level::National,
-            Cargo::Governador => Level::State,
+            Cargo::Governador | Cargo::Senador => Level::State,
             Cargo::Prefeito => Level::Municipality,
         }
     }

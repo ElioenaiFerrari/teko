@@ -35,3 +35,5 @@ Um milhão de cédulas de 12 opções leva ~5 h de verificação em um núcleo (
 
 ## Consequências
 `ElectionManifest.tally_key`, `BallotBody.ciphertext_hash`, `SubmittedBallot.encrypted`, `BallotSignature.encrypted`, `EntryKind::DKG`/`RESULT`; o resultado deixa de depender do relógio e passa a depender dos validadores; novo requisito operacional: rodar a cerimônia (`make devnet-dkg`) antes de assinar o manifesto.
+
+> **Atualização (ADR-0044):** num pleito de **várias vagas** (Senador) a prova "soma = 1" vira "o total ponderado está em 1..=N"; com uma vaga ela é a de sempre.

@@ -404,6 +404,18 @@ fn sample_candidates(contest: &str) -> &'static [(&'static str, &'static str)] {
         ],
         "governador-rs" => &[("Candidato Quero-Quero", "70"), ("Candidata Graxaim", "71")],
         "prefeito-3550308" => &[("Candidata Jaguatirica", "30"), ("Candidato Tucano", "31")],
+        // the Senate (ADR-0044): SP elects 2, RJ elects 1; always more candidates than seats
+        "senador-sp" => &[
+            ("Candidato Peixe-Boi", "450"),
+            ("Candidata Ariranha", "451"),
+            ("Candidato Cervo-do-Pantanal", "452"),
+            ("Candidata Harpia", "453"),
+        ],
+        "senador-rj" => &[
+            ("Candidata Muriqui", "460"),
+            ("Candidato Preguiça-de-Coleira", "461"),
+            ("Candidata Sagui-da-Serra-Escuro", "462"),
+        ],
         _ => &[],
     }
 }
@@ -435,7 +447,7 @@ pub fn seed_candidates(dir: &Path, election_id: &str) -> Result<String, String> 
     for p in issuer_cli::dev_contest_plan(now) {
         let cargo = Cargo::parse(p.cargo).ok_or("cargo")?;
         for (i, (nome, numero)) in sample_candidates(p.id).iter().enumerate() {
-            let uf = if p.cargo == "governador" {
+            let uf = if p.cargo == "governador" || p.cargo == "senador" {
                 p.scope_code
             } else {
                 ""

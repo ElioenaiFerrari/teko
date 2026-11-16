@@ -351,6 +351,7 @@ fn office_name(o: Office) -> Option<&'static str> {
         Office::President => Some(Cargo::Presidente.name()),
         Office::Governor => Some(Cargo::Governador.name()),
         Office::Mayor => Some(Cargo::Prefeito.name()),
+        Office::Senator => Some(Cargo::Senador.name()),
         _ => None,
     }
 }
@@ -427,94 +428,149 @@ fn claim_elected(ctx: &mut Ctx<'_, '_>, op: ClaimElectedOp) -> Result<(), Module
     if ctx.get(&marker).is_some() {
         return Err(err("this contest's result was already claimed"));
     }
-    // the winner is a candidate the chain knows: its holder is who is elected
-    let cand = load_cred(
-        ctx,
-        CANDIDATE_TYPE.as_bytes(),
-        &outcome.winner_credential_id,
-    )?;
-    if matches!(cand.state, STATE_VETOED | STATE_REVOKED) {
-        return Err(err("the winner's candidacy was vetoed or revoked"));
-    }
-    let c =
-        parse_candidate(&cand.claims).ok_or_else(|| err("the winner's candidacy is not valid"))?;
+    // WHO is elected: one winner, or (a senator contest, ADR-0044) up to its seats, best first
+    let winners: Vec<(u32, Vec<u8>)> = if office == Office::Senator {
+        let seats = outcome.seats as usize;
+        if !(1..=2).contains(&seats)
+            || outcome.elected.is_empty()
+            || outcome.elected.len() > seats
+            || outcome.elected.len() != outcome.elected_credentials.len()
+        {
+            return Err(err("a senate result names between 1 and its seats winners"));
+        }
+        let mut seen = std::collections::BTreeSet::new();
+        for w in &outcome.elected {
+            if !seen.insert(*w) {
+                return Err(err("a winner appears twice"));
+            }
+        }
+        outcome
+            .elected
+            .iter()
+            .copied()
+            .zip(outcome.elected_credentials.iter().cloned())
+            .collect()
+    } else {
+        if outcome.seats != 0 || !outcome.elected.is_empty() {
+            return Err(err("only a senate result names several winners"));
+        }
+        vec![(outcome.winner_option, outcome.winner_credential_id.clone())]
+    };
     let scope_code = match scope.level() {
         ScopeLevel::National => "",
         _ => scope.code.as_str(),
     };
-    if c.cargo.name() != cargo || c.scope_code() != scope_code || c.eleicao != outcome.election_id {
-        return Err(err("the winner's candidacy is not for this contest"));
+    // validate EVERYONE before writing anything: a claim elects all its winners or none
+    struct Elected {
+        id: [u8; 32],
+        subject: Vec<u8>,
+        commitment: Vec<u8>,
+        claims: Vec<u8>,
     }
-    let votes = outcome
-        .totals
-        .get(outcome.winner_option as usize)
-        .copied()
-        .ok_or_else(|| err("winner outside the ballot"))?;
-    let mut parts = vec![format!("cargo={cargo}")];
-    if office == Office::Governor {
-        parts.push(format!("uf={scope_code}"));
+    let mut made: Vec<Elected> = Vec::new();
+    for (option, credential_id) in &winners {
+        // the winner is a candidate the chain knows: its holder is who is elected
+        let cand = load_cred(ctx, CANDIDATE_TYPE.as_bytes(), credential_id)?;
+        if matches!(cand.state, STATE_VETOED | STATE_REVOKED) {
+            return Err(err("the winner's candidacy was vetoed or revoked"));
+        }
+        let c = parse_candidate(&cand.claims)
+            .ok_or_else(|| err("the winner's candidacy is not valid"))?;
+        if c.cargo.name() != cargo
+            || c.scope_code() != scope_code
+            || c.eleicao != outcome.election_id
+        {
+            return Err(err("the winner's candidacy is not for this contest"));
+        }
+        let votes = outcome
+            .totals
+            .get(*option as usize)
+            .copied()
+            .ok_or_else(|| err("winner outside the ballot"))?;
+        let mut parts = vec![format!("cargo={cargo}")];
+        if office == Office::Governor || office == Office::Senator {
+            parts.push(format!("uf={scope_code}"));
+        }
+        if office == Office::Mayor {
+            parts.push(format!("municipio={scope_code}"));
+        }
+        parts.push(format!("numero={}", c.numero));
+        parts.push(format!("nome={}", c.nome));
+        parts.push(format!("eleicao={}", outcome.election_id));
+        parts.push(format!("pleito={}", outcome.contest_id));
+        parts.push(format!("votos={votes}"));
+        parts.push(format!(
+            "candidatura={}",
+            teko_crypto::hex::encode(credential_id)
+        ));
+        let claims = parts.join(";").into_bytes();
+        let commitment = public_commitment(&claims);
+        let id = credential_id_of(&cand.subject, &commitment, &claims);
+        if ctx.get(&k_cred(ELECTED_TYPE.as_bytes(), &id)).is_some()
+            || made.iter().any(|m| m.id == id)
+        {
+            return Err(err("this credential already exists"));
+        }
+        made.push(Elected {
+            id,
+            subject: cand.subject.clone(),
+            commitment: commitment.to_vec(),
+            claims,
+        });
     }
-    if office == Office::Mayor {
-        parts.push(format!("municipio={scope_code}"));
-    }
-    parts.push(format!("numero={}", c.numero));
-    parts.push(format!("nome={}", c.nome));
-    parts.push(format!("eleicao={}", outcome.election_id));
-    parts.push(format!("pleito={}", outcome.contest_id));
-    parts.push(format!("votos={votes}"));
-    parts.push(format!(
-        "candidatura={}",
-        teko_crypto::hex::encode(&outcome.winner_credential_id)
-    ));
-    let claims = parts.join(";").into_bytes();
-    let commitment = public_commitment(&claims);
-    let id = credential_id(
-        ELECTED_TYPE.as_bytes(),
-        &cand.subject,
-        &commitment,
-        &claims,
-        0,
-    );
-    if ctx.get(&k_cred(ELECTED_TYPE.as_bytes(), &id)).is_some() {
-        return Err(err("this credential already exists"));
-    }
-    // the previous holder of this office and jurisdiction is superseded
+    // the previous holders of this office and jurisdiction are superseded. A SENATOR slot also
+    // carries the number of seats: the 2-seat class and the 1-seat class do not replace each other.
     let slot = {
         let mut k = b"e:".to_vec();
         k.push(office as u8);
         k.push(scope.level() as u8);
         k.extend_from_slice(scope_code.as_bytes());
+        if office == Office::Senator {
+            k.push(outcome.seats as u8);
+        }
         k
     };
-    if let Some(old_id) = ctx.get(&slot)
-        && let Some(raw) = ctx.get(&k_cred(ELECTED_TYPE.as_bytes(), &old_id))
-        && let Ok(mut old) = CredRec::decode(raw.as_slice())
-    {
-        old.state = STATE_SUPERSEDED;
-        old.reason = format!("sucedido por {}", teko_crypto::hex::encode(&id[..8]));
-        save(ctx, ELECTED_TYPE.as_bytes(), &old_id, &old);
-        ctx.emit("superseded", old_id);
+    let new_first = made.first().map(|m| m.id).unwrap_or([0; 32]);
+    if let Some(olds) = ctx.get(&slot) {
+        for old_id in olds.chunks(32) {
+            if let Some(raw) = ctx.get(&k_cred(ELECTED_TYPE.as_bytes(), old_id))
+                && let Ok(mut old) = CredRec::decode(raw.as_slice())
+            {
+                old.state = STATE_SUPERSEDED;
+                old.reason = format!("sucedido por {}", teko_crypto::hex::encode(&new_first[..8]));
+                save(ctx, ELECTED_TYPE.as_bytes(), old_id, &old);
+                ctx.emit("superseded", old_id.to_vec());
+            }
+        }
     }
-    let rec = CredRec {
-        subject: cand.subject.clone(),
-        commitment: commitment.to_vec(),
-        claims,
-        valid_until: 0,
-        proposed_at: ctx.time,
-        approved_at: ctx.time,
-        active_at: ctx.time,
-        state: STATE_APPROVED,
-        ..Default::default()
-    };
-    save(ctx, ELECTED_TYPE.as_bytes(), &id, &rec);
-    ctx.set(
-        &k_subject(&cand.subject, ELECTED_TYPE.as_bytes(), &id),
-        vec![1],
-    );
-    ctx.set(&slot, id.to_vec());
+    let mut slot_value = Vec::with_capacity(32 * made.len());
+    for m in &made {
+        let rec = CredRec {
+            subject: m.subject.clone(),
+            commitment: m.commitment.clone(),
+            claims: m.claims.clone(),
+            valid_until: 0,
+            proposed_at: ctx.time,
+            approved_at: ctx.time,
+            active_at: ctx.time,
+            state: STATE_APPROVED,
+            ..Default::default()
+        };
+        save(ctx, ELECTED_TYPE.as_bytes(), &m.id, &rec);
+        ctx.set(
+            &k_subject(&m.subject, ELECTED_TYPE.as_bytes(), &m.id),
+            vec![1],
+        );
+        slot_value.extend_from_slice(&m.id);
+        ctx.emit("elected", m.id.to_vec());
+    }
+    ctx.set(&slot, slot_value);
     ctx.set(&marker, vec![1]);
-    ctx.emit("elected", id.to_vec());
     Ok(())
+}
+
+fn credential_id_of(subject: &[u8], commitment: &[u8; 32], claims: &[u8]) -> [u8; 32] {
+    credential_id(ELECTED_TYPE.as_bytes(), subject, commitment, claims, 0)
 }
 
 impl Module for CredentialsModule {

@@ -892,7 +892,7 @@ pub async fn civic_deliver(id: String) -> Result<String, UiError> {
 
 #[derive(Deserialize, Clone)]
 pub struct CandidacyForm {
-    /// `presidente`, `governador` or `prefeito`.
+    /// `presidente`, `governador`, `senador` or `prefeito`.
     cargo: String,
     uf: String,
     municipio: String,
@@ -933,7 +933,7 @@ pub async fn candidacies_issue(
             let cargo = Cargo::parse(f.cargo.trim()).ok_or_else(|| {
                 ui_err(
                     "InvalidArgument",
-                    "cargo: presidente, governador ou prefeito",
+                    "cargo: presidente, governador, senador ou prefeito",
                 )
             })?;
             let claims = candidate_claims(&Candidacy {

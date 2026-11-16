@@ -123,8 +123,12 @@ fn candidates_on_the_chain_become_an_election_whose_certified_results_elect_peop
     let b = <teko_election::ElectionBundle as prost::Message>::decode(bytes.as_slice()).unwrap();
     let m = <ElectionManifest as prost::Message>::decode(b.manifest.as_slice()).unwrap();
     assert_eq!(m.election_id, "geral-2026");
+    assert!(
+        m.contests.iter().filter(|c| c.seats > 0).count() == 2,
+        "the senate contests exist in an encrypted election"
+    );
     for c in &m.contests {
-        assert!(c.runoff, "{}", c.contest_id);
+        assert_eq!(c.runoff, c.office().is_single_seat(), "{}", c.contest_id);
         assert!(
             c.candidates().all(|o| o.credential_id.len() == 32),
             "{}",
@@ -250,27 +254,37 @@ fn candidates_on_the_chain_become_an_election_whose_certified_results_elect_peop
     );
     let world = teko_node::NodeWorld::open(&net).unwrap();
     let got = teko_credentials::credentials_of_type(world.ledger_ref(), b"eleito");
-    assert_eq!(got.len(), elected.len(), "{lines:?}");
+    // a senate result elects SEVERAL people in one claim (ADR-0044); every other contest elects one
+    let winners_of = |o: &teko_election::ElectionOutcome| -> Vec<Vec<u8>> {
+        if o.seats > 0 {
+            o.elected_credentials.clone()
+        } else {
+            vec![o.winner_credential_id.clone()]
+        }
+    };
+    let expected: usize = elected.iter().map(|c| winners_of(&c.outcome).len()).sum();
+    assert_eq!(got.len(), expected, "{lines:?}");
     for c in &elected {
         let contest = &c.outcome.contest_id;
-        let rec = got
-            .iter()
-            .map(|(_, r)| r)
-            .find(|r| String::from_utf8_lossy(&r.claims).contains(&format!("pleito={contest};")))
-            .unwrap_or_else(|| panic!("no eleito for {contest}"));
-        assert_eq!(rec.valid_until, 0, "lifetime");
-        assert_eq!(
-            rec.status_at(now() + 1_000_000_000),
-            teko_credentials::Status::Active
-        );
-        // the holder is the winner's candidacy key
-        let cand = teko_credentials::credential(
-            world.ledger_ref(),
-            b"candidato",
-            &c.outcome.winner_credential_id,
-        )
-        .unwrap();
-        assert_eq!(rec.subject, cand.subject);
+        for winner in winners_of(&c.outcome) {
+            let cand =
+                teko_credentials::credential(world.ledger_ref(), b"candidato", &winner).unwrap();
+            // the holder is the winner's candidacy key
+            let rec = got
+                .iter()
+                .map(|(_, r)| r)
+                .find(|r| {
+                    r.subject == cand.subject
+                        && String::from_utf8_lossy(&r.claims)
+                            .contains(&format!("pleito={contest};"))
+                })
+                .unwrap_or_else(|| panic!("no eleito for {contest}"));
+            assert_eq!(rec.valid_until, 0, "lifetime");
+            assert_eq!(
+                rec.status_at(now() + 1_000_000_000),
+                teko_credentials::Status::Active
+            );
+        }
     }
     drop(world);
     // claiming again changes nothing

@@ -137,6 +137,9 @@ fn outcome(
         drawn: false,
         draw_tied: vec![],
         draw_seed: vec![],
+        seats: 0,
+        elected: vec![],
+        elected_credentials: vec![],
     }
 }
 
@@ -343,18 +346,20 @@ fn only_a_decided_contest_with_a_matching_candidacy_elects() {
         "governador-sp",
     );
     assert!(claim(&mut w, &unknown, &[0, 1, 2]).is_err());
-    let sen = outcome(
-        &id,
-        Office::Senator,
-        Scope::state("SP"),
-        "geral-2026",
-        "senador-sp",
-    );
-    assert!(
-        claim(&mut w, &sen, &[0, 1, 2])
-            .unwrap_err()
-            .contains("not elected automatically")
-    );
+    // the proportional offices are still PENDING (a senator is elected, see the senate tests)
+    for office in [
+        Office::FederalDeputy,
+        Office::StateDeputy,
+        Office::CityCouncillor,
+    ] {
+        let prop = outcome(&id, office, Scope::state("SP"), "geral-2026", "dep-sp");
+        assert!(
+            claim(&mut w, &prop, &[0, 1, 2])
+                .unwrap_err()
+                .contains("not elected automatically"),
+            "{office:?}"
+        );
+    }
     // office and jurisdiction must agree
     let bad = outcome(
         &id,
@@ -634,4 +639,135 @@ fn a_drawn_winner_elects_like_any_other_the_ledger_trusts_the_institutions_signa
             .unwrap_err()
             .contains("decided")
     );
+}
+
+/// A senate result (ADR-0044): `seats` seats, the winners (option index + candidacy id), best first.
+fn senate_outcome(
+    winners: &[(u32, &[u8])],
+    seats: u32,
+    election: &str,
+    contest: &str,
+) -> ElectionOutcome {
+    let mut o = outcome(&[], Office::Senator, Scope::state("SP"), election, contest);
+    o.totals = vec![40, 30, 20, 10];
+    o.accepted = 100;
+    o.seats = seats;
+    o.elected = winners.iter().map(|(i, _)| *i).collect();
+    o.elected_credentials = winners.iter().map(|(_, id)| id.to_vec()).collect();
+    o
+}
+
+#[test]
+fn a_senate_result_elects_all_its_winners_in_one_claim_and_each_class_replaces_only_itself() {
+    let mut w = world(4);
+    let (a, ha) = candidacy(
+        &mut w,
+        &cand(Cargo::Senador, "SP", "450", "Ana", "e-2026"),
+        1,
+    );
+    let (b, hb) = candidacy(
+        &mut w,
+        &cand(Cargo::Senador, "SP", "451", "Beto", "e-2026"),
+        2,
+    );
+    let (c, hc) = candidacy(
+        &mut w,
+        &cand(Cargo::Senador, "SP", "452", "Cris", "e-2030"),
+        3,
+    );
+    let (d, hd) = candidacy(
+        &mut w,
+        &cand(Cargo::Senador, "SP", "453", "Dani", "e-2030"),
+        4,
+    );
+    let (x, _) = candidacy(
+        &mut w,
+        &cand(Cargo::Senador, "RJ", "454", "Edu", "e-2026"),
+        5,
+    );
+
+    // 2 seats: both winners get a lifetime credential from ONE claim, with their own votes
+    let two = senate_outcome(&[(0, &a), (1, &b)], 2, "e-2026", "senador-sp-2026");
+    claim(&mut w, &two, &[0, 1, 2]).unwrap();
+    let (ea, eb) = (elected_of(&w, &ha), elected_of(&w, &hb));
+    assert_eq!((ea.len(), eb.len()), (1, 1));
+    let claims = String::from_utf8(ea[0].1.claims.clone()).unwrap();
+    assert!(claims.starts_with("cargo=senador;uf=SP;numero=450;nome=Ana;eleicao=e-2026;pleito=senador-sp-2026;votos=40;"), "{claims}");
+    assert!(
+        String::from_utf8(eb[0].1.claims.clone())
+            .unwrap()
+            .contains("votos=30;")
+    );
+    assert_eq!(ea[0].1.valid_until, 0);
+    // the same result cannot be claimed twice
+    assert!(
+        claim(&mut w, &two, &[0, 1, 2, 3])
+            .unwrap_err()
+            .contains("already claimed")
+    );
+
+    // a 1-seat contest of the same state is ANOTHER class: it does not replace the 2-seat holders
+    let one = senate_outcome(&[(0, &c)], 1, "e-2030", "senador-sp-2030a");
+    claim(&mut w, &one, &[0, 1, 2]).unwrap();
+    assert_eq!(
+        elected_of(&w, &ha)[0].1.status_at(w.now + 1_000),
+        Status::Active
+    );
+    assert_eq!(
+        elected_of(&w, &hb)[0].1.status_at(w.now + 1_000),
+        Status::Active
+    );
+    assert_eq!(elected_of(&w, &hc).len(), 1);
+
+    // the NEXT 2-seat election supersedes BOTH previous 2-seat holders (and only them)
+    let next = senate_outcome(&[(0, &d), (1, &x)], 2, "e-2026", "senador-sp-next");
+    // x is a candidacy of RJ: the whole claim is refused and nothing is issued
+    let e = claim(&mut w, &next, &[0, 1, 2]).unwrap_err();
+    assert!(e.contains("not for this contest"), "{e}");
+    assert_eq!(elected_of(&w, &hd).len(), 0, "all or nothing");
+}
+
+#[test]
+fn malformed_senate_results_are_refused() {
+    let mut w = world(4);
+    let (a, _) = candidacy(
+        &mut w,
+        &cand(Cargo::Senador, "SP", "450", "Ana", "e-2026"),
+        1,
+    );
+    let (b, _) = candidacy(
+        &mut w,
+        &cand(Cargo::Senador, "SP", "451", "Beto", "e-2026"),
+        2,
+    );
+    let (c, _) = candidacy(
+        &mut w,
+        &cand(Cargo::Senador, "SP", "452", "Cris", "e-2026"),
+        3,
+    );
+    // more winners than seats, an empty list, a repeated winner, lists of different lengths, 3 seats
+    let bad = [
+        senate_outcome(&[(0, &a), (1, &b), (2, &c)], 2, "e-2026", "s1"),
+        senate_outcome(&[], 2, "e-2026", "s2"),
+        senate_outcome(&[(0, &a), (0, &b)], 2, "e-2026", "s3"),
+        senate_outcome(&[(0, &a), (1, &b)], 3, "e-2026", "s4"),
+        senate_outcome(&[(0, &a), (1, &b)], 0, "e-2026", "s5"),
+    ];
+    for o in &bad {
+        assert!(claim(&mut w, o, &[0, 1, 2]).is_err(), "{}", o.contest_id);
+    }
+    let mut lengths = senate_outcome(&[(0, &a), (1, &b)], 2, "e-2026", "s6");
+    lengths.elected_credentials.pop();
+    assert!(claim(&mut w, &lengths, &[0, 1, 2]).is_err());
+    // a single-seat office does not carry a list
+    let mut gov = outcome(&a, Office::Governor, Scope::state("SP"), "e-2026", "g1");
+    gov.elected = vec![0];
+    assert!(claim(&mut w, &gov, &[0, 1, 2]).is_err());
+    // the sound result still works
+    claim(
+        &mut w,
+        &senate_outcome(&[(0, &a), (1, &b)], 2, "e-2026", "ok"),
+        &[0, 1, 2],
+    )
+    .unwrap();
 }

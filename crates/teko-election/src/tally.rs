@@ -17,8 +17,8 @@ use prost::Message;
 
 use teko_ballot_crypto::dkg_wire::{DkgRecord, VerifiedCeremony};
 use teko_ballot_crypto::{
-    Ciphertext, DecryptProof, EncryptedBallot, Point, combine_shares, point_from_bytes,
-    solve_small_dlog, verify_decryption,
+    BallotShape, Ciphertext, DecryptProof, EncryptedBallot, Point, combine_shares,
+    point_from_bytes, solve_small_dlog, verify_decryption,
 };
 
 use teko_ballot_crypto::draw::{combine_draw, draw_seed, hash_to_point, verify_draw_share};
@@ -166,6 +166,8 @@ pub struct ContestTally {
     pub rejected: RejectCounts,
     /// In ballot order (NOT ranked); see `ranked`.
     pub options: Vec<OptionTally>,
+    /// How many people the contest elects (1 unless it is a multi-seat senator contest, ADR-0044).
+    pub seats: usize,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -204,6 +206,22 @@ pub struct Ranking {
 }
 
 impl ContestTally {
+    /// `sum(candidates) + seats * (blank + null)`: the quantity every ballot contributes between 1
+    /// and `seats` to (a ballot proves its WEIGHTED total is in `1..=seats`, ADR-0044). With one
+    /// seat it is exactly the number of ballots.
+    pub fn weighted_votes(&self) -> u64 {
+        self.valid_votes() + self.seats.max(1) as u64 * (self.blank_votes() + self.null_votes())
+    }
+
+    /// Do the decrypted totals fit the ballots that were counted? Each ballot adds a weighted
+    /// total in `1..=seats`, so the sum lies in `accepted..=seats * accepted`. A one-seat contest
+    /// must add up to the ballots EXACTLY.
+    pub fn totals_fit_the_ballots(&self) -> bool {
+        let w = self.weighted_votes();
+        let s = self.seats.max(1) as u64;
+        w >= self.accepted && w <= s * self.accepted
+    }
+
     /// Votes in CANDIDATES: the denominator of the majority (blank and null are outside it, ADR-0042).
     pub fn valid_votes(&self) -> u64 {
         self.options
@@ -655,6 +673,7 @@ impl Tallier {
                     registered: 0,
                     registrations_rejected: 0,
                     registration_required: !c.registration_key.is_empty(),
+                    seats: c.seat_count(),
                     encrypted: !m.tally_key.is_empty(),
                     revealed: false,
                     rejected: RejectCounts::default(),
@@ -802,8 +821,22 @@ impl Tallier {
             };
             totals.push(v);
         }
-        if totals.iter().sum::<u64>() != ct.accepted {
-            self.bad_results += 1; // one-hot ballots: the totals MUST add up to the ballots
+        // every ballot adds a weighted total in 1..=seats (exactly 1 with one seat)
+        let weighted: u64 = ct
+            .options
+            .iter()
+            .zip(&totals)
+            .map(|(o, v)| {
+                if o.kind == OptionKind::Candidate {
+                    *v
+                } else {
+                    ct.seats.max(1) as u64 * *v
+                }
+            })
+            .sum();
+        let seats = ct.seats.max(1) as u64;
+        if weighted < ct.accepted || weighted > seats * ct.accepted {
+            self.bad_results += 1; // the totals MUST fit the ballots that were counted
             return;
         }
         for (o, v) in ct.options.iter_mut().zip(totals) {
@@ -987,6 +1020,7 @@ pub struct BallotCheck {
     /// The election key and option count the proofs were checked against.
     tally_key: Vec<u8>,
     options: usize,
+    seats: usize,
     signature_ok: bool,
     /// Encrypted mode only: the parsed ballot when its proofs verified.
     proven: Option<EncryptedBallot>,
@@ -1005,16 +1039,23 @@ pub fn precheck(m: &ElectionManifest, payload: &[u8]) -> Option<BallotCheck> {
         .contest(&b.contest_id)
         .filter(|_| b.election_id == m.election_id)?;
     let options = contest.options.len();
+    let seats = contest.seat_count();
+    let special = contest.special_positions();
+    let shape = BallotShape {
+        n: options,
+        seats,
+        special: &special,
+    };
     let signature_ok = verify_ballot(&b.voter_key, &b.body(), &b.signature).is_ok();
     let proven = if signature_ok && !m.tally_key.is_empty() {
         let ctx = ballot_ctx(&b.election_id, &b.contest_id, &b.voter_key);
         match (
             point_from_bytes(&m.tally_key),
-            EncryptedBallot::from_bytes(options, &b.encrypted),
+            EncryptedBallot::from_bytes_seats(options, seats, &b.encrypted),
         ) {
             (Some(pk), Some(eb))
                 if b.option_index == 0
-                    && teko_ballot_crypto::verify_ballot(&pk, options, &ctx, &eb) =>
+                    && teko_ballot_crypto::verify_ballot_shape(&pk, &shape, &ctx, &eb) =>
             {
                 Some(eb)
             }
@@ -1027,6 +1068,7 @@ pub fn precheck(m: &ElectionManifest, payload: &[u8]) -> Option<BallotCheck> {
         payload_hash: payload_hash(payload),
         tally_key: m.tally_key.clone(),
         options,
+        seats,
         signature_ok,
         proven,
     })
@@ -1083,7 +1125,11 @@ fn count_ballot(
         opt = pos;
     }
     // A verdict computed earlier is trusted only for the same election key and options
-    let pre = pre.filter(|p| p.tally_key == m.tally_key && p.options == contest.options.len());
+    let pre = pre.filter(|p| {
+        p.tally_key == m.tally_key
+            && p.options == contest.options.len()
+            && p.seats == contest.seat_count()
+    });
     let signature_ok = match &pre {
         Some(p) => p.signature_ok,
         None => verify_ballot(&b.voter_key, &b.body(), &b.signature).is_ok(),
@@ -1105,13 +1151,19 @@ fn count_ballot(
             },
             None => {
                 let n = contest.options.len();
+                let special = contest.special_positions();
+                let shape = BallotShape {
+                    n,
+                    seats: contest.seat_count(),
+                    special: &special,
+                };
                 let pk = point_from_bytes(&m.tally_key);
-                let parsed = EncryptedBallot::from_bytes(n, &b.encrypted);
+                let parsed = EncryptedBallot::from_bytes_seats(n, shape.seats, &b.encrypted);
                 let ctx = ballot_ctx(&b.election_id, &b.contest_id, &b.voter_key);
                 match (pk, parsed) {
                     (Some(pk), Some(eb))
                         if b.option_index == 0
-                            && teko_ballot_crypto::verify_ballot(&pk, n, &ctx, &eb) =>
+                            && teko_ballot_crypto::verify_ballot_shape(&pk, &shape, &ctx, &eb) =>
                     {
                         cts = Some(eb);
                     }
@@ -1726,6 +1778,7 @@ mod tests {
             revealed: false,
             rejected: RejectCounts::default(),
             options: vec![],
+            seats: 1,
         };
         let live = c.public_view(ResultsVisibility::Live);
         assert_eq!((live.accepted, live.distribution), (Some(42), true));

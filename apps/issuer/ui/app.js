@@ -339,8 +339,8 @@
       <article class="card"><div class="issue-form">
         <label class="field"><span>Eleição (id)</span><input class="input mono" id="k-eleicao" value="${esc(f.eleicao)}"></label>
         <label class="field"><span>Validade (dias a partir de agora)</span><input class="input" id="k-days" type="number" min="1" value="${f.days}"></label>
-        <label class="field"><span>Cargo</span><select class="input" id="k-cargo">${['presidente', 'governador', 'prefeito'].map((c) => `<option ${c === f.cargo ? 'selected' : ''}>${c}</option>`).join('')}</select></label>
-        <div class="field"><label for="k-uf">Estado (governador e prefeito)</label>${combo('k-uf', geoStates(), f.uf, 'Digite para buscar o estado')}</div>
+        <label class="field"><span>Cargo</span><select class="input" id="k-cargo">${['presidente', 'governador', 'senador', 'prefeito'].map((c) => `<option ${c === f.cargo ? 'selected' : ''}>${c}</option>`).join('')}</select></label>
+        <div class="field"><label for="k-uf">Estado (governador, senador e prefeito)</label>${combo('k-uf', geoStates(), f.uf, 'Digite para buscar o estado')}</div>
         <div class="field"><label for="k-mun">Município (prefeito)</label>${combo('k-mun', geoCities(f.uf), f.mun, 'Escolha o estado e busque o município')}</div>
         <label class="field"><span>Número</span><input class="input" id="k-numero" value="${esc(f.numero)}"></label>
         <label class="field"><span>Nome</span><input class="input" id="k-nome" value="${esc(f.nome)}"></label>

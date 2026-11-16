@@ -1165,6 +1165,33 @@ impl<T: Transport> DeviceClient<T> {
         contest_id: &str,
         option_index: u32,
     ) -> Result<BallotOutcome, ClientError> {
+        self.sign_ballot_or_audit_multi(election_id, contest_id, &[option_index])
+    }
+
+    /// Like `sign_ballot`, for a contest with several seats (ADR-0044): up to `seats` DISTINCT options.
+    pub fn sign_ballot_multi(
+        &mut self,
+        election_id: &str,
+        contest_id: &str,
+        option_indices: &[u32],
+    ) -> Result<SignedBallot, ClientError> {
+        match self.sign_ballot_or_audit_multi(election_id, contest_id, option_indices)? {
+            BallotOutcome::Cast(b) => Ok(b),
+            BallotOutcome::Audited(a) => Err(ClientError::Unexpected(format!(
+                "cédula de teste auditada ({}): o voto NÃO foi usado",
+                a.summary
+            ))),
+        }
+    }
+
+    /// `sign_ballot_or_audit` for one or several options. An audited ballot must open to EXACTLY the
+    /// set of options that was asked for.
+    pub fn sign_ballot_or_audit_multi(
+        &mut self,
+        election_id: &str,
+        contest_id: &str,
+        option_indices: &[u32],
+    ) -> Result<BallotOutcome, ClientError> {
         self.commitment = None;
         let manifest = self
             .election
@@ -1174,15 +1201,37 @@ impl<T: Transport> DeviceClient<T> {
             .contest(contest_id)
             .filter(|_| manifest.election_id == election_id)
             .ok_or_else(|| ClientError::Verification("pleito desconhecido nesta eleição".into()))?;
-        let option_name = contest
-            .option_name(option_index)
-            .ok_or_else(|| ClientError::Verification("opção inexistente".into()))?
-            .to_string();
-        let resp = self.request(Request::SignBallot(SignBallot {
-            election_id: election_id.to_string(),
-            contest_id: contest_id.to_string(),
-            option_index,
-        }))?;
+        if option_indices.is_empty() {
+            return Err(ClientError::Verification("nenhuma opção escolhida".into()));
+        }
+        let mut names = Vec::new();
+        for i in option_indices {
+            names.push(
+                contest
+                    .option_name(*i)
+                    .ok_or_else(|| ClientError::Verification("opção inexistente".into()))?
+                    .to_string(),
+            );
+        }
+        let option_name = names.join(", ");
+        let option_index = option_indices.first().copied().unwrap_or(0);
+        let req = if option_indices.len() == 1 {
+            // one choice keeps the original message (an old host and a one-seat contest)
+            SignBallot {
+                election_id: election_id.to_string(),
+                contest_id: contest_id.to_string(),
+                option_index,
+                ..Default::default()
+            }
+        } else {
+            SignBallot {
+                election_id: election_id.to_string(),
+                contest_id: contest_id.to_string(),
+                option_index: 0,
+                option_indices: option_indices.to_vec(),
+            }
+        };
+        let resp = self.request(Request::SignBallot(req))?;
         let encrypted_mode = !manifest.tally_key.is_empty();
         let b = match resp {
             Response::BallotSignature(b) => b,
@@ -1192,17 +1241,22 @@ impl<T: Transport> DeviceClient<T> {
                         "o dispositivo auditou uma cédula sem ter se comprometido com ela".into(),
                     )
                 })?;
-                let want = contest
-                    .options
-                    .iter()
-                    .position(|o| o.index == option_index)
-                    .ok_or_else(|| ClientError::Verification("opção inexistente".into()))?;
+                let mut want = Vec::new();
+                for i in option_indices {
+                    want.push(
+                        contest
+                            .options
+                            .iter()
+                            .position(|o| o.index == *i)
+                            .ok_or_else(|| ClientError::Verification("opção inexistente".into()))?,
+                    );
+                }
                 return audit_report(
                     &manifest,
                     contest,
                     election_id,
                     contest_id,
-                    want,
+                    &want,
                     &commitment,
                     &a,
                 )
@@ -1250,9 +1304,18 @@ impl<T: Transport> DeviceClient<T> {
             let pk = teko_ballot_crypto::point_from_bytes(&manifest.tally_key)
                 .ok_or_else(|| ClientError::Verification("chave da eleição inválida".into()))?;
             let n = contest.options.len();
+            let special = contest.special_positions();
+            let shape = teko_ballot_crypto::BallotShape {
+                n,
+                seats: contest.seat_count(),
+                special: &special,
+            };
             let ctx = teko_election::ballot_ctx(election_id, contest_id, &b.voter_key);
-            let ok = teko_ballot_crypto::EncryptedBallot::from_bytes(n, &b.encrypted)
-                .is_some_and(|eb| teko_ballot_crypto::verify_ballot(&pk, n, &ctx, &eb));
+            let ok =
+                teko_ballot_crypto::EncryptedBallot::from_bytes_seats(n, shape.seats, &b.encrypted)
+                    .is_some_and(|eb| {
+                        teko_ballot_crypto::verify_ballot_shape(&pk, &shape, &ctx, &eb)
+                    });
             if !ok {
                 return Err(ClientError::Verification(
                     "as provas da cédula cifrada NÃO conferem".into(),
@@ -1265,6 +1328,7 @@ impl<T: Transport> DeviceClient<T> {
             contest_hash: hex::encode(&body.contest_hash),
             contest_title: contest.title.clone(),
             option_index,
+            option_indices: option_indices.to_vec(),
             option_name,
             voter_key: hex::encode(&b.voter_key),
             signature: hex::encode(&b.signature),
@@ -1308,7 +1372,7 @@ fn audit_report(
     contest: &teko_election::Contest,
     election_id: &str,
     contest_id: &str,
-    want_position: usize,
+    want_positions: &[usize],
     commitment: &BallotCommitment,
     a: &BallotAudited,
 ) -> Result<AuditReport, ClientError> {
@@ -1322,27 +1386,41 @@ fn audit_report(
     let pk = teko_ballot_crypto::point_from_bytes(&manifest.tally_key)
         .ok_or_else(|| bad("chave da eleição inválida"))?;
     let n = contest.options.len();
+    let special = contest.special_positions();
+    let shape = teko_ballot_crypto::BallotShape {
+        n,
+        seats: contest.seat_count(),
+        special: &special,
+    };
     let ctx = teko_election::ballot_ctx(election_id, contest_id, &a.voter_key);
-    let eb = teko_ballot_crypto::EncryptedBallot::from_bytes(n, &commitment.encrypted)
-        .ok_or_else(|| bad("cédula malformada"))?;
+    let eb = teko_ballot_crypto::EncryptedBallot::from_bytes_seats(
+        n,
+        shape.seats,
+        &commitment.encrypted,
+    )
+    .ok_or_else(|| bad("cédula malformada"))?;
     let rs: Option<Vec<_>> = a
         .randomness
         .iter()
         .map(|r| teko_ballot_crypto::scalar_from_bytes(r))
         .collect();
     let rs = rs.ok_or_else(|| bad("aleatório malformado"))?;
-    let opened = teko_ballot_crypto::open_ballot(&pk, n, &ctx, &eb, &rs)
+    let opened = teko_ballot_crypto::open_ballot_multi(&pk, &shape, &ctx, &eb, &rs)
         .ok_or_else(|| bad("a cédula NÃO abre com o aleatório revelado"))?;
-    if opened != want_position {
+    // the opened set must be EXACTLY what the voter asked for (order does not matter)
+    let mut want = want_positions.to_vec();
+    want.sort_unstable();
+    want.dedup();
+    if opened != want {
         return Err(bad(
-            "o dispositivo cifrou OUTRA opção, não a que você escolheu: NÃO use este dispositivo",
+            "o dispositivo cifrou OUTRA escolha, não a que você fez: NÃO use este dispositivo",
         ));
     }
-    let name = contest
-        .options
-        .get(opened)
-        .map(|o| o.name.clone())
-        .unwrap_or_default();
+    let name = opened
+        .iter()
+        .filter_map(|p| contest.options.get(*p).map(|o| o.name.clone()))
+        .collect::<Vec<_>>()
+        .join(", ");
     Ok(AuditReport {
         election_id: election_id.to_string(),
         contest_id: contest_id.to_string(),
@@ -1366,6 +1444,8 @@ pub struct ContestSummary {
     pub option_numbers: Vec<String>,
     /// Per option: 0 candidate, 1 blank, 2 null (ADR-0042).
     pub option_kinds: Vec<u32>,
+    /// How many people the contest elects (ADR-0044): the voter marks up to this many options.
+    pub seats: u32,
     /// Set on a SECOND ROUND: the first-round contest it continues.
     pub parent: String,
     pub eligible: bool,
@@ -1392,6 +1472,8 @@ pub struct SignedBallot {
     pub contest_hash: String,
     pub contest_title: String,
     pub option_index: u32,
+    /// ALL the options of a multi-seat vote (ADR-0044); one entry for one seat.
+    pub option_indices: Vec<u32>,
     pub option_name: String,
     pub voter_key: String,
     pub signature: String,
@@ -1438,6 +1520,7 @@ fn summarize(l: &ElectionLoaded) -> ElectionSummary {
                 option_names: c.option_names.clone(),
                 option_numbers: c.option_numbers.clone(),
                 option_kinds: c.option_kinds.clone(),
+                seats: c.seats.max(1),
                 parent: c.parent.clone(),
                 eligible: c.eligible,
                 voted: c.voted,
@@ -1566,7 +1649,7 @@ mod audit_tests {
             &c,
             "e",
             "presidente",
-            asked,
+            &[asked],
             &BallotCommitment {
                 ciphertext_hash: hash,
                 encrypted: bytes,
@@ -1575,6 +1658,7 @@ mod audit_tests {
                 option_position: encrypts as u32,
                 randomness: rs.iter().map(|r| scalar_to_bytes(r).to_vec()).collect(),
                 voter_key: vk,
+                ..Default::default()
             },
         )
     }
@@ -1589,7 +1673,98 @@ mod audit_tests {
     #[test]
     fn a_device_that_encrypted_another_option_is_caught() {
         let e = run(0, 2, false).unwrap_err().to_string();
-        assert!(e.contains("OUTRA opção"), "{e}");
+        assert!(e.contains("OUTRA escolha"), "{e}");
+    }
+
+    /// A two-seat senate contest: 4 candidates, blank and null.
+    fn senate_run(encrypts: &[usize], asked: &[usize]) -> Result<AuditReport, ClientError> {
+        use teko_ballot_crypto::{BallotShape, encrypt_ballot_multi_with};
+        let x = Scalar::random(&mut StdRng::seed_from_u64(3));
+        let pk = Point::GENERATOR * x;
+        let mut options: Vec<teko_election::ElectionOption> = (0..4u32)
+            .map(|i| teko_election::ElectionOption {
+                index: i,
+                name: format!("Candidato {i}"),
+                ..Default::default()
+            })
+            .collect();
+        for (i, (k, n)) in [
+            (teko_election::OptionKind::Blank, "Branco"),
+            (teko_election::OptionKind::Null, "Nulo"),
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            options.push(teko_election::ElectionOption {
+                index: 4 + i as u32,
+                name: n.into(),
+                kind: k as i32,
+                ..Default::default()
+            });
+        }
+        let contest = teko_election::Contest {
+            contest_id: "senador-sp".into(),
+            office: teko_election::Office::Senator as i32,
+            title: "Senador".into(),
+            seats: 2,
+            options,
+            ..Default::default()
+        };
+        let m = ElectionManifest {
+            election_id: "e".into(),
+            tally_key: point_to_bytes(&pk).to_vec(),
+            ..Default::default()
+        };
+        let vk = vec![2u8; 33];
+        let ctx = teko_election::ballot_ctx("e", "senador-sp", &vk);
+        let special = contest.special_positions();
+        let shape = BallotShape {
+            n: 6,
+            seats: 2,
+            special: &special,
+        };
+        let (eb, rs) =
+            encrypt_ballot_multi_with(&pk, &shape, encrypts, &ctx, &mut StdRng::seed_from_u64(9))
+                .unwrap();
+        let bytes = eb.to_bytes();
+        audit_report(
+            &m,
+            &contest,
+            "e",
+            "senador-sp",
+            asked,
+            &BallotCommitment {
+                ciphertext_hash: teko_election::ciphertext_hash(&bytes),
+                encrypted: bytes,
+            },
+            &BallotAudited {
+                randomness: rs.iter().map(|r| scalar_to_bytes(r).to_vec()).collect(),
+                voter_key: vk,
+                option_positions: encrypts.iter().map(|p| *p as u32).collect(),
+                ..Default::default()
+            },
+        )
+    }
+
+    #[test]
+    fn a_two_seat_audit_must_open_to_exactly_the_set_that_was_asked_for() {
+        let r = senate_run(&[1, 3], &[3, 1]).unwrap();
+        assert!(
+            r.summary.contains("Candidato 1") && r.summary.contains("Candidato 3"),
+            "{}",
+            r.summary
+        );
+        assert!(senate_run(&[4], &[4]).is_ok(), "blank alone");
+        // another set, a subset, a superset, one swapped candidate: the device lied
+        for (enc, asked) in [
+            (&[0usize, 2][..], &[0usize, 1][..]),
+            (&[0], &[0, 1]),
+            (&[0, 1], &[0]),
+            (&[0, 2], &[0, 5]),
+        ] {
+            let e = senate_run(enc, asked).unwrap_err().to_string();
+            assert!(e.contains("OUTRA escolha"), "{enc:?} vs {asked:?}: {e}");
+        }
     }
 
     #[test]

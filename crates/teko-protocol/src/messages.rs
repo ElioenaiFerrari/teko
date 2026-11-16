@@ -415,6 +415,9 @@ pub struct SignBallot {
     pub contest_id: String,
     #[prost(uint32, tag = "3")]
     pub option_index: u32,
+    /// A MULTI-SEAT vote (ADR-0044): the chosen options. Empty = the single `option_index` (one seat).
+    #[prost(uint32, repeated, tag = "4")]
+    pub option_indices: Vec<u32>,
 }
 #[derive(Clone, PartialEq, prost::Message)]
 pub struct Wipe {}
@@ -591,6 +594,9 @@ pub struct ContestInfo {
     /// Per option: 0 = candidate, 1 = blank, 2 = null (ADR-0042).
     #[prost(uint32, repeated, tag = "14")]
     pub option_kinds: Vec<u32>,
+    /// How many people the contest elects (1 unless it is a multi-seat senator contest, ADR-0044).
+    #[prost(uint32, tag = "15")]
+    pub seats: u32,
 }
 #[derive(Clone, PartialEq, prost::Message)]
 pub struct ElectionLoaded {
@@ -676,6 +682,9 @@ pub struct BallotAudited {
     /// The contest voter key the proofs are bound to (public).
     #[prost(bytes = "vec", tag = "3")]
     pub voter_key: Vec<u8>,
+    /// ALL the positions the audited ballot encodes (ADR-0044; one entry for one seat).
+    #[prost(uint32, repeated, tag = "4")]
+    pub option_positions: Vec<u32>,
 }
 /// "Is MY ballot recorded?" (ADR-0041). The host brings a block of the vote chain, its commit
 /// certificate and the Merkle proof of the ballot's leaf; the DEVICE checks them alone against the

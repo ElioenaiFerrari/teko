@@ -16,6 +16,10 @@ Dispositivo, Suite, validadores, quadro (blocos).
 
 ![Conferir o próprio voto: compromisso, auditoria ou voto, bloco certificado conferido pelo dispositivo e veredito da apuração](../diagrams/verify-my-vote.png)
 
+> **Várias vagas (ADR-0044):** num pleito de Senador de 2 vagas o eleitor marca até **2 candidatos distintos**, ou só branco, ou só nulo; a cédula prova que o total ponderado `candidatos + N·(branco+nulo)` está em `1..=N` (prova de faixa de 128 bytes em vez da soma = 1).
+
+![Cédula de várias vagas: cada opção é 0 ou 1, o total ponderado está em 1 até N, e a prova recusa candidato com branco ou três candidatos](../diagrams/senate-ballot.png)
+
 > **Branco e nulo (ADR-0042):** são duas posições a mais na cédula (`kind` no manifesto), cifradas como as outras; o dispositivo mostra "VOTO EM BRANCO" / "VOTO NULO" com as próprias palavras. O limite de 16 posições passa a valer para candidatos + 2.
 
 ## Passo a passo

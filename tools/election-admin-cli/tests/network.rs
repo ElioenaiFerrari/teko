@@ -244,7 +244,12 @@ fn encrypted_ballots_stay_hidden_until_the_close_then_the_validators_reveal_the_
     let planted: std::collections::BTreeMap<String, Vec<u64>> =
         report.planted.iter().cloned().collect();
     let total_planted: u64 = planted.values().map(|v| v.iter().sum::<u64>()).sum();
-    assert_eq!(total_planted, report.ballots);
+    // a senate ballot (2 seats) can carry two candidate votes, so votes planted >= ballots (ADR-0044)
+    assert!(
+        total_planted >= report.ballots && total_planted <= 2 * report.ballots,
+        "{total_planted} votes in {} ballots",
+        report.ballots
+    );
     wait("ballots counted", 60, || {
         admin
             .tally()
@@ -274,7 +279,8 @@ fn encrypted_ballots_stay_hidden_until_the_close_then_the_validators_reveal_the_
         .clone()
         .unwrap()
         .voting_closes;
-    assert_eq!(admin.close_due(closes + 1).unwrap(), 6);
+    // six contests of one seat and the two of the Senate (ADR-0044)
+    assert_eq!(admin.close_due(closes + 1).unwrap(), 8);
     wait("totals revealed with one institution down", 90, || {
         admin.tally().is_ok_and(|t| {
             planted
@@ -295,7 +301,7 @@ fn encrypted_ballots_stay_hidden_until_the_close_then_the_validators_reveal_the_
     // With 4 institutions and a threshold of 2, the 3 that are up all publish their share; the
     // one that arrives after the totals are already revealed is refused as redundant (at most one
     // per contest). Nothing else may be refused.
-    assert!(t.bad_results <= 6, "{} refused results", t.bad_results);
+    assert!(t.bad_results <= 8, "{} refused results", t.bad_results);
     assert_eq!(t.ignored_governance, 0);
     for n in nodes.into_iter().flatten() {
         n.stop();

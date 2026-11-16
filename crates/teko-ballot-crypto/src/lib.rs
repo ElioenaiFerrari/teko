@@ -33,13 +33,17 @@ mod elgamal;
 mod proofs;
 
 pub use ballot::{
-    EncryptedBallot, MAX_OPTIONS, encrypt_ballot, encrypt_ballot_with, open_ballot, sum_ballots,
-    verify_ballot,
+    BallotShape, EncryptedBallot, MAX_OPTIONS, encrypt_ballot, encrypt_ballot_multi,
+    encrypt_ballot_multi_with, encrypt_ballot_with, open_ballot, open_ballot_multi, sum_ballots,
+    verify_ballot, verify_ballot_shape,
 };
 pub use codec::{point_from_bytes, point_to_bytes, scalar_from_bytes, scalar_to_bytes};
 pub use elgamal::{
     Ciphertext, combine_shares, decrypt_share, encrypt_bit, lagrange_at_zero, solve_small_dlog,
 };
-pub use proofs::{BitProof, DecryptProof, SumProof, prove_decryption, verify_decryption};
+pub use proofs::{
+    BitProof, DecryptProof, RangeProof, SumProof, prove_decryption, prove_range, verify_decryption,
+    verify_range,
+};
 
 pub use p256::{ProjectivePoint as Point, Scalar};

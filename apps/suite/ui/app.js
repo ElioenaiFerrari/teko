@@ -152,7 +152,7 @@
     idTried: false,       // evitam laços de re-tentativa em loadId/loadFirmware
     fwTried: false,
     fwLoading: false,   // já perguntei ao dispositivo por uma eleição nesta visita?
-    picks: {},           // contest_id -> índice escolhido
+    picks: {},           // contest_id -> índice escolhido (uma vaga) ou lista de índices (várias vagas)
     ballots: {},         // contest_id -> cédula votada (só rastreador; a opção não é guardada)
     audits: {},          // contest_id -> última cédula de teste auditada
     checks: {},          // contest_id -> conferência da própria cédula
@@ -891,12 +891,15 @@
       return { verified: chip('candidatura conferida na chain', 'ok', 'check'), pending: chip('candidatura em contestação', 'warn'), expired: chip('candidatura expirada', 'bad'), revoked: chip('candidatura REVOGADA', 'bad', 'alert'), mismatch: chip('não confere com a chain', 'bad', 'alert'), unknown: chip('candidatura não está na chain', 'warn') }[st] || '';
     };
     const kinds = c.option_kinds || [];
+    const seats = c.seats || 1;
     const optRow = (n, i) => {
       const special = kinds[i] === 1 || kinds[i] === 2;
       const label = kinds[i] === 1 ? '<span class="option__name">Voto em branco</span><span class="muted">não conta para nenhum candidato</span>'
         : kinds[i] === 2 ? '<span class="option__name">Voto nulo</span><span class="muted">não conta para nenhum candidato</span>'
         : `<span class="option__name">${(c.option_numbers || [])[i] ? `<strong>${esc(c.option_numbers[i])}</strong> – ` : ''}${esc(n)}</span>${badge(i)}`;
-      return `<label class="option${special ? ' option--special' : ''}"><input type="radio" name="cand-${esc(c.contest_id)}" value="${i}" ${S.picks[c.contest_id] === i ? 'checked' : ''} ${canVote ? '' : 'disabled'}><span>${label}</span></label>`;
+      const pk = S.picks[c.contest_id];
+      const on = Array.isArray(pk) ? pk.includes(i) : pk === i;
+      return `<label class="option${special ? ' option--special' : ''}"><input type="${seats > 1 ? 'checkbox' : 'radio'}" name="cand-${esc(c.contest_id)}" value="${i}" data-special="${special ? 1 : 0}" ${on ? 'checked' : ''} ${canVote ? '' : 'disabled'}><span>${label}</span></label>`;
     };
     const candRows = c.option_names.map((n, i) => (kinds[i] ? '' : optRow(n, i))).join('');
     const specialRows = c.option_names.map((n, i) => (kinds[i] ? optRow(n, i) : '')).join('');
@@ -907,6 +910,7 @@
         <div class="row" style="gap:6px;margin-top:6px">${chip(scopeLabel(c), 'info')}${chip(phaseLabel, phaseKind)}${c.eligible ? chip(c.scope === 'national' ? 'Todos votam' : 'Seu domicílio', 'ok', 'check') : chip('Fora do seu domicílio', 'bad', 'lock')}${c.voted ? chip('Você já votou', 'ok', 'badge') : ''}${c.registration_required ? chip('Registro anônimo', 'info', 'shield') : ''}</div></div></div>
       <p class="muted">Votação: ${esc(fmtDate(c.voting_opens))} até ${esc(fmtDate(c.voting_closes))}</p>
       <div class="options" role="radiogroup" aria-label="Candidatos: ${esc(c.title)}">${opts}</div>
+      ${seats > 1 ? `<p class="muted">Este cargo elege <strong>${seats} pessoas</strong>: marque <strong>até ${seats} candidatos diferentes</strong>, ou só branco, ou só nulo.</p>` : ''}
       ${specialRows ? `<div class="muted options-or">Ou, sem escolher candidato:</div><div class="options options--special" role="radiogroup" aria-label="Branco ou nulo: ${esc(c.title)}">${specialRows}</div>` : ''}
       ${why ? `<p class="muted">${esc(why)}</p>` : ''}
       ${canVote && c.registration_required ? '<p class="muted">Este pleito exige registro anônimo: o dispositivo pedirá <strong>duas confirmações</strong> (registro e voto).</p>' : ''}
@@ -1155,7 +1159,7 @@
     const chips = `${chip(scope, 'info')}${chip(phaseLabel, phaseKind)}`;
     const chipsEl = $('[data-slot=chips]', art); if (chipsEl.dataset.v !== chips) { chipsEl.dataset.v = chips; chipsEl.innerHTML = chips; }
     const totalEl = $('[data-slot=total]', art);
-    const total = c.accepted === null ? 'Total oculto até o fechamento' : `${nf.format(c.accepted)} cédulas ${c.encrypted ? 'cifradas ' : ''}aceitas${c.registration_required ? ` · ${nf.format(c.registered)} registrados` : ''}${c.rejected ? ` · ${nf.format(c.rejected)} rejeitadas` : ''}${(c.blank || c.null) ? ` · ${nf.format(c.blank || 0)} em branco · ${nf.format(c.null || 0)} nulos (fora da base dos percentuais)` : ''}`;
+    const total = c.accepted === null ? 'Total oculto até o fechamento' : `${nf.format(c.accepted)} cédulas ${c.encrypted ? 'cifradas ' : ''}aceitas${c.registration_required ? ` · ${nf.format(c.registered)} registrados` : ''}${c.rejected ? ` · ${nf.format(c.rejected)} rejeitadas` : ''}${(c.seats || 1) > 1 ? ` · ${c.seats} vagas (os ${c.seats} mais votados)` : ''}${(c.blank || c.null) ? ` · ${nf.format(c.blank || 0)} em branco · ${nf.format(c.null || 0)} nulos (fora da base dos percentuais)` : ''}`;
     if (totalEl.textContent !== total) totalEl.textContent = total;
     const body = $('[data-slot=body]', art);
     if (!c.distribution_visible) {
@@ -1186,7 +1190,7 @@
     const existing = new Map([...ul.children].map((li) => [li.dataset.key, li]));
     rows.forEach((o, i) => {
       const key = o.others ? 'others' : String(o.index);
-      const kind = o.others ? 'others' : i === 0 && o.votes > 0 ? 'lead' : '';
+      const kind = o.others ? 'others' : i < (c.seats || 1) && o.votes > 0 ? 'lead' : '';
       const pct = total2 > 0 ? (o.votes * 100) / total2 : 0;
       let li = existing.get(key);
       if (li) { patchRow(li, o, i + 1, o.others ? (o.votes * 100) / Math.max(1, max) : (o.votes * 100) / max, pct, kind); existing.delete(key); }
@@ -1445,9 +1449,12 @@
     async vote(b) {
       const id = b.dataset.contest;
       const idx = S.picks[id];
-      if (idx === undefined) { toast('Escolha um candidato antes de votar.'); return; }
+      const many = Array.isArray(idx);
+      if (idx === undefined || (many && idx.length === 0)) { toast('Escolha um candidato antes de votar.'); return; }
       await guarded(async () => {
-        const r = await call('election_vote', { electionId: S.election.election_id, contestId: id, optionIndex: idx });
+        const r = await call('election_vote', many
+          ? { electionId: S.election.election_id, contestId: id, optionIndex: 0, optionIndices: idx }
+          : { electionId: S.election.election_id, contestId: id, optionIndex: idx });
         if (r.audit) {
           S.audits[id] = r.audit;
           toast('Auditoria concluída: a cédula de teste foi descartada. Você ainda pode votar.', 'ok');
@@ -1825,7 +1832,25 @@
     const fi = $('#f-file');
     if (fi) fi.addEventListener('change', () => { if (fi.files[0]) readFile(fi.files[0]); });
     document.querySelectorAll('input[name="choice"]').forEach((r) => r.addEventListener('change', () => { S.prove.choice = r.value; S.prove.result = null; S.prove.error = null; }));
-    document.querySelectorAll('input[name^="cand-"]').forEach((r) => r.addEventListener('change', () => { S.picks[r.name.slice(5)] = Number(r.value); }));
+    document.querySelectorAll('input[name^="cand-"]').forEach((r) => r.addEventListener('change', () => {
+      const id = r.name.slice(5);
+      if (r.type === 'radio') { S.picks[id] = Number(r.value); return; }
+      // várias vagas: até N candidatos distintos, ou só branco, ou só nulo (o dispositivo confere de novo)
+      const c = (S.election.contests || []).find((x) => x.contest_id === id) || { seats: 1 };
+      const all = [...document.querySelectorAll(`input[name="${r.name}"]`)];
+      const v = Number(r.value);
+      let arr = (Array.isArray(S.picks[id]) ? S.picks[id] : []).filter((x) => x !== v);
+      if (r.checked) {
+        if (r.dataset.special === '1') arr = [v];
+        else {
+          arr = arr.filter((x) => !all.find((i) => Number(i.value) === x && i.dataset.special === '1'));
+          if (arr.length >= (c.seats || 1)) { r.checked = false; toast(`Este cargo tem ${c.seats} vagas: no máximo ${c.seats} candidatos.`); }
+          else arr.push(v);
+        }
+      }
+      S.picks[id] = arr;
+      all.forEach((i) => { i.checked = arr.includes(Number(i.value)); });
+    }));
   }
 
   // ───────────────────────── tema ─────────────────────────

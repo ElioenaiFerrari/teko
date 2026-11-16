@@ -1847,6 +1847,7 @@ pub async fn election_vote(
     election_id: String,
     contest_id: String,
     option_index: u32,
+    option_indices: Option<Vec<u32>>,
 ) -> Result<VoteReceipt, UiError> {
     let trust = load_trust()?;
     let bytes = read_bundle()?;
@@ -1861,7 +1862,12 @@ pub async fn election_vote(
             register_anonymously(c, &election_id, &contest_id)?
         };
         Ok((
-            c.sign_ballot_or_audit(&election_id, &contest_id, option_index)?,
+            match option_indices.as_deref() {
+                Some(many) if !many.is_empty() => {
+                    c.sign_ballot_or_audit_multi(&election_id, &contest_id, many)?
+                }
+                _ => c.sign_ballot_or_audit(&election_id, &contest_id, option_index)?,
+            },
             reg_note,
         ))
     })
@@ -2212,6 +2218,8 @@ pub struct ContestView {
     /// Blank and null votes: counted and shown, but outside `valid`.
     blank: u64,
     null: u64,
+    /// How many people the contest elects (ADR-0044); the UI marks that many leaders.
+    seats: usize,
 }
 
 #[derive(Serialize)]
@@ -2364,9 +2372,18 @@ pub async fn results_snapshot(suite: State<'_, Suite>) -> Result<ResultsReply, U
                     },
                     others_votes: if show { ranked.others_votes } else { 0 },
                     others_count: if show { ranked.others_count } else { 0 },
-                    valid: if show { c.valid_votes() } else { 0 },
+                    // several seats: a ballot carries up to `seats` candidate votes, so the base of the
+                    // percentages is the ballots that chose candidates (ADR-0044)
+                    valid: if !show {
+                        0
+                    } else if c.seats > 1 {
+                        c.accepted.saturating_sub(c.blank_votes() + c.null_votes())
+                    } else {
+                        c.valid_votes()
+                    },
                     blank: if show { c.blank_votes() } else { 0 },
                     null: if show { c.null_votes() } else { 0 },
+                    seats: c.seats,
                 }
             })
             .collect();

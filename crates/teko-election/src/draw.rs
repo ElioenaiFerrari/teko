@@ -15,6 +15,9 @@ pub enum DrawGoal {
     Winner,
     /// The first `take` of the drawn order fill the open finalist slots of a runoff.
     Finalists,
+    /// The first `take` of the drawn order fill the seats left open at the cut of a multi-seat
+    /// contest (ADR-0044).
+    Seats,
 }
 
 /// A tie the rule cannot break: the tied options (ascending ballot index), how many of them the

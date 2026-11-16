@@ -183,6 +183,120 @@ pub fn verify_sum(pk: &ProjectivePoint, total: &Ciphertext, p: &SumProof, ctx: &
     ) == p.c
 }
 
+/// Proof that `ct` (the WEIGHTED total of a multi-seat ballot) encrypts a value `m` in `1..=n`
+/// (ADR-0044): a disjunction with one Chaum-Pedersen branch per value, so it says nothing about
+/// WHICH value. Branch `m` proves `(G, Y, C1, C2 - m*G)` is a DDH tuple.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct RangeProof {
+    pub c: Vec<Scalar>,
+    pub s: Vec<Scalar>,
+}
+
+impl RangeProof {
+    pub fn encoded_len(branches: usize) -> usize {
+        branches * SumProof::LEN
+    }
+
+    pub fn to_bytes(&self) -> Vec<u8> {
+        let mut out = Vec::with_capacity(Self::encoded_len(self.c.len()));
+        for (c, s) in self.c.iter().zip(&self.s) {
+            out.extend_from_slice(&scalar_to_bytes(c));
+            out.extend_from_slice(&scalar_to_bytes(s));
+        }
+        out
+    }
+
+    /// Strict: exactly `branches` pairs of canonical scalars.
+    pub fn from_bytes(branches: usize, b: &[u8]) -> Option<Self> {
+        if branches == 0 || b.len() != Self::encoded_len(branches) {
+            return None;
+        }
+        let mut c = Vec::with_capacity(branches);
+        let mut s = Vec::with_capacity(branches);
+        for chunk in b.chunks(SumProof::LEN) {
+            c.push(scalar_from_bytes(chunk.get(..32)?)?);
+            s.push(scalar_from_bytes(chunk.get(32..)?)?);
+        }
+        Some(Self { c, s })
+    }
+}
+
+fn range_ctx(ctx: &[u8], n: usize) -> Vec<u8> {
+    let mut c = Vec::with_capacity(ctx.len() + 4);
+    c.extend_from_slice(ctx);
+    c.extend_from_slice(&(n as u32).to_be_bytes());
+    c
+}
+
+/// `m` in `1..=n` is the REAL value the total encrypts (with randomness `r_total`).
+pub fn prove_range<R: Rng + CryptoRng>(
+    pk: &ProjectivePoint,
+    total: &Ciphertext,
+    m: usize,
+    n: usize,
+    r_total: &Scalar,
+    ctx: &[u8],
+    rng: &mut R,
+) -> Option<RangeProof> {
+    if n == 0 || m == 0 || m > n {
+        return None;
+    }
+    let real = m - 1;
+    let w = Scalar::random(rng);
+    let mut cs = Vec::with_capacity(n);
+    let mut ss = Vec::with_capacity(n);
+    let mut ts: Vec<ProjectivePoint> = Vec::with_capacity(2 * n);
+    for j in 0..n {
+        if j == real {
+            cs.push(Scalar::ZERO);
+            ss.push(Scalar::ZERO);
+            ts.push(G * w);
+            ts.push(*pk * w);
+        } else {
+            let (cj, sj) = (Scalar::random(rng), Scalar::random(rng));
+            let d = total.c2 - G * Scalar::from((j + 1) as u64);
+            ts.push(G * sj - total.c1 * cj);
+            ts.push(*pk * sj - d * cj);
+            cs.push(cj);
+            ss.push(sj);
+        }
+    }
+    let mut pts: Vec<&ProjectivePoint> = alloc::vec![pk, &total.c1, &total.c2];
+    pts.extend(ts.iter());
+    let c = challenge(tags::BALLOT_RANGE_PROOF, &range_ctx(ctx, n), &pts);
+    let sim_sum = cs
+        .iter()
+        .enumerate()
+        .filter(|(j, _)| *j != real)
+        .fold(Scalar::ZERO, |a, (_, c)| a + *c);
+    let c_real = c - sim_sum;
+    cs[real] = c_real;
+    ss[real] = w + c_real * *r_total;
+    Some(RangeProof { c: cs, s: ss })
+}
+
+pub fn verify_range(
+    pk: &ProjectivePoint,
+    total: &Ciphertext,
+    p: &RangeProof,
+    n: usize,
+    ctx: &[u8],
+) -> bool {
+    if n == 0 || p.c.len() != n || p.s.len() != n {
+        return false;
+    }
+    let mut ts: Vec<ProjectivePoint> = Vec::with_capacity(2 * n);
+    for j in 0..n {
+        let d = total.c2 - G * Scalar::from((j + 1) as u64);
+        ts.push(G * p.s[j] - total.c1 * p.c[j]);
+        ts.push(*pk * p.s[j] - d * p.c[j]);
+    }
+    let mut pts: Vec<&ProjectivePoint> = alloc::vec![pk, &total.c1, &total.c2];
+    pts.extend(ts.iter());
+    let c = challenge(tags::BALLOT_RANGE_PROOF, &range_ctx(ctx, n), &pts);
+    c == p.c.iter().fold(Scalar::ZERO, |a, x| a + *x)
+}
+
 /// Proof that a validator's decryption share `D = d*C1` uses the same secret `d`
 /// as its public verification key `V = d*G` (Chaum-Pedersen).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

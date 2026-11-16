@@ -35,16 +35,18 @@
   const voted = {};
   const contests = () => [
     { contest_id: 'presidente', title: 'Presidente da República', phase: 'voting_open', phase_code: 3, scope: 'national', scope_code: '', option_names: ['Candidata Onça-Pintada', 'Candidato Boto-Cor-de-Rosa', 'Candidata Arara-Azul'], eligible: true, registration_required: true, voting_opens: NOW - DAY, voting_closes: NOW + 3 * DAY },
+    { contest_id: 'senador-sp', title: 'Senador de São Paulo (2 vagas)', phase: 'voting_open', phase_code: 3, scope: 'state', scope_code: 'SP', option_names: ['Candidato Peixe-Boi', 'Candidata Ariranha', 'Candidato Cervo-do-Pantanal', 'Candidata Harpia'], seats: 2, eligible: true, registration_required: true, voting_opens: NOW - DAY, voting_closes: NOW + 3 * DAY },
     { contest_id: 'governador-sp', title: 'Governador de São Paulo', phase: 'registration_open', phase_code: 2, scope: 'state', scope_code: 'SP', option_names: ['Candidato Guará', 'Candidata Vitória-Régia'], eligible: true, registration_required: true, voting_opens: NOW + DAY, voting_closes: NOW + 5 * DAY },
     { contest_id: 'governador-rj', title: 'Governador do Rio de Janeiro', phase: 'voting_open', phase_code: 3, scope: 'state', scope_code: 'RJ', option_names: ['Candidato Mico-Leão-Dourado', 'Candidata Capivara'], eligible: false, registration_required: true, voting_opens: NOW - DAY, voting_closes: NOW + 2 * DAY },
     { contest_id: 'prefeito-3550308', title: 'Prefeito de São Paulo', phase: 'candidates_published', phase_code: 1, scope: 'municipality', scope_code: '3550308', option_names: ['Candidata Jaguatirica', 'Candidato Tucano'], eligible: true, registration_required: true, voting_opens: NOW + 3 * DAY, voting_closes: NOW + 4 * DAY },
-  ].map((c) => ({ ...c, option_names: [...c.option_names, 'Branco', 'Nulo'], option_kinds: [...c.option_names.map(() => 0), 1, 2], voted: !!voted[c.contest_id] }));
+  ].map((c) => ({ ...c, option_names: [...c.option_names, 'Branco', 'Nulo'], option_kinds: [...c.option_names.map(() => 0), 1, 2], seats: c.seats || 1, voted: !!voted[c.contest_id] }));
   const electionSummary = () => ({ election_id: 'eleicoes-exemplo-2026', title: 'Eleições de exemplo 2026 (protótipo)', revision: 1, seq: 6, contests: contests() });
 
   let published = q === 'ready' && false;
   let headExtra = 0;
-  const mk = (id, title, office, scope, code, phase, names, first, base) => ({ id, title, office, scope, code, phase, names, first, votes: names.map((_, i) => Math.round(base / (i + 1) ** 1.2)) });
+  const mk = (id, title, office, scope, code, phase, names, first, base, seats = 1) => ({ id, title, office, scope, code, phase, names, first, seats, votes: names.map((_, i) => Math.round(base / (i + 1) ** 1.2)) });
   const live = Object.fromEntries([
+    mk('senador-sp', 'Senador de São Paulo (2 vagas)', 'senator', 'state', 'SP', 'voting_open', ['Candidato Peixe-Boi', 'Candidata Ariranha', 'Candidato Cervo-do-Pantanal', 'Candidata Harpia'], 450, 3000, 2),
     mk('presidente', 'Presidente da República', 'president', 'national', '', 'voting_open', ['Candidata Onça-Pintada', 'Candidato Boto-Cor-de-Rosa', 'Candidata Arara-Azul'], 10, 4200),
     mk('governador-sp', 'Governador de São Paulo', 'governor', 'state', 'SP', 'voting_open', ['Candidato Guará', 'Candidata Vitória-Régia', 'Candidato Lobo-Guará', 'Candidata Arara-Canindé', 'Candidato Tamanduá-Bandeira', 'Candidata Capivara', 'Candidato Jacaré-do-Papo-Amarelo', 'Candidata Onça-Parda', 'Candidato Mico-Leão-Dourado', 'Candidata Ararinha-Azul', 'Candidato Tatu-Canastra', 'Candidata Sabiá-Laranjeira'], 20, 900),
     mk('governador-rj', 'Governador do Rio de Janeiro', 'governor', 'state', 'RJ', 'voting_open', ['Candidato Mico-Leão-Dourado', 'Candidata Capivara', 'Candidato Boto-Tucuxi'], 40, 380),
@@ -144,7 +146,7 @@
         const total = c.votes.reduce((a, b) => a + b, 0);
         const ranked = c.names.map((n, i) => ({ index: i, name: n, number: String(c.first + i), votes: c.votes[i] })).sort((a, b) => b.votes - a.votes || a.index - b.index);
         const top = ranked.slice(0, 10), rest = ranked.slice(10);
-        return { contest_id: c.id, title: c.title, office: c.office, scope: c.scope, scope_code: c.code, phase: c.phase, accepted: total + Math.round(total * 0.05), valid: total, blank: Math.round(total * 0.03), null: Math.round(total * 0.02), registered: total, registration_required: true, encrypted: true, revealed: c.phase !== 'voting_open', rejected: 0, distribution_visible: c.phase !== 'voting_open', top: c.phase !== 'voting_open' ? top : [], others_votes: rest.reduce((a, b) => a + b.votes, 0), others_count: rest.length };
+        return { contest_id: c.id, title: c.title, office: c.office, scope: c.scope, scope_code: c.code, phase: c.phase, accepted: total + Math.round(total * 0.05), seats: c.seats, valid: total, blank: Math.round(total * 0.03), null: Math.round(total * 0.02), registered: total, registration_required: true, encrypted: true, revealed: c.phase !== 'voting_open', rejected: 0, distribution_visible: c.phase !== 'voting_open', top: c.phase !== 'voting_open' ? top : [], others_votes: rest.reduce((a, b) => a + b.votes, 0), others_count: rest.length };
       });
       return { available: true, reason: null, election_id: 'eleicoes-exemplo-2026', title: 'Eleições de exemplo (protótipo, dados fictícios)', revision: 1, visibility: 'live', simulated: true, head_size: 12 + headExtra, verified: 12 + headExtra, total: 12 + headExtra, head_root: 'ab12cd34ef56' + '00'.repeat(26), ignored_governance: 0, contests: cs };
     },

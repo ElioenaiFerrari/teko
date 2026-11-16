@@ -18,6 +18,7 @@ Regra: decisões de produto/segurança só passam a `Aceito` pela aprovação do
 | [0041](0041-conferir-o-proprio-voto.md) | O eleitor confere o próprio voto: desafio de Benaloh e conferência no dispositivo | Aceito provisoriamente (etapa C implementada) | confirmar |
 | [0042](0042-voto-em-branco-e-nulo.md) | Voto em branco e nulo como opções explícitas, fora da base da maioria | Aceito provisoriamente (implementado) | confirmar |
 | [0043](0043-desempate-por-sorteio-verificavel.md) | Desempate por sorteio verificável (VRF de limiar sobre a chave da cerimônia) | Aceito provisoriamente (implementado) | confirmar |
+| [0044](0044-cargos-de-varias-vagas-senador.md) | Cargos de várias vagas, etapa 1: o Senador (cédula de N votos distintos, N eleitos, classes) | Aceito provisoriamente (implementado) | confirmar |
 | [0009](0009-interface-do-emulador.md) | Interface do emulador | Aceito (provisório) | Recomendação adotada |
 | [0010](0010-transporte-local.md) | Transporte local | Aceito (provisório) | Recomendação adotada |
 | [0011](0011-icp-brasil-fora-de-escopo.md) | ICP-Brasil fora de escopo | Proposto | Registro de escopo |

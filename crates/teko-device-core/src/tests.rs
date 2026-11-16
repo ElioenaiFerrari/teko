@@ -329,6 +329,7 @@ fn operations_rejected_in_wrong_state() {
             election_id: "e".into(),
             contest_id: "c".into(),
             option_index: 0,
+            ..Default::default()
         }),
         Request::LoadElection(LoadElection::default()),
         Request::Wipe(Wipe {}),
@@ -656,6 +657,7 @@ fn script(i: u8) -> Request {
             election_id: "eleicoes-2026".into(),
             contest_id: "presidente".into(),
             option_index: 1,
+            ..Default::default()
         }),
         8 => Request::Unlock(Unlock {}),
         9 => Request::Ping(Ping {}),
@@ -1187,6 +1189,7 @@ fn vote(dev: &mut Dev, contest: &str, option: u32) -> Response {
         election_id: "eleicoes-2026".into(),
         contest_id: contest.into(),
         option_index: option,
+        ..Default::default()
     }))
 }
 
@@ -1399,6 +1402,7 @@ fn you_cannot_vote_outside_your_jurisdiction_or_outside_the_voting_phase() {
         election_id: "outra".into(),
         contest_id: "presidente".into(),
         option_index: 0,
+        ..Default::default()
     }));
     assert_eq!(failure_code(&other), Some(ErrorCode::InvalidArgument));
     assert_eq!(
@@ -2436,6 +2440,144 @@ mod encrypted {
             .find(|s| s.title == "CONFIRMAR VOTO?")
             .unwrap();
         assert!(last.lines.join(" ").contains("VOTO NULO"));
+    }
+
+    /// The device holds an election whose first contest is a TWO-SEAT senate race (3 candidates,
+    /// blank and null) in the citizen's own state (ADR-0044).
+    fn senate_setup() -> (World, ScriptedHal, Dev, Scalar, ElectionManifest) {
+        use teko_election::{BLANK_NAME, ElectionOption, NULL_NAME, OptionKind};
+        let (w, hal, mut dev, _) = ready();
+        let x = Scalar::random(&mut StdRng::seed_from_u64(79));
+        let mut m = election_manifest(&w);
+        m.tally_key = point_to_bytes(&(Point::GENERATOR * x)).to_vec();
+        let c = &mut m.contests[0];
+        c.office = teko_election::Office::Senator as i32;
+        c.scope = Some(teko_election::Scope::state("SP"));
+        c.seats = 2;
+        for (k, n) in [
+            (OptionKind::Blank, BLANK_NAME),
+            (OptionKind::Null, NULL_NAME),
+        ] {
+            let index = c.options.len() as u32;
+            c.options.push(ElectionOption {
+                index,
+                name: n.into(),
+                kind: k as i32,
+                ..Default::default()
+            });
+        }
+        m.signatures = [0usize, 1]
+            .iter()
+            .map(|i| sign_election(&w.gov[*i], &m))
+            .collect();
+        let ts = history(&m, &w);
+        assert!(matches!(
+            dev.handle(load_req(&m, &ts)),
+            Response::ElectionLoaded(_)
+        ));
+        (w, hal, dev, x, m)
+    }
+
+    fn vote_many(dev: &mut Dev, m: &ElectionManifest, picks: &[u32]) -> Response {
+        dev.handle(Request::SignBallot(SignBallot {
+            election_id: m.election_id.clone(),
+            contest_id: "presidente".into(),
+            option_index: 0,
+            option_indices: picks.to_vec(),
+        }))
+    }
+
+    #[test]
+    fn a_two_seat_vote_is_up_to_two_distinct_candidates_or_blank_or_null_alone_and_the_screen_lists_them()
+     {
+        let (_, hal, mut dev, x, m) = senate_setup();
+        // the host learns the seats
+        let Response::ElectionLoaded(l) = dev.handle(load_req(&m, &history(&m, &world()))) else {
+            panic!("the election must load again")
+        };
+        let info = l
+            .contests
+            .iter()
+            .find(|c| c.contest_id == "presidente")
+            .unwrap();
+        assert_eq!(info.seats, 2);
+        let refused = |r: &Response| failure_code(r) == Some(ErrorCode::InvalidArgument);
+        // three candidates, a repeat, a candidate with blank, blank with null, out of range, nothing
+        assert!(refused(&vote_many(&mut dev, &m, &[0, 1, 2])));
+        assert!(refused(&vote_many(&mut dev, &m, &[1, 1])));
+        assert!(refused(&vote_many(&mut dev, &m, &[0, 3])));
+        assert!(refused(&vote_many(&mut dev, &m, &[3, 4])));
+        assert!(refused(&vote_many(&mut dev, &m, &[9])));
+        // both fields at once is not a message
+        let both = dev.handle(Request::SignBallot(SignBallot {
+            election_id: m.election_id.clone(),
+            contest_id: "presidente".into(),
+            option_index: 1,
+            option_indices: vec![0, 1],
+        }));
+        assert!(refused(&both));
+        // an audit shows the screen with BOTH candidates and opens to exactly that set
+        let pk = Point::GENERATOR * x;
+        let key = vk(&mut dev, "presidente");
+        let ctx = ballot_ctx(&m.election_id, "presidente", &key);
+        hal.clear_interim();
+        hal.push_decision(Decision::Confirm);
+        hal.push_decision(Decision::Reject);
+        hal.push_decision(Decision::Confirm);
+        let Response::BallotAudited(a) = vote_many(&mut dev, &m, &[2, 0]) else {
+            panic!("not audited")
+        };
+        let screen = hal
+            .screens()
+            .into_iter()
+            .find(|s| s.title == "CONFIRMAR VOTO?")
+            .unwrap();
+        let text = screen.lines.join(" ");
+        assert!(text.contains("SEUS VOTOS (2 de 2 vagas)"), "{text}");
+        assert!(
+            a.option_positions == [2, 0] || a.option_positions == [0, 2],
+            "{:?}",
+            a.option_positions
+        );
+        let cm = commitments(&hal);
+        let n = m.contests[0].options.len();
+        let special = m.contests[0].special_positions();
+        let shape = teko_ballot_crypto::BallotShape {
+            n,
+            seats: 2,
+            special: &special,
+        };
+        let eb = EncryptedBallot::from_bytes_seats(n, 2, &cm[0].encrypted).unwrap();
+        let rs: Vec<Scalar> = a
+            .randomness
+            .iter()
+            .map(|r| teko_ballot_crypto::scalar_from_bytes(r).unwrap())
+            .collect();
+        assert_eq!(
+            teko_ballot_crypto::open_ballot_multi(&pk, &shape, &ctx, &eb, &rs),
+            Some(vec![0, 2])
+        );
+        // the audit did not use the vote: one candidate is a valid ballot, and then it is cast
+        let Response::BallotSignature(b) = vote_many(&mut dev, &m, &[1]) else {
+            panic!("a vote for one of two seats is valid")
+        };
+        let eb = EncryptedBallot::from_bytes_seats(n, 2, &b.encrypted).unwrap();
+        assert!(teko_ballot_crypto::verify_ballot_shape(
+            &pk, &shape, &ctx, &eb
+        ));
+        assert_eq!(
+            failure_code(&vote_many(&mut dev, &m, &[0])),
+            Some(ErrorCode::AlreadyVoted)
+        );
+    }
+
+    #[test]
+    fn blank_alone_is_a_valid_two_seat_ballot() {
+        let (_, _, mut dev, _, m) = senate_setup();
+        assert!(matches!(
+            vote_many(&mut dev, &m, &[3]),
+            Response::BallotSignature(_)
+        ));
     }
 
     #[test]

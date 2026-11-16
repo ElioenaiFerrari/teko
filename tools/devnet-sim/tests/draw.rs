@@ -129,10 +129,13 @@ fn ties_are_broken_by_a_draw_nobody_controls_that_anyone_can_redo_and_it_works_w
 
     // planted ties: two candidates tied (the draw ELECTS), a tie for the second finalist slot, and a
     // three-way tie (the draw picks two finalists)
-    let plan: [(&str, &[u64]); 3] = [
+    let plan: [(&str, &[u64]); 5] = [
         ("governador-mg", &[3, 3]),
         ("governador-sp", &[4, 2, 2]),
         ("governador-rj", &[3, 3, 3]),
+        // the SENATE (ADR-0044): 2 seats with a tie for the second one, and 1 seat without a tie
+        ("senador-sp", &[4, 3, 3, 1]),
+        ("senador-rj", &[3, 2, 1]),
     ];
     let mut planted = 0;
     for (id, votes) in plan {
@@ -162,8 +165,11 @@ fn ties_are_broken_by_a_draw_nobody_controls_that_anyone_can_redo_and_it_works_w
     wait("drawn outcomes certified", 180, || {
         outcomes(&admin).is_ok_and(|o| {
             plan.iter().all(|(id, _)| {
-                o.iter()
-                    .any(|x| &x.outcome.contest_id == id && x.outcome.drawn && x.is_certified())
+                o.iter().any(|x| {
+                    &x.outcome.contest_id == id
+                        && x.is_certified()
+                        && (x.outcome.drawn || *id == "senador-rj")
+                })
             })
         })
     });
@@ -190,7 +196,24 @@ fn ties_are_broken_by_a_draw_nobody_controls_that_anyone_can_redo_and_it_works_w
     assert_eq!(rj.outcome.kind(), OutcomeKind::Runoff);
     assert_ne!(rj.outcome.finalists[0], rj.outcome.finalists[1]);
     assert!(rj.outcome.finalists.iter().all(|f| *f < 3));
-    for c in [mg, sp, rj] {
+    // the senate: 2 seats, the leader keeps his and the draw fills the other among the tied two
+    let sen = get("senador-sp");
+    assert_eq!(sen.outcome.kind(), OutcomeKind::Elected);
+    assert_eq!((sen.outcome.seats, sen.outcome.elected.len()), (2, 2));
+    assert_eq!(sen.outcome.elected[0], 0);
+    assert!(matches!(sen.outcome.elected[1], 1 | 2));
+    assert_eq!(sen.outcome.elected_credentials.len(), 2);
+    // 1 seat and no tie: no draw at all, the most voted wins
+    let one = list
+        .iter()
+        .find(|x| x.outcome.contest_id == "senador-rj")
+        .unwrap();
+    assert!(!one.outcome.drawn && one.is_certified());
+    assert_eq!(
+        (one.outcome.seats, one.outcome.elected.clone()),
+        (1, vec![0])
+    );
+    for c in [mg, sp, rj, sen] {
         assert!(
             c.signers >= 3,
             "{}: {} signers",
@@ -209,6 +232,23 @@ fn ties_are_broken_by_a_draw_nobody_controls_that_anyone_can_redo_and_it_works_w
             .any(|l| l.contains("governador-mg") && l.contains("eleito registrado")),
         "{said:?}"
     );
+    // both senators of the 2-seat contest and the one of the 1-seat contest hold the credential
+    assert!(
+        said.iter()
+            .any(|l| l.contains("senador-sp") && l.contains("eleito registrado")),
+        "{said:?}"
+    );
+    let world = teko_node::NodeWorld::open(&net).unwrap();
+    let got = teko_credentials::credentials_of_type(world.ledger_ref(), b"eleito");
+    let of = |pleito: &str| {
+        got.iter()
+            .filter(|(_, r)| {
+                String::from_utf8_lossy(&r.claims).contains(&format!("pleito={pleito};"))
+            })
+            .count()
+    };
+    assert_eq!((of("senador-sp"), of("senador-rj")), (2, 1));
+    drop(world);
     let id = start_runoff(&dir, "governador-sp", now()).unwrap();
     admin.publish().unwrap();
     wait("second round open", 40, || {

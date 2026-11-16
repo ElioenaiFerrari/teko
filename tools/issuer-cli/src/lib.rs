@@ -135,6 +135,9 @@ pub struct DevContestPlan {
     pub scope_code: &'static str,
     /// When voting closes (unix seconds), with the same calendar `dev_election` uses.
     pub voting_closes: u64,
+    /// How many people the contest elects: 0 for the single-seat offices, 1 or 2 for a senator
+    /// (ADR-0044). Senate contests exist only in an ENCRYPTED election.
+    pub seats: u32,
 }
 
 /// The contests of the sample election: id, office, jurisdiction and closing time, relative to `now`.
@@ -146,6 +149,11 @@ pub fn dev_contest_plan(now: u64) -> Vec<DevContestPlan> {
         cargo,
         scope_code,
         voting_closes,
+        seats: 0,
+    };
+    let senate = |id, scope_code, seats| DevContestPlan {
+        seats,
+        ..c(id, "senador", scope_code, open)
     };
     vec![
         c("presidente", "presidente", "", open),
@@ -155,6 +163,9 @@ pub fn dev_contest_plan(now: u64) -> Vec<DevContestPlan> {
         c("governador-ba", "governador", "BA", open),
         c("governador-rs", "governador", "RS", open),
         c("prefeito-3550308", "prefeito", "3550308", announced),
+        // the Senate: SP renews 2 seats, RJ renews 1 (the classes alternate, ADR-0044)
+        senate("senador-sp", "SP", 2),
+        senate("senador-rj", "RJ", 1),
     ]
 }
 
@@ -515,7 +526,49 @@ impl Issuer {
             ),
         ]
         .into_iter()
-        .collect::<Result<_, _>>()?;
+        .collect::<Result<Vec<Contest>, _>>()?;
+        // the SENATE (ADR-0044) exists only in an encrypted election: two seats need the range proof
+        let mut contests = contests;
+        if !tally_key.is_empty() {
+            for (id, uf, title, names, first, seats) in [
+                (
+                    "senador-sp",
+                    "SP",
+                    "Senador de São Paulo (2 vagas)",
+                    &[
+                        "Candidato Peixe-Boi",
+                        "Candidata Ariranha",
+                        "Candidato Cervo-do-Pantanal",
+                        "Candidata Harpia",
+                    ][..],
+                    80,
+                    2u32,
+                ),
+                (
+                    "senador-rj",
+                    "RJ",
+                    "Senador do Rio de Janeiro (1 vaga)",
+                    &[
+                        "Candidata Muriqui",
+                        "Candidato Preguiça-de-Coleira",
+                        "Candidata Sagui-da-Serra-Escuro",
+                    ][..],
+                    90,
+                    1u32,
+                ),
+            ] {
+                let mut c = contest(
+                    id,
+                    Office::Senator,
+                    title,
+                    Scope::state(uf),
+                    opts(names, first),
+                    open,
+                )?;
+                c.seats = seats;
+                contests.push(c);
+            }
+        }
         let mut manifest = ElectionManifest {
             format_version: teko_election::FORMAT_VERSION,
             election_id: election_id.map_or_else(
@@ -677,6 +730,7 @@ impl Issuer {
             }),
             runoff: false,
             parent: parent_id.to_string(),
+            seats: 0,
         };
         // the old transitions are bound to the OLD contests' hashes, which do not change
         let mut transitions = bundle
@@ -1146,8 +1200,13 @@ mod tests {
         let rj = m.contest("governador-rj").unwrap();
         assert!(rj.options.iter().all(|o| o.credential_id.is_empty()));
         // the plan names every contest with the same calendar
-        let plan = dev_contest_plan(1_900_000_000);
+        // (the Senate exists only in an ENCRYPTED election, ADR-0044: this one is in the clear)
+        let plan: Vec<_> = dev_contest_plan(1_900_000_000)
+            .into_iter()
+            .filter(|p| p.seats == 0)
+            .collect();
         assert_eq!(plan.len(), m.contests.len());
+        assert!(m.contests.iter().all(|c| c.seats == 0));
         for p in &plan {
             let c = m.contest(p.id).unwrap();
             assert_eq!(c.schedule.as_ref().unwrap().voting_closes, p.voting_closes);

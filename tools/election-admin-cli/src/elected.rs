@@ -199,7 +199,11 @@ pub fn build_election(
             .collect();
     let mut cands = issuer_cli::DevCandidates::new();
     let mut lines = Vec::new();
+    let encrypted = dir.join("net").join("tally-key.pub").exists();
     for p in issuer_cli::dev_contest_plan(now) {
+        if p.seats > 0 && !encrypted {
+            continue; // the Senate exists only in an encrypted election (ADR-0044)
+        }
         let cargo = Cargo::parse(p.cargo).ok_or("cargo")?;
         let any = entries.iter().any(|e| {
             teko_credentials::candidate::parse_candidate(&e.claims).is_some_and(|c| {

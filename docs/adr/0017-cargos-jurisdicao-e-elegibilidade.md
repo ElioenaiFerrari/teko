@@ -30,4 +30,4 @@ Uma eleição tem vários cargos (Presidente, Governador, Prefeito...), cada um 
 - O registro vê o domicílio (necessário), nunca a identidade.
 
 ## Perguntas em aberto
-Data de corte do cadastro e mudança de domicílio; voto em branco/nulo; cargos proporcionais e multi-vaga; eleitor no exterior; encerramento antecipado; mínimo de eleitores por pleito para permitir votação anônima (limiar de anonimato).
+Data de corte do cadastro e mudança de domicílio; voto em branco/nulo (decidido no [ADR-0042](0042-voto-em-branco-e-nulo.md)); cargos proporcionais e multi-vaga; eleitor no exterior; encerramento antecipado; mínimo de eleitores por pleito para permitir votação anônima (limiar de anonimato).

@@ -16,6 +16,7 @@ Regra: decisões de produto/segurança só passam a `Aceito` pela aprovação do
 | [0007](0007-atestacao-em-lote.md) | Atestação em lote | Proposto | PENDENTE |
 | [0008](0008-registro-de-commitment-sem-vinculo.md) | Registro de commitment sem vínculo com identidade | Aceito provisoriamente (RFC 9474, chave por pleito) | confirmar |
 | [0041](0041-conferir-o-proprio-voto.md) | O eleitor confere o próprio voto: desafio de Benaloh e conferência no dispositivo | Aceito provisoriamente (etapa C implementada) | confirmar |
+| [0042](0042-voto-em-branco-e-nulo.md) | Voto em branco e nulo como opções explícitas, fora da base da maioria | Aceito provisoriamente (implementado) | confirmar |
 | [0009](0009-interface-do-emulador.md) | Interface do emulador | Aceito (provisório) | Recomendação adotada |
 | [0010](0010-transporte-local.md) | Transporte local | Aceito (provisório) | Recomendação adotada |
 | [0011](0011-icp-brasil-fora-de-escopo.md) | ICP-Brasil fora de escopo | Proposto | Registro de escopo |

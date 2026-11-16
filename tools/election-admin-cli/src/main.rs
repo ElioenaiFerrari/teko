@@ -210,11 +210,13 @@ fn run(args: Vec<String>) -> Result<(), String> {
                     (Some(n), true) => {
                         println!("   {n} cédulas aceitas · {} rejeitadas", c.rejected.total());
                         let r = c.ranked(top);
+                        // the percentage is over the votes IN CANDIDATES (ADR-0042)
+                        let valid = c.valid_votes();
                         let max = r.top.iter().map(|o| o.votes).max().unwrap_or(0).max(1);
                         for o in &r.top {
                             let bar = "█".repeat((o.votes * 40 / max) as usize);
-                            let pct = if n > 0 {
-                                o.votes as f64 * 100.0 / n as f64
+                            let pct = if valid > 0 {
+                                o.votes as f64 * 100.0 / valid as f64
                             } else {
                                 0.0
                             };
@@ -225,6 +227,16 @@ fn run(args: Vec<String>) -> Result<(), String> {
                                 "   {:<34} {:>7}",
                                 format!("Outros ({})", r.others_count),
                                 r.others_votes
+                            );
+                        }
+                        if c.options
+                            .iter()
+                            .any(|o| !o.kind.eq(&teko_election::OptionKind::Candidate))
+                        {
+                            println!(
+                                "   {:<34} {:>7}   (fora da base da maioria)",
+                                format!("Branco {} · Nulo {}", c.blank_votes(), c.null_votes()),
+                                c.blank_votes() + c.null_votes()
                             );
                         }
                         println!();

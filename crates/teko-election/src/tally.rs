@@ -25,7 +25,8 @@ use crate::ballot::{BallotBody, ballot_ctx, ciphertext_hash, verify_ballot};
 use crate::eligibility::Scope;
 use crate::lifecycle::{ElectionStatus, Phase, Transition, apply};
 use crate::manifest::{
-    ElectionManifest, Office, ResultsVisibility, contest_hash, validate_revision, verify_manifest,
+    ElectionManifest, Office, OptionKind, ResultsVisibility, contest_hash, validate_revision,
+    verify_manifest,
 };
 use crate::policy::GovernancePolicy;
 use crate::registration::{RegistrationVerifier, SubmittedRegistration, registration_message};
@@ -133,6 +134,8 @@ pub struct OptionTally {
     pub name: String,
     pub number: String,
     pub votes: u64,
+    /// Candidate, blank or null (ADR-0042).
+    pub kind: OptionKind,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -195,8 +198,39 @@ pub struct Ranking {
 }
 
 impl ContestTally {
+    /// Votes in CANDIDATES: the denominator of the majority (blank and null are outside it, ADR-0042).
+    pub fn valid_votes(&self) -> u64 {
+        self.options
+            .iter()
+            .filter(|o| o.kind == OptionKind::Candidate)
+            .map(|o| o.votes)
+            .sum()
+    }
+
+    pub fn blank_votes(&self) -> u64 {
+        self.votes_of(OptionKind::Blank)
+    }
+
+    pub fn null_votes(&self) -> u64 {
+        self.votes_of(OptionKind::Null)
+    }
+
+    fn votes_of(&self, k: OptionKind) -> u64 {
+        self.options
+            .iter()
+            .filter(|o| o.kind == k)
+            .map(|o| o.votes)
+            .sum()
+    }
+
+    /// The ranking of the CANDIDATES only; blank and null are reported apart.
     pub fn ranked(&self, top_n: usize) -> Ranking {
-        let mut all = self.options.clone();
+        let mut all: Vec<OptionTally> = self
+            .options
+            .iter()
+            .filter(|o| o.kind == OptionKind::Candidate)
+            .cloned()
+            .collect();
         all.sort_by(|a, b| b.votes.cmp(&a.votes).then(a.index.cmp(&b.index)));
         let rest = all.split_off(top_n.min(all.len()));
         Ranking {
@@ -504,6 +538,7 @@ impl Tallier {
                             name: o.name.clone(),
                             number: o.number.clone(),
                             votes: 0,
+                            kind: o.kind(),
                         })
                         .collect(),
                 });
@@ -1299,6 +1334,51 @@ mod tests {
             (2, 3, Phase::VotingClosed)
         );
         assert_eq!(c.options[1].votes, 2);
+    }
+
+    #[test]
+    fn blank_and_null_are_counted_reported_apart_and_never_ranked() {
+        use crate::manifest::{BLANK_NAME, ElectionOption, NULL_NAME, OptionKind};
+        let k = keys(3, 11);
+        let pol = policy(&k, 2);
+        let mut m = crate::manifest::fixtures::manifest();
+        for (kind, name) in [
+            (OptionKind::Blank, BLANK_NAME),
+            (OptionKind::Null, NULL_NAME),
+        ] {
+            let c = &mut m.contests[0];
+            let index = c.options.len() as u32;
+            c.options.push(ElectionOption {
+                index,
+                name: name.into(),
+                kind: kind as i32,
+                ..Default::default()
+            });
+        }
+        m.signatures = [0usize, 1]
+            .iter()
+            .map(|i| crate::manifest::sign_manifest(&k[*i], &m))
+            .collect();
+        let mut log = open_president(&m, &k);
+        // candidates 0,1,2; blank = 3, null = 4. Voters: 2 for cand 0, 1 for cand 2, 3 blank, 2 null
+        let picks = [0u32, 0, 2, 3, 3, 3, 4, 4];
+        for (i, o) in picks.iter().enumerate() {
+            log.push(b(&m, PRESIDENT, i as u8 + 1, *o));
+        }
+        let c = run(&pol, &log).contest(PRESIDENT).cloned().unwrap();
+        assert_eq!(c.accepted, 8);
+        assert_eq!(
+            (c.valid_votes(), c.blank_votes(), c.null_votes()),
+            (3, 3, 2)
+        );
+        let r = c.ranked(10);
+        assert_eq!(r.top.len(), 3, "only the candidates are ranked");
+        assert!(r.top.iter().all(|o| o.kind == OptionKind::Candidate));
+        assert_eq!(r.others_count, 0);
+        assert_eq!(r.top[0].votes, 2);
+        // with top-1, the others bucket holds candidates only
+        let r1 = c.ranked(1);
+        assert_eq!((r1.others_count, r1.others_votes), (2, 1));
     }
 
     #[test]

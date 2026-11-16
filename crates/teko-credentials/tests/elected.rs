@@ -132,6 +132,8 @@ fn outcome(
         finalist_credentials: vec![],
         totals: vec![60, 40],
         accepted: 100,
+        blank_votes: 0,
+        null_votes: 0,
     }
 }
 

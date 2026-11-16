@@ -126,7 +126,7 @@ fn candidates_on_the_chain_become_an_election_whose_certified_results_elect_peop
     for c in &m.contests {
         assert!(c.runoff, "{}", c.contest_id);
         assert!(
-            c.options.iter().all(|o| o.credential_id.len() == 32),
+            c.candidates().all(|o| o.credential_id.len() == 32),
             "{}",
             c.contest_id
         );
@@ -201,6 +201,7 @@ fn candidates_on_the_chain_become_an_election_whose_certified_results_elect_peop
         })
     });
     let list = outcomes(&admin).unwrap();
+    let mut specials = 0;
     for c in &list {
         // the institutions decided the SAME bytes and they match the planted totals
         let planted = rep
@@ -210,6 +211,16 @@ fn candidates_on_the_chain_become_an_election_whose_certified_results_elect_peop
             .map(|(_, v)| v.clone())
             .unwrap();
         assert_eq!(c.outcome.totals, planted, "{}", c.outcome.contest_id);
+        // blank and null are the LAST two options: they are reported apart (ADR-0042), and the
+        // simulator really planted some
+        let n = planted.len();
+        assert_eq!(
+            [c.outcome.blank_votes, c.outcome.null_votes],
+            [planted[n - 2], planted[n - 1]],
+            "{}",
+            c.outcome.contest_id
+        );
+        specials += c.outcome.blank_votes + c.outcome.null_votes;
         assert_eq!(c.institutions, 4);
         assert!(
             c.signers >= 3,
@@ -218,6 +229,10 @@ fn candidates_on_the_chain_become_an_election_whose_certified_results_elect_peop
             c.signers
         );
     }
+    assert!(
+        specials > 0,
+        "the simulator planted some blank or null votes"
+    );
     let elected: Vec<_> = list
         .iter()
         .filter(|c| c.outcome.kind() == OutcomeKind::Elected)
@@ -275,7 +290,11 @@ fn candidates_on_the_chain_become_an_election_whose_certified_results_elect_peop
                 .is_ok_and(|t| t.contest(&id).is_some_and(|c| c.phase == Phase::VotingOpen))
         });
         let t = admin.tally().unwrap();
-        assert_eq!(t.contest(&id).unwrap().options.len(), 2);
+        assert_eq!(
+            t.contest(&id).unwrap().options.len(),
+            4,
+            "2 finalists + blank + null"
+        );
     }
 
     for n in nodes {

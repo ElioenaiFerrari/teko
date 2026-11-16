@@ -16,8 +16,12 @@ use crate::text::sanitize_text;
 pub const BALLOT_KIND_PUBLIC: &str = "public";
 
 /// 3: options may reference the candidate's on-chain credential, contests may allow or be a runoff
-/// (ADR-0040). Firmware of version 2 re-encodes without the new fields and refuses the signature.
-pub const FORMAT_VERSION: u32 = 3;
+/// (ADR-0040). 4: an option may be BLANK or NULL (ADR-0042). Firmware of an older version re-encodes
+/// without the new fields and refuses the signature.
+pub const FORMAT_VERSION: u32 = 4;
+/// The fixed names of the special options.
+pub const BLANK_NAME: &str = "Branco";
+pub const NULL_NAME: &str = "Nulo";
 const MAX_OPTIONS: usize = 64;
 const MAX_CONTESTS: usize = 32;
 
@@ -73,6 +77,17 @@ impl Office {
     }
 }
 
+/// What an option is (ADR-0042). BLANK and NULL are explicit choices of the voter, cast and counted
+/// like any option, but they are not candidates: they never lead, never win and are outside the
+/// denominator of the majority.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, prost::Enumeration)]
+#[repr(i32)]
+pub enum OptionKind {
+    Candidate = 0,
+    Blank = 1,
+    Null = 2,
+}
+
 #[derive(Clone, PartialEq, Message)]
 pub struct ElectionOption {
     /// Position in the ballot. Contiguous from 0.
@@ -87,6 +102,15 @@ pub struct ElectionOption {
     /// governance signature covers it, so the option is bound to the credential.
     #[prost(bytes = "vec", tag = "4")]
     pub credential_id: Vec<u8>,
+    /// Candidate (the default, so old encodings are unchanged), blank or null (ADR-0042).
+    #[prost(enumeration = "OptionKind", tag = "5")]
+    pub kind: i32,
+}
+
+impl ElectionOption {
+    pub fn is_candidate(&self) -> bool {
+        self.kind() == OptionKind::Candidate
+    }
 }
 
 /// Unix seconds. `registration_opens < voting_opens < voting_closes`.
@@ -134,6 +158,11 @@ pub struct Contest {
 }
 
 impl Contest {
+    /// The candidates (not blank or null), in ballot order.
+    pub fn candidates(&self) -> impl Iterator<Item = &ElectionOption> {
+        self.options.iter().filter(|o| o.is_candidate())
+    }
+
     pub fn option_name(&self, index: u32) -> Option<&str> {
         self.options
             .iter()
@@ -227,8 +256,16 @@ fn validate_contest(c: &Contest) -> Result<(), ElectionError> {
         if c.runoff {
             return Err(bad("a second round has no further round"));
         }
-        if c.options.len() != 2 {
+        if c.candidates().count() != 2 {
             return Err(bad("a second round has exactly two candidates"));
+        }
+    }
+    if c.candidates().count() < 2 {
+        return Err(bad("need at least two candidates"));
+    }
+    for kind in [OptionKind::Blank, OptionKind::Null] {
+        if c.options.iter().filter(|o| o.kind() == kind).count() > 1 {
+            return Err(bad("at most one blank and one null option per contest"));
         }
     }
     for (i, o) in c.options.iter().enumerate() {
@@ -237,6 +274,24 @@ fn validate_contest(c: &Contest) -> Result<(), ElectionError> {
         }
         if sanitize_text(&o.name, 80).is_none() {
             return Err(bad("invalid option name"));
+        }
+        if OptionKind::try_from(o.kind).is_err() {
+            return Err(bad("unknown option kind"));
+        }
+        match o.kind() {
+            OptionKind::Candidate => {}
+            kind => {
+                let fixed = if kind == OptionKind::Blank {
+                    BLANK_NAME
+                } else {
+                    NULL_NAME
+                };
+                if o.name != fixed || !o.number.is_empty() || !o.credential_id.is_empty() {
+                    return Err(bad(
+                        "blank and null have their fixed name and no number or credential",
+                    ));
+                }
+            }
         }
         if !o.credential_id.is_empty() && o.credential_id.len() != 32 {
             return Err(bad("option credential_id must be 32 bytes"));
@@ -586,6 +641,114 @@ mod tests {
         assert!(validate_contest(&selfref).is_err());
         m.contests.push(second);
         assert!(validate_manifest(&m).is_ok());
+    }
+
+    fn with_specials(mut c: Contest) -> Contest {
+        for (k, n) in [
+            (OptionKind::Blank, BLANK_NAME),
+            (OptionKind::Null, NULL_NAME),
+        ] {
+            c.options.push(ElectionOption {
+                index: c.options.len() as u32,
+                name: n.into(),
+                kind: k as i32,
+                ..Default::default()
+            });
+        }
+        c
+    }
+
+    #[test]
+    fn blank_and_null_are_options_with_fixed_names_and_their_own_rules() {
+        // no kind = candidate: the encoding (and the hash) of a plain contest is unchanged
+        let plain = manifest().contests[1].clone();
+        assert!(plain.options.iter().all(ElectionOption::is_candidate));
+        let full = with_specials(plain.clone());
+        assert!(validate_contest(&full).is_ok());
+        assert_eq!(full.candidates().count(), plain.options.len());
+        assert_ne!(
+            contest_hash(&plain),
+            contest_hash(&full),
+            "the specials are signed"
+        );
+        // only blank, or only null, is fine
+        let mut only_blank = full.clone();
+        only_blank.options.pop();
+        assert!(validate_contest(&only_blank).is_ok());
+        // two blanks; a blank with a number or a credential or another name; fewer than two candidates
+        let mut two = full.clone();
+        two.options.push(ElectionOption {
+            index: two.options.len() as u32,
+            name: "Branco 2".into(),
+            kind: OptionKind::Blank as i32,
+            ..Default::default()
+        });
+        assert!(validate_contest(&two).is_err());
+        for edit in [
+            (|o: &mut ElectionOption| o.number = "9".into()) as fn(&mut ElectionOption),
+            |o| o.credential_id = alloc::vec![1; 32],
+            |o| o.name = "Em branco".into(),
+            |o| o.kind = 7,
+        ] {
+            let mut c = full.clone();
+            let last = c.options.len() - 2;
+            edit(&mut c.options[last]);
+            assert!(validate_contest(&c).is_err());
+        }
+        let mut few = full.clone();
+        few.options = alloc::vec![
+            full.options[0].clone(),
+            full.options[full.options.len() - 2].clone(),
+            full.options[full.options.len() - 1].clone()
+        ];
+        for (i, o) in few.options.iter_mut().enumerate() {
+            o.index = i as u32;
+        }
+        assert!(
+            validate_contest(&few).is_err(),
+            "one candidate and two specials is not a contest"
+        );
+    }
+
+    #[test]
+    fn a_second_round_has_two_candidates_and_may_keep_the_specials() {
+        let mut second = with_specials(manifest().contests[1].clone());
+        second.options.drain(2..second.options.len() - 2); // the 2 finalists + blank + null
+        for (i, o) in second.options.iter_mut().enumerate() {
+            o.index = i as u32;
+        }
+        second.contest_id = alloc::format!("{GOVERNOR_SP}-2t");
+        second.parent = GOVERNOR_SP.into();
+        assert_eq!(second.options.len(), 4);
+        assert!(validate_contest(&second).is_ok());
+    }
+
+    #[test]
+    fn an_encrypted_contest_counts_the_specials_in_its_sixteen_options() {
+        let mut m = manifest();
+        m.tally_key =
+            teko_ballot_crypto::point_to_bytes(&teko_ballot_crypto::Point::GENERATOR).to_vec();
+        let names: Vec<alloc::string::String> =
+            (0..14).map(|i| alloc::format!("Cand {i}")).collect();
+        let refs: Vec<&str> = names.iter().map(String::as_str).collect();
+        m.contests[1].options = fixtures::options(&refs, 20);
+        m.contests[1] = with_specials(m.contests[1].clone());
+        assert_eq!(m.contests[1].options.len(), 16);
+        assert!(validate_manifest(&m).is_ok());
+        let extra = String::from("Cand 14");
+        m.contests[1].options.insert(
+            14,
+            ElectionOption {
+                index: 14,
+                name: extra,
+                number: "99".into(),
+                ..Default::default()
+            },
+        );
+        for (i, o) in m.contests[1].options.iter_mut().enumerate() {
+            o.index = i as u32;
+        }
+        assert!(validate_manifest(&m).is_err(), "17 options");
     }
 
     #[test]

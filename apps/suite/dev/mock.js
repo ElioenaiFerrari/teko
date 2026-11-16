@@ -38,7 +38,7 @@
     { contest_id: 'governador-sp', title: 'Governador de São Paulo', phase: 'registration_open', phase_code: 2, scope: 'state', scope_code: 'SP', option_names: ['Candidato Guará', 'Candidata Vitória-Régia'], eligible: true, registration_required: true, voting_opens: NOW + DAY, voting_closes: NOW + 5 * DAY },
     { contest_id: 'governador-rj', title: 'Governador do Rio de Janeiro', phase: 'voting_open', phase_code: 3, scope: 'state', scope_code: 'RJ', option_names: ['Candidato Mico-Leão-Dourado', 'Candidata Capivara'], eligible: false, registration_required: true, voting_opens: NOW - DAY, voting_closes: NOW + 2 * DAY },
     { contest_id: 'prefeito-3550308', title: 'Prefeito de São Paulo', phase: 'candidates_published', phase_code: 1, scope: 'municipality', scope_code: '3550308', option_names: ['Candidata Jaguatirica', 'Candidato Tucano'], eligible: true, registration_required: true, voting_opens: NOW + 3 * DAY, voting_closes: NOW + 4 * DAY },
-  ].map((c) => ({ ...c, voted: !!voted[c.contest_id] }));
+  ].map((c) => ({ ...c, option_names: [...c.option_names, 'Branco', 'Nulo'], option_kinds: [...c.option_names.map(() => 0), 1, 2], voted: !!voted[c.contest_id] }));
   const electionSummary = () => ({ election_id: 'eleicoes-exemplo-2026', title: 'Eleições de exemplo 2026 (protótipo)', revision: 1, seq: 6, contests: contests() });
 
   let published = q === 'ready' && false;
@@ -117,7 +117,7 @@
         return { ballot: null, audit: { election_id: 'eleicoes-exemplo-2026', contest_id: contestId, contest_title: c.title, option_name: c.option_names[optionIndex], ciphertext_hash: '9f' + 'c1'.repeat(31), summary: `continha o voto em ${c.option_names[optionIndex]}` }, submitted: false, board_index: null, note: null, tracker: null };
       }
       voted[contestId] = true;
-      const rc = live[contestId]; if (rc) rc.votes[optionIndex] += 1;
+      const rc = live[contestId]; if (rc && rc.votes[optionIndex] !== undefined) rc.votes[optionIndex] += 1;
       return { ballot: { election_id: 'eleicoes-exemplo-2026', contest_id: contestId, contest_title: c.title, option_index: 0, option_name: '', voter_key: '03' + 'cd'.repeat(32), signature: 'ef'.repeat(64), encrypted: 'aa' }, audit: null, submitted: true, board_index: 4242, note: null, tracker: 'TK-7QMF-2XKD' };
     },
     election_check_ballot: async () => { await prompt('check_ballot', 1300); return { recorded: { height: 7, signers: 3, institutions: 4, tracker: 'TK-7QMF-2XKD' }, recorded_note: null, counted: 'Contada: entrou na soma cifrada (os totais só aparecem depois do fechamento).', counted_state: 'counted', revealed: false }; },
@@ -144,7 +144,7 @@
         const total = c.votes.reduce((a, b) => a + b, 0);
         const ranked = c.names.map((n, i) => ({ index: i, name: n, number: String(c.first + i), votes: c.votes[i] })).sort((a, b) => b.votes - a.votes || a.index - b.index);
         const top = ranked.slice(0, 10), rest = ranked.slice(10);
-        return { contest_id: c.id, title: c.title, office: c.office, scope: c.scope, scope_code: c.code, phase: c.phase, accepted: total, registered: total, registration_required: true, encrypted: true, revealed: c.phase !== 'voting_open', rejected: 0, distribution_visible: c.phase !== 'voting_open', top: c.phase !== 'voting_open' ? top : [], others_votes: rest.reduce((a, b) => a + b.votes, 0), others_count: rest.length };
+        return { contest_id: c.id, title: c.title, office: c.office, scope: c.scope, scope_code: c.code, phase: c.phase, accepted: total + Math.round(total * 0.05), valid: total, blank: Math.round(total * 0.03), null: Math.round(total * 0.02), registered: total, registration_required: true, encrypted: true, revealed: c.phase !== 'voting_open', rejected: 0, distribution_visible: c.phase !== 'voting_open', top: c.phase !== 'voting_open' ? top : [], others_votes: rest.reduce((a, b) => a + b.votes, 0), others_count: rest.length };
       });
       return { available: true, reason: null, election_id: 'eleicoes-exemplo-2026', title: 'Eleições de exemplo (protótipo, dados fictícios)', revision: 1, visibility: 'live', simulated: true, head_size: 12 + headExtra, verified: 12 + headExtra, total: 12 + headExtra, head_root: 'ab12cd34ef56' + '00'.repeat(26), ignored_governance: 0, contests: cs };
     },

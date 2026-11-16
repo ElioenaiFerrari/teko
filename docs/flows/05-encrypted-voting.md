@@ -16,6 +16,8 @@ Dispositivo, Suite, validadores, quadro (blocos).
 
 ![Conferir o próprio voto: compromisso, auditoria ou voto, bloco certificado conferido pelo dispositivo e veredito da apuração](../diagrams/verify-my-vote.png)
 
+> **Branco e nulo (ADR-0042):** são duas posições a mais na cédula (`kind` no manifesto), cifradas como as outras; o dispositivo mostra "VOTO EM BRANCO" / "VOTO NULO" com as próprias palavras. O limite de 16 posições passa a valer para candidatos + 2.
+
 ## Passo a passo
 1. A Suite envia `SignBallot{pleito, opção}`; a tela mostra o **nome da opção** (vindo do manifesto) e pede confirmação.
 2. O dispositivo cifra cada posição, gera as provas (0 ou 1 por opção; soma = 1) e **se compromete** com a cédula: o computador a recebe **antes** da escolha (ADR-0041).

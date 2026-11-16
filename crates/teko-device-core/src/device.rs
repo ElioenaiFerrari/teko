@@ -22,7 +22,7 @@ use teko_crypto::{
 use teko_election::ballot_ctx;
 use teko_election::{
     BallotBody, Domicile, ElectionBundle, ElectionError, ElectionManifest, ElectionStatus,
-    GovernancePolicy, Phase, RegistrationBlinder, ScopeLevel, Transition, contest_hash,
+    GovernancePolicy, OptionKind, Phase, RegistrationBlinder, ScopeLevel, Transition, contest_hash,
     is_eligible, manifest_hash, registration_message, registration_request_message, replay,
     sign_ballot, validate_revision,
 };
@@ -1822,6 +1822,7 @@ impl<H: Hal, R: Rng + CryptoRng> Device<H, R> {
                     voting_closes: sched.voting_closes,
                     registration_required: !c.registration_key.is_empty(),
                     option_numbers: c.options.iter().map(|o| o.number.clone()).collect(),
+                    option_kinds: c.options.iter().map(|o| o.kind as u32).collect(),
                     parent: c.parent.clone(),
                 }
             })
@@ -2160,12 +2161,18 @@ impl<H: Hal, R: Rng + CryptoRng> Device<H, R> {
         lines.extend(wrap(&contest.title, 28));
         lines.push(jurisdiction_label(&scope));
         lines.push(String::from("SEU VOTO:"));
-        let label = if option.number.is_empty() {
-            option.name.clone()
-        } else {
-            format!("{} - {}", option.number, option.name)
+        // blank and null are shown with the DEVICE's own words, never the manifest's (ADR-0042)
+        let label = match option.kind() {
+            OptionKind::Blank => String::from("VOTO EM BRANCO"),
+            OptionKind::Null => String::from("VOTO NULO"),
+            OptionKind::Candidate if option.number.is_empty() => option.name.clone(),
+            OptionKind::Candidate => format!("{} - {}", option.number, option.name),
         };
         lines.extend(wrap(&label, 28));
+        if !option.is_candidate() {
+            lines.push(String::from("(não conta para nenhum"));
+            lines.push(String::from("candidato)"));
+        }
         let encrypted_mode = !manifest.tally_key.is_empty();
         if encrypted_mode {
             lines.push(String::from("Voto CIFRADO: ninguém vê"));

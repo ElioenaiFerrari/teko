@@ -13,7 +13,7 @@ use teko_crypto::{SigningKey, public_key_bytes, sign_tagged, tags};
 
 use crate::eligibility::Scope;
 use crate::lifecycle::Phase;
-use crate::manifest::{Contest, Office};
+use crate::manifest::{Contest, Office, OptionKind};
 use crate::tally::ContestTally;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, prost::Enumeration)]
@@ -63,6 +63,11 @@ pub struct ElectionOutcome {
     pub totals: Vec<u64>,
     #[prost(uint64, tag = "14")]
     pub accepted: u64,
+    /// Blank and null votes (ADR-0042): reported, but outside the majority's denominator.
+    #[prost(uint64, tag = "15")]
+    pub blank_votes: u64,
+    #[prost(uint64, tag = "16")]
+    pub null_votes: u64,
 }
 
 /// What an institution publishes on the board: the outcome and its signature. The entry kind is
@@ -91,7 +96,8 @@ impl SignedOutcome {
 /// closed, encrypted and not revealed, inconsistent totals) or the office is not decided
 /// automatically (several seats: PENDING).
 ///
-/// * a contest that admits a runoff, in its first round: **more than half** of the counted votes
+/// * a contest that admits a runoff, in its first round: **more than half** of the votes IN CANDIDATES
+///   (blank and null are outside the denominator, ADR-0042)
 ///   elects; otherwise the two most voted go to a RUNOFF. A tie for the second place (with a
 ///   third candidate), or a tie between only two candidates, is a TIE;
 /// * any other contest (no runoff, or the second round): the most voted wins; a tie at the top is
@@ -119,9 +125,25 @@ pub fn decide(
     if totals.iter().sum::<u64>() != tally.accepted {
         return None;
     }
-    let mut order: Vec<usize> = (0..totals.len()).collect();
+    // only CANDIDATES compete and count for the majority; blank and null are reported apart (ADR-0042)
+    let mut order: Vec<usize> = (0..totals.len())
+        .filter(|i| contest.options[*i].is_candidate())
+        .collect();
+    if order.len() < 2 {
+        return None;
+    }
     order.sort_by(|a, b| totals[*b].cmp(&totals[*a]).then(a.cmp(b)));
     let (first, second) = (order[0], order[1]);
+    let valid: u64 = order.iter().map(|i| totals[*i]).sum();
+    let votes_of = |k: OptionKind| -> u64 {
+        contest
+            .options
+            .iter()
+            .zip(&totals)
+            .filter(|(o, _)| o.kind() == k)
+            .map(|(_, v)| *v)
+            .sum()
+    };
     let round = if contest.parent.is_empty() { 1 } else { 2 };
     let mut out = ElectionOutcome {
         vote_chain_id: String::from(vote_chain_id),
@@ -138,19 +160,21 @@ pub fn decide(
         finalist_credentials: Vec::new(),
         totals: totals.clone(),
         accepted: tally.accepted,
+        blank_votes: votes_of(OptionKind::Blank),
+        null_votes: votes_of(OptionKind::Null),
     };
     let elect = |i: usize, out: &mut ElectionOutcome| {
         out.kind = OutcomeKind::Elected as i32;
         out.winner_option = i as u32;
         out.winner_credential_id = contest.options[i].credential_id.clone();
     };
-    if tally.accepted == 0 {
-        return Some(out); // nobody voted: nothing to elect
+    if valid == 0 {
+        return Some(out); // nobody voted for a candidate: nothing to elect
     }
     if contest.runoff && round == 1 {
-        if totals[first] * 2 > tally.accepted {
+        if totals[first] * 2 > valid {
             elect(first, &mut out);
-        } else if totals.len() == 2 {
+        } else if order.len() == 2 {
             // two candidates, no majority: an exact tie
         } else if totals[second] == totals[order[2]] {
             // the second place is tied with a third: the finalist cannot be chosen by the rule
@@ -198,7 +222,7 @@ pub fn count_outcome_signers(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::manifest::ElectionOption;
+    use crate::manifest::{ElectionOption, OptionKind};
     use crate::tally::{ContestTally, OptionTally, RejectCounts};
     use proptest::prelude::*;
 
@@ -215,13 +239,33 @@ mod tests {
                     name: alloc::format!("C{i}"),
                     number: alloc::format!("{}", 10 + i),
                     credential_id: alloc::vec![i as u8 + 1; 32],
+                    kind: OptionKind::Candidate as i32,
                 })
                 .collect(),
             ..Default::default()
         }
     }
 
+    /// `n` candidates followed by BLANK and NULL (ADR-0042).
+    fn contest_bn(n: usize, runoff: bool, parent: &str) -> Contest {
+        let mut c = contest(n, runoff, parent);
+        for (k, name) in [(OptionKind::Blank, "Branco"), (OptionKind::Null, "Nulo")] {
+            c.options.push(ElectionOption {
+                index: c.options.len() as u32,
+                name: name.into(),
+                number: String::new(),
+                credential_id: Vec::new(),
+                kind: k as i32,
+            });
+        }
+        c
+    }
+
     fn tally(votes: &[u64]) -> ContestTally {
+        tally_of(&contest(votes.len(), false, ""), votes)
+    }
+
+    fn tally_of(c: &Contest, votes: &[u64]) -> ContestTally {
         ContestTally {
             contest_id: "gov-sp".into(),
             title: "t".into(),
@@ -243,13 +287,50 @@ mod tests {
                     name: alloc::format!("C{i}"),
                     number: alloc::format!("{}", 10 + i),
                     votes: *v,
+                    kind: c.options[i].kind(),
                 })
                 .collect(),
         }
     }
 
     fn run(c: &Contest, votes: &[u64]) -> ElectionOutcome {
-        decide("teko-devnet-1", "geral-2026", c, &[9; 32], &tally(votes)).unwrap()
+        decide(
+            "teko-devnet-1",
+            "geral-2026",
+            c,
+            &[9; 32],
+            &tally_of(c, votes),
+        )
+        .unwrap()
+    }
+
+    #[test]
+    fn blank_and_null_are_outside_the_majority_and_never_win_or_lead() {
+        // 3 candidates + blank + null: 60 blank, 10 null, candidates 20/15/5 (40 valid)
+        let c = contest_bn(3, true, "");
+        let o = run(&c, &[20, 15, 5, 60, 10]);
+        // 20 of 40 valid is exactly half: not MORE than half, so a runoff; blanks never finalists
+        assert_eq!(o.kind(), OutcomeKind::Runoff);
+        assert_eq!(o.finalists, alloc::vec![0, 1]);
+        assert_eq!((o.blank_votes, o.null_votes), (60, 10));
+        assert_eq!(o.accepted, 110);
+        // 21 of 40 valid: elected even though blank+null are 70 of 110 ballots
+        let o = run(&c, &[21, 14, 5, 60, 10]);
+        assert_eq!(o.kind(), OutcomeKind::Elected);
+        assert_eq!(o.winner_option, 0);
+        assert_eq!(o.winner_credential_id, alloc::vec![1; 32]);
+    }
+
+    #[test]
+    fn a_contest_where_nobody_votes_for_a_candidate_has_no_winner() {
+        let c = contest_bn(2, true, "");
+        let o = run(&c, &[0, 0, 80, 20]);
+        assert_eq!(o.kind(), OutcomeKind::Tie);
+        assert_eq!((o.blank_votes, o.null_votes), (80, 20));
+        // a second round too: the most blank votes does not win
+        let c2 = contest_bn(2, false, "gov-sp");
+        assert_eq!(run(&c2, &[0, 0, 5, 0]).kind(), OutcomeKind::Tie);
+        assert_eq!(run(&c2, &[3, 2, 90, 5]).winner_option, 0);
     }
 
     #[test]

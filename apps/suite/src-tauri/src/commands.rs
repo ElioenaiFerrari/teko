@@ -2207,6 +2207,11 @@ pub struct ContestView {
     top: Vec<OptionView>,
     others_votes: u64,
     others_count: usize,
+    /// Votes in CANDIDATES: the base of the percentages and of the majority (ADR-0042).
+    valid: u64,
+    /// Blank and null votes: counted and shown, but outside `valid`.
+    blank: u64,
+    null: u64,
 }
 
 #[derive(Serialize)]
@@ -2359,6 +2364,9 @@ pub async fn results_snapshot(suite: State<'_, Suite>) -> Result<ResultsReply, U
                     },
                     others_votes: if show { ranked.others_votes } else { 0 },
                     others_count: if show { ranked.others_count } else { 0 },
+                    valid: if show { c.valid_votes() } else { 0 },
+                    blank: if show { c.blank_votes() } else { 0 },
+                    null: if show { c.null_votes() } else { 0 },
                 }
             })
             .collect();

@@ -2350,6 +2350,95 @@ mod encrypted {
     }
 
     #[test]
+    fn blank_and_null_show_the_devices_own_words_and_can_be_audited() {
+        use teko_election::{BLANK_NAME, ElectionOption, NULL_NAME, OptionKind};
+        let (w, hal, mut dev, _) = ready();
+        let x = Scalar::random(&mut StdRng::seed_from_u64(78));
+        let mut m = election_manifest(&w);
+        m.tally_key = point_to_bytes(&(Point::GENERATOR * x)).to_vec();
+        for (k, n) in [
+            (OptionKind::Blank, BLANK_NAME),
+            (OptionKind::Null, NULL_NAME),
+        ] {
+            let c = &mut m.contests[0];
+            let index = c.options.len() as u32;
+            c.options.push(ElectionOption {
+                index,
+                name: n.into(),
+                kind: k as i32,
+                ..Default::default()
+            });
+        }
+        m.signatures = [0usize, 1]
+            .iter()
+            .map(|i| sign_election(&w.gov[*i], &m))
+            .collect();
+        let ts = history(&m, &w);
+        assert!(matches!(
+            dev.handle(load_req(&m, &ts)),
+            Response::ElectionLoaded(_)
+        ));
+        // the host learns which options are special (it only shows them)
+        let Response::ElectionLoaded(l) = dev.handle(load_req(&m, &ts)) else {
+            panic!()
+        };
+        let kinds = &l
+            .contests
+            .iter()
+            .find(|c| c.contest_id == "presidente")
+            .unwrap()
+            .option_kinds;
+        assert_eq!(kinds.as_slice(), &[0, 0, 0, 1, 2]);
+
+        // the ballot screen says it in the DEVICE's words
+        let n = m.contests[0].options.len();
+        let pk = Point::GENERATOR * x;
+        let key = vk(&mut dev, "presidente");
+        let ctx = ballot_ctx(&m.election_id, "presidente", &key);
+        hal.clear_interim();
+        hal.push_decision(Decision::Confirm);
+        hal.push_decision(Decision::Reject);
+        hal.push_decision(Decision::Confirm);
+        let Response::BallotAudited(a) = vote(&mut dev, "presidente", 3) else {
+            panic!("not audited")
+        };
+        let screen = hal
+            .screens()
+            .into_iter()
+            .find(|s| s.title == "CONFIRMAR VOTO?")
+            .unwrap();
+        let text = screen.lines.join(" ");
+        assert!(
+            text.contains("VOTO EM BRANCO") && text.contains("não conta"),
+            "{text}"
+        );
+        // the audited blank ballot opens as option 3 (the blank)
+        let cm = commitments(&hal);
+        let eb = EncryptedBallot::from_bytes(n, &cm[0].encrypted).unwrap();
+        let rs: Vec<Scalar> = a
+            .randomness
+            .iter()
+            .map(|r| teko_ballot_crypto::scalar_from_bytes(r).unwrap())
+            .collect();
+        assert_eq!(
+            teko_ballot_crypto::open_ballot(&pk, n, &ctx, &eb, &rs),
+            Some(3)
+        );
+        // and the null one shows its own words too
+        assert!(matches!(
+            vote(&mut dev, "presidente", 4),
+            Response::BallotSignature(_)
+        ));
+        let screens = hal.screens();
+        let last = screens
+            .iter()
+            .rev()
+            .find(|s| s.title == "CONFIRMAR VOTO?")
+            .unwrap();
+        assert!(last.lines.join(" ").contains("VOTO NULO"));
+    }
+
+    #[test]
     fn a_manifest_with_a_bad_tally_key_or_too_many_options_is_refused() {
         let (w, _, mut dev, _) = ready();
         let sign = |m: &mut ElectionManifest| {

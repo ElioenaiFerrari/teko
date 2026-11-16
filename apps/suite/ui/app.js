@@ -889,9 +889,12 @@
       const st = (checks.find((o) => o.index === i) || {}).state;
       return { verified: chip('candidatura conferida na chain', 'ok', 'check'), pending: chip('candidatura em contestação', 'warn'), expired: chip('candidatura expirada', 'bad'), revoked: chip('candidatura REVOGADA', 'bad', 'alert'), mismatch: chip('não confere com a chain', 'bad', 'alert'), unknown: chip('candidatura não está na chain', 'warn') }[st] || '';
     };
-    const opts = c.option_names.map((n, i) => `
-      <label class="option"><input type="radio" name="cand-${esc(c.contest_id)}" value="${i}" ${S.picks[c.contest_id] === i ? 'checked' : ''} ${canVote ? '' : 'disabled'}>
-        <span>${(c.option_numbers || [])[i] ? `<strong>${esc(c.option_numbers[i])}</strong> – ` : ''}${esc(n)} ${badge(i)}</span></label>`).join('');
+    const kinds = c.option_kinds || [];
+    const optRow = (n, i) => `
+      <label class="option${kinds[i] ? ' option--special' : ''}"><input type="radio" name="cand-${esc(c.contest_id)}" value="${i}" ${S.picks[c.contest_id] === i ? 'checked' : ''} ${canVote ? '' : 'disabled'}>
+        <span>${kinds[i] === 1 ? '<strong>Voto em branco</strong> <span class="muted">(não conta para nenhum candidato)</span>' : kinds[i] === 2 ? '<strong>Voto nulo</strong> <span class="muted">(não conta para nenhum candidato)</span>' : `${(c.option_numbers || [])[i] ? `<strong>${esc(c.option_numbers[i])}</strong> – ` : ''}${esc(n)} ${badge(i)}`}</span></label>`;
+    const opts = c.option_names.map((n, i) => (kinds[i] ? '' : optRow(n, i))).join('')
+      + (kinds.some((k) => k) ? '<div class="muted" style="margin:8px 0 2px">Ou:</div>' + c.option_names.map((n, i) => (kinds[i] ? optRow(n, i) : '')).join('') : '');
     return `<article class="card" ${c.eligible ? '' : 'style="opacity:.82"'}>
       <div class="card__head"><div class="card__ico card__ico--${c.scope === 'national' ? 'arara' : c.scope === 'state' ? 'onca' : 'boto'}">${ico(c.scope === 'national' ? 'globe' : 'ballot')}</div>
         <div><h2>${esc(c.title)}</h2>
@@ -950,7 +953,7 @@
   }
 
   function donutSvg(c, size = 150) {
-    const total = c.accepted || 0;
+    const total = c.valid || 0;   // base: votos em candidatos (branco e nulo ficam de fora)
     const rows = c.top.filter((o) => o.votes > 0).map((o) => ({ key: String(o.index), name: o.name, votes: o.votes, color: candColor(o.index) }));
     if (c.others_votes > 0) rows.push({ key: 'others', name: `Outros (${c.others_count})`, votes: c.others_votes, color: '#8A978F' });
     if (!total || !rows.length) return `<svg viewBox="0 0 42 42" width="${size}" height="${size}" role="img" aria-label="Sem votos ainda"><circle cx="21" cy="21" r="15.9155" fill="none" stroke="var(--surface-2)" stroke-width="6"/></svg>`;
@@ -1013,7 +1016,7 @@
       if (c) {
         const lead = c.distribution_visible && c.top[0] && c.top[0].votes > 0 ? c.top[0] : null;
         if (lead) {
-          const share = c.accepted ? (lead.votes * 100) / c.accepted : 0;
+          const share = c.valid ? (lead.votes * 100) / c.valid : 0;
           cls = 'tile tile--lead'; style = `background:${candColor(lead.index)};--a:${(0.45 + Math.min(1, share / 70) * 0.55).toFixed(2)}`;
           tip = `${uf} · ${c.title}|${lead.name}: ${pctTxt(share)} (${nf.format(lead.votes)} votos)`;
         } else {
@@ -1145,7 +1148,7 @@
     const chips = `${chip(scope, 'info')}${chip(phaseLabel, phaseKind)}`;
     const chipsEl = $('[data-slot=chips]', art); if (chipsEl.dataset.v !== chips) { chipsEl.dataset.v = chips; chipsEl.innerHTML = chips; }
     const totalEl = $('[data-slot=total]', art);
-    const total = c.accepted === null ? 'Total oculto até o fechamento' : `${nf.format(c.accepted)} cédulas ${c.encrypted ? 'cifradas ' : ''}aceitas${c.registration_required ? ` · ${nf.format(c.registered)} registrados` : ''}${c.rejected ? ` · ${nf.format(c.rejected)} rejeitadas` : ''}`;
+    const total = c.accepted === null ? 'Total oculto até o fechamento' : `${nf.format(c.accepted)} cédulas ${c.encrypted ? 'cifradas ' : ''}aceitas${c.registration_required ? ` · ${nf.format(c.registered)} registrados` : ''}${c.rejected ? ` · ${nf.format(c.rejected)} rejeitadas` : ''}${(c.blank || c.null) ? ` · ${nf.format(c.blank || 0)} em branco · ${nf.format(c.null || 0)} nulos (fora da base dos percentuais)` : ''}`;
     if (totalEl.textContent !== total) totalEl.textContent = total;
     const body = $('[data-slot=body]', art);
     if (!c.distribution_visible) {
@@ -1163,16 +1166,16 @@
       body.innerHTML = '<div class="viz"><div class="viz__donut" data-slot="donut"></div><div class="viz__bars"><div class="lead-badge" data-slot="lead"></div></div></div>';
       body.dataset.m = ''; ul = document.createElement('ul'); ul.className = 'bars'; ul.setAttribute('aria-label', `Ranking: ${c.title}`); $('.viz__bars', body).append(ul);
     }
-    const dn = $('[data-slot=donut]', body), dv = `${c.accepted}|${c.top.map((o) => o.votes).join(',')}|${c.others_votes}`;
+    const dn = $('[data-slot=donut]', body), dv = `${c.valid}|${c.top.map((o) => o.votes).join(',')}|${c.others_votes}`;
     if (dn.dataset.v !== dv) { dn.dataset.v = dv; dn.innerHTML = donutSvg(c); }
     const lb = $('[data-slot=lead]', body);
     const l1 = c.top[0], l2 = c.top[1];
-    const badge = l1 && l1.votes > 0 && c.accepted ? `<span class="dot" style="background:${candColor(l1.index)}"></span><strong>${esc(l1.name)}</strong> lidera${l2 ? ` com <b>+${pctTxt(((l1.votes - l2.votes) * 100) / c.accepted).replace('%', ' p.p.')}</b> sobre ${esc(l2.name)}` : ''}` : '';
+    const badge = l1 && l1.votes > 0 && c.valid ? `<span class="dot" style="background:${candColor(l1.index)}"></span><strong>${esc(l1.name)}</strong> lidera${l2 ? ` com <b>+${pctTxt(((l1.votes - l2.votes) * 100) / c.valid).replace('%', ' p.p.')}</b> sobre ${esc(l2.name)}` : ''}` : '';
     if (lb.innerHTML !== badge) lb.innerHTML = badge;
     const rows = c.top.map((o) => ({ ...o }));
     if (c.others_count > 0) rows.push({ index: -1, votes: c.others_votes, count: c.others_count, others: true });
     const max = Math.max(1, ...c.top.map((o) => o.votes));
-    const total2 = c.accepted || 0;
+    const total2 = c.valid || 0;
     const existing = new Map([...ul.children].map((li) => [li.dataset.key, li]));
     rows.forEach((o, i) => {
       const key = o.others ? 'others' : String(o.index);

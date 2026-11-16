@@ -469,7 +469,8 @@ fn election_flow_president_for_all_governor_and_mayor_by_domicile() {
         ),
         ("candidates_published", true)
     );
-    assert_eq!(get("governador-sp").option_names.len(), 12);
+    assert_eq!(get("governador-sp").option_names.len(), 14); // + blank and null
+    assert_eq!(&get("governador-sp").option_kinds[12..], &[1, 2]);
     let shown = rig
         .hal
         .screens()

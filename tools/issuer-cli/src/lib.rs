@@ -91,6 +91,29 @@ fn now_secs() -> u64 {
         .unwrap_or(0)
 }
 
+/// Appends the BLANK and NULL options (ADR-0042) after the candidates, continuing the indices.
+pub fn with_specials(
+    mut options: Vec<ElectionOption>,
+    blank: bool,
+    null: bool,
+) -> Vec<ElectionOption> {
+    use teko_election::{BLANK_NAME, NULL_NAME, OptionKind};
+    for (on, kind, name) in [
+        (blank, OptionKind::Blank, BLANK_NAME),
+        (null, OptionKind::Null, NULL_NAME),
+    ] {
+        if on {
+            options.push(ElectionOption {
+                index: options.len() as u32,
+                name: name.to_string(),
+                kind: kind as i32,
+                ..Default::default()
+            });
+        }
+    }
+    options
+}
+
 /// One candidate of a contest, taken from an on-chain `candidato` credential (ADR-0040).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DevCandidate {
@@ -332,10 +355,13 @@ impl Issuer {
                         name: c.nome.clone(),
                         number: c.numero.clone(),
                         credential_id: c.credential_id.clone(),
+                        ..Default::default()
                     })
                     .collect(),
                 None => o,
             };
+            // every contest also offers BLANK and NULL (ADR-0042)
+            let options = with_specials(options, true, true);
             Ok(Contest {
                 contest_id: id.to_string(),
                 office: office as i32,
@@ -621,16 +647,28 @@ impl Issuer {
             office: parent.office,
             title: format!("{} (2º turno)", parent.title),
             scope: parent.scope.clone(),
-            options: finalists
-                .iter()
-                .enumerate()
-                .map(|(i, c)| ElectionOption {
-                    index: i as u32,
-                    name: c.nome.clone(),
-                    number: c.numero.clone(),
-                    credential_id: c.credential_id.clone(),
-                })
-                .collect(),
+            options: with_specials(
+                finalists
+                    .iter()
+                    .enumerate()
+                    .map(|(i, c)| ElectionOption {
+                        index: i as u32,
+                        name: c.nome.clone(),
+                        number: c.numero.clone(),
+                        credential_id: c.credential_id.clone(),
+                        ..Default::default()
+                    })
+                    .collect(),
+                // the second round offers what the first round offered
+                parent
+                    .options
+                    .iter()
+                    .any(|o| o.kind() == teko_election::OptionKind::Blank),
+                parent
+                    .options
+                    .iter()
+                    .any(|o| o.kind() == teko_election::OptionKind::Null),
+            ),
             registration_key: self.registration_spki(&id)?,
             schedule: Some(Schedule {
                 registration_opens: now.saturating_sub(DAY),
@@ -1033,7 +1071,7 @@ mod tests {
         );
         assert_eq!(
             manifest.contest("governador-sp").unwrap().options.len(),
-            12,
+            14, // 12 candidates + blank + null (ADR-0042)
             "top-10 + others demo"
         );
         assert!(manifest.election_id.starts_with("eleicoes-exemplo-"));
@@ -1098,7 +1136,8 @@ mod tests {
         let m = ElectionManifest::decode(b.manifest.as_slice()).unwrap();
         assert_eq!(m.election_id, "geral-2026");
         let sp = m.contest("governador-sp").unwrap();
-        assert_eq!(sp.options.len(), 2);
+        assert_eq!(sp.options.len(), 4, "2 candidates + blank + null");
+        assert_eq!(sp.candidates().count(), 2);
         assert_eq!(sp.options[1].name, "Beto Lima");
         assert_eq!(sp.options[1].number, "22");
         assert_eq!(sp.options[1].credential_id, vec![2; 32]);
@@ -1164,7 +1203,8 @@ mod tests {
         teko_election::verify_manifest(&policy, &m).unwrap();
         let second = m.contest(&id).unwrap();
         assert_eq!(second.parent, "governador-sp");
-        assert_eq!(second.options.len(), 2);
+        assert_eq!(second.options.len(), 4, "2 finalists + blank + null");
+        assert_eq!(second.candidates().count(), 2);
         assert!(!second.runoff);
         // the whole history replays and the second round is OPEN for voting
         let transitions: Vec<Transition> = b

@@ -585,6 +585,9 @@ pub struct ContestInfo {
     /// This is a SECOND ROUND (the first-round contest it continues), or empty.
     #[prost(string, tag = "13")]
     pub parent: String,
+    /// Per option: 0 = candidate, 1 = blank, 2 = null (ADR-0042).
+    #[prost(uint32, repeated, tag = "14")]
+    pub option_kinds: Vec<u32>,
 }
 #[derive(Clone, PartialEq, prost::Message)]
 pub struct ElectionLoaded {

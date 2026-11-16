@@ -553,16 +553,26 @@ impl Admin {
             for b in c.contest_id.bytes() {
                 rng.0 = rng.0.wrapping_mul(31).wrapping_add(u64::from(b));
             }
-            // popularity ~ 1/(rank+1)^1.2, ranks shuffled per contest
+            // popularity ~ 1/(rank+1)^1.2, ranks shuffled per contest, among the CANDIDATES; blank and
+            // null (ADR-0042) get a small fixed share of what the candidates have (about 3% and 2%)
             let n = c.options.len();
-            let mut ranks: Vec<usize> = (0..n).collect();
-            for i in (1..n).rev() {
+            let cand: Vec<usize> = (0..n).filter(|i| c.options[*i].is_candidate()).collect();
+            let mut ranks: Vec<usize> = (0..cand.len()).collect();
+            for i in (1..ranks.len()).rev() {
                 ranks.swap(i, (rng.next() % (i as u64 + 1)) as usize);
             }
-            let w: Vec<f64> = ranks
-                .iter()
-                .map(|r| 1.0 / ((*r as f64) + 1.0).powf(1.2))
-                .collect();
+            let mut w = vec![0.0f64; n];
+            for (pos, r) in cand.iter().zip(&ranks) {
+                w[*pos] = 1.0 / ((*r as f64) + 1.0).powf(1.2);
+            }
+            let cand_total: f64 = w.iter().sum();
+            for (i, o) in c.options.iter().enumerate() {
+                match o.kind() {
+                    teko_election::OptionKind::Blank => w[i] = cand_total * 0.03,
+                    teko_election::OptionKind::Null => w[i] = cand_total * 0.02,
+                    teko_election::OptionKind::Candidate => {}
+                }
+            }
             let total: f64 = w.iter().sum();
             let mut acc = 0.0;
             let cdf = w

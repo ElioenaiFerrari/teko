@@ -10,6 +10,7 @@
 
 use alloc::boxed::Box;
 use alloc::collections::{BTreeMap, BTreeSet};
+use alloc::format;
 use alloc::string::String;
 use alloc::vec::Vec;
 
@@ -605,6 +606,40 @@ impl Tallier {
             && self.ceremonies.iter().any(|(k, _)| *k == m.tally_key)
             && needs_draw(contest, ct).is_some()
             && self.draw_seed(contest_id).is_none()
+    }
+
+    /// May the institutions rotate NOW (ADR-0045)? Only when no contest still depends on the key
+    /// ceremony of the set in force: every contest is cancelled, or CLOSED with its totals decrypted
+    /// (if encrypted) and no tie-break draw waiting. `Err` says what blocks the rotation.
+    pub fn rotation_safe(&self) -> Result<(), String> {
+        for c in &self.contests {
+            let closed = matches!(
+                c.phase,
+                Phase::VotingClosed | Phase::Tallied | Phase::Audited
+            );
+            if c.phase == Phase::Cancelled {
+                continue;
+            }
+            if !closed {
+                return Err(format!(
+                    "o pleito `{}` ainda não terminou (fase {:?}): espere o fechamento",
+                    c.contest_id, c.phase
+                ));
+            }
+            if c.encrypted && !c.revealed {
+                return Err(format!(
+                    "o pleito `{}` está fechado, mas os totais ainda não foram decifrados",
+                    c.contest_id
+                ));
+            }
+            if self.awaits_draw(&c.contest_id) {
+                return Err(format!(
+                    "o pleito `{}` tem um sorteio de desempate pendente",
+                    c.contest_id
+                ));
+            }
+        }
+        Ok(())
     }
 
     /// How many valid shares of the draw of this contest are in, and how many are needed.
@@ -1562,6 +1597,36 @@ mod tests {
     }
 
     #[test]
+    fn the_institutions_may_rotate_only_when_every_contest_is_over() {
+        let (k, pol, m) = world(3);
+        // no election at all: nothing depends on the key
+        assert!(Tallier::new(pol.clone()).rotation_safe().is_ok());
+        // a contest that is open (the others still drafts): blocked
+        let log = open_president(&m, &k);
+        let mut t = Tallier::new(pol.clone());
+        for (kind, p) in &log {
+            t.feed(LogEntry {
+                kind: *kind,
+                payload: p,
+            });
+        }
+        let e = t.rotation_safe().unwrap_err();
+        assert!(e.contains("ainda não terminou"), "{e}");
+        // cancelling every contest frees the rotation
+        let mut cancelled = Tallier::new(pol);
+        for (kind, p) in &log {
+            cancelled.feed(LogEntry {
+                kind: *kind,
+                payload: p,
+            });
+        }
+        for c in &mut cancelled.contests {
+            c.phase = Phase::Cancelled;
+        }
+        assert!(cancelled.rotation_safe().is_ok());
+    }
+
+    #[test]
     fn one_ballot_per_voter_key_per_contest_first_wins() {
         let (k, pol, m) = world(3);
         let mut log = open_president(&m, &k);
@@ -2035,6 +2100,13 @@ mod tests {
                 }
                 t
             };
+            // the institutions cannot rotate while the election is open (ADR-0045)
+            assert!(
+                run_t(&log)
+                    .rotation_safe()
+                    .unwrap_err()
+                    .contains("ainda não terminou")
+            );
             // before the close and before the totals are revealed there is nothing to draw
             let need = crate::draw::DrawNeed {
                 tied: vec![0, 1],
@@ -2053,6 +2125,8 @@ mod tests {
             log.push(shares_entry(&m, &kshares[1], &sums, &mut rng));
             let t = run_t(&log);
             assert!(t.snapshot().contest(PRESIDENT).unwrap().revealed);
+            // revealed, but the tie still has to be drawn: not yet
+            assert!(t.rotation_safe().unwrap_err().contains("sorteio"));
             let pend = t.pending_draws(1);
             assert_eq!(pend.len(), 1);
             assert_eq!(pend[0].2, need);
@@ -2119,6 +2193,15 @@ mod tests {
             .unwrap();
             assert_eq!(o.kind(), crate::outcome::OutcomeKind::Elected);
             assert!(o.winner_option < 2 && o.drawn && o.draw_seed == seeds[0].to_vec());
+            // with the seed on the board nothing depends on the old ceremony any more
+            let mut done = log.clone();
+            done.push(draw_entry(&m, &kshares[1], &need, &mut rng));
+            // (the other contests of this manifest have not even started: they still block)
+            let e = run_t(&done).rotation_safe().unwrap_err();
+            assert!(
+                !e.contains("`presidente`") && e.contains("ainda não terminou"),
+                "{e}"
+            );
         }
 
         #[test]

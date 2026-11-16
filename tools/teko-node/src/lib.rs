@@ -17,13 +17,14 @@ mod economy;
 mod error;
 mod lane;
 mod node;
+pub mod rotation;
 mod setup;
 mod votes;
 pub mod wire;
 mod world;
 
 pub use client::{EconStatus, NodeClient, RemoteStatus};
-pub use dkg::{load_share as load_tally_share, run_ceremony};
+pub use dkg::{load_share as load_tally_share, run_ceremony, run_ceremony_among};
 pub use economy::EconomyConfig;
 pub use error::NodeError;
 pub use node::{Node, NodeConfig, NodeHandle};

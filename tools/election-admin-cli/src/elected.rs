@@ -38,15 +38,23 @@ impl CertifiedOutcome {
     }
 }
 
-fn institutions(dir: &Path) -> Result<Vec<Vec<u8>>, String> {
+/// The institutions in force, read from the VERIFIED chain (ADR-0045): the genesis set until a
+/// rotation, the newest approved set after it. A file board has no chain, so it falls back to the
+/// genesis set of the network files.
+fn institutions(dir: &Path, board: &crate::AnyBoard) -> Result<Vec<Vec<u8>>, String> {
+    if let crate::AnyBoard::Net(nb) = board
+        && let Some(chain) = nb.chain()
+    {
+        return Ok(chain.epoch_at(chain.height() + 1).set.clone());
+    }
     let net = load_network(&dir.join("net")).map_err(|e| e.to_string())?;
     Ok(net.profile.validators)
 }
 
 /// The outcomes on the (verified) board, one per distinct outcome bytes, with their signatures.
 pub fn outcomes(admin: &Admin) -> Result<Vec<CertifiedOutcome>, String> {
-    let inst = institutions(admin.dir())?;
     let board = admin.read_board().map_err(|e| e.to_string())?;
+    let inst = institutions(admin.dir(), &board)?;
     let mut groups: Vec<(ElectionOutcome, Vec<u8>, Vec<SignerSignature>)> = Vec::new();
     for i in 0..board.len() {
         let Some(e) = board.entry(i) else { continue };

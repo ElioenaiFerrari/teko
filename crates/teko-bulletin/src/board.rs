@@ -27,6 +27,9 @@ impl EntryKind {
     /// One institution's share of the verifiable draw that breaks a tie (ADR-0043); the tally reads it
     /// only to learn the seed.
     pub const DRAW: EntryKind = EntryKind(8);
+    /// A `ValidatorSetChange`: a new set of institutions approved by more than 2/3 of the one in
+    /// force (ADR-0045). The vote chain itself reads it.
+    pub const VALIDATOR_SET: EntryKind = EntryKind(9);
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]

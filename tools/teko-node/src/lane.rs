@@ -79,6 +79,10 @@ struct Timer {
 pub(crate) struct Lane<A: LaneApp> {
     pub(crate) engine: Engine<A>,
     pub(crate) peers: Vec<SocketAddr>,
+    /// `peers.txt` of the network, re-read now and then: nodes that join by a rotation are APPENDED
+    /// to it (ADR-0045) and the running nodes must learn their addresses.
+    pub(crate) peers_file: Option<std::path::PathBuf>,
+    pub(crate) last_peers_read: Instant,
     pub(crate) index: usize,
     blocks_file: File,
     wal_path: PathBuf,
@@ -205,6 +209,8 @@ impl<A: LaneApp> Lane<A> {
         Ok(Self {
             engine,
             peers,
+            peers_file: dir.parent().map(|p| p.join("peers.txt")),
+            last_peers_read: Instant::now(),
             index,
             blocks_file,
             wal_path: dir.join(format!("{}.wal", A::NAME)),
@@ -457,6 +463,37 @@ pub(crate) fn ack(ok: bool, info: &str, accepted: u32) -> Msg {
     )
 }
 
+impl<A: LaneApp> Lane<A> {
+    /// Learns the addresses of nodes appended to `peers.txt` since the start (a rotation adds a node;
+    /// the existing positions never change). Cheap: reads the file every couple of seconds.
+    fn refresh_peers(&mut self) {
+        if self.last_peers_read.elapsed() < Duration::from_secs(2) {
+            return;
+        }
+        self.last_peers_read = Instant::now();
+        let Some(text) = self
+            .peers_file
+            .as_ref()
+            .and_then(|p| std::fs::read_to_string(p).ok())
+        else {
+            return;
+        };
+        let mut listed: Vec<(usize, SocketAddr)> = text
+            .lines()
+            .filter_map(|l| {
+                let (i, a) = l.trim().split_once('=')?;
+                Some((i.trim().parse().ok()?, a.trim().parse().ok()?))
+            })
+            .collect();
+        listed.sort_by_key(|p| p.0);
+        for (i, a) in listed {
+            if i == self.peers.len() {
+                self.peers.push(a);
+            }
+        }
+    }
+}
+
 /// The thread body: ticks timers, starts heights, resends, and syncs from peers.
 pub(crate) fn run_loop<A: LaneApp>(stop: &AtomicBool, lane: &Mutex<Lane<A>>) {
     while !stop.load(Ordering::SeqCst) {
@@ -464,6 +501,7 @@ pub(crate) fn run_loop<A: LaneApp>(stop: &AtomicBool, lane: &Mutex<Lane<A>>) {
         let mut out = Vec::new();
         let (peers, index, sync_now, from) = {
             let mut e = lock_lane(lane);
+            e.refresh_peers();
             e.tick(&mut out);
             let sync_now = e.last_sync.elapsed() >= SYNC_EVERY;
             if sync_now {

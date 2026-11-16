@@ -34,6 +34,9 @@ pub struct VoteSet {
     /// SEC1 consensus keys, equal power: more than 2/3 must sign an outcome.
     #[prost(bytes = "vec", repeated, tag = "2")]
     pub validators: Vec<Vec<u8>>,
+    /// The epoch of this set: 0 at genesis, +1 for every approved change (ADR-0045).
+    #[prost(uint64, tag = "3")]
+    pub epoch: u64,
 }
 
 #[derive(Clone, PartialEq, Eq, Message)]
@@ -165,6 +168,9 @@ pub enum Op {
     Veto(VoteOp),
     Revoke(VoteOp),
     ClaimElected(ClaimElectedOp),
+    /// A new institution set approved by more than 2/3 of the one stored (ADR-0045). Anyone may
+    /// carry it: its authority is in the signatures.
+    RotateVoteSet(teko_bft::ValidatorSetChange),
 }
 
 impl Op {
@@ -175,6 +181,7 @@ impl Op {
             Op::Veto(m) => (3, m.encode_to_vec()),
             Op::Revoke(m) => (4, m.encode_to_vec()),
             Op::ClaimElected(m) => (5, m.encode_to_vec()),
+            Op::RotateVoteSet(m) => (6, prost::Message::encode_to_vec(m)),
         };
         let mut out = vec![tag];
         out.extend_from_slice(&body);
@@ -190,6 +197,9 @@ impl Op {
             3 => Op::Veto(VoteOp::decode(body).ok()?),
             4 => Op::Revoke(VoteOp::decode(body).ok()?),
             5 => Op::ClaimElected(ClaimElectedOp::decode(body).ok()?),
+            6 => Op::RotateVoteSet(
+                <teko_bft::ValidatorSetChange as prost::Message>::decode(body).ok()?,
+            ),
             _ => return None,
         };
         (op.encode() == bytes).then_some(op)

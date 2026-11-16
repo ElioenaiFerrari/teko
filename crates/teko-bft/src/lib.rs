@@ -20,9 +20,11 @@
 extern crate alloc;
 
 mod engine;
+mod rotation;
 mod types;
 
 pub use engine::{Action, App, Engine, Message, Step, timeout_ms};
+pub use rotation::{MAX_SET, MIN_SET, ValidatorSetChange, set_hash};
 pub use types::{
     BftError, Commit, Evidence, Proposal, Validator, ValidatorSet, Vote, VoteKind, block_id,
 };

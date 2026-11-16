@@ -771,3 +771,99 @@ fn malformed_senate_results_are_refused() {
     )
     .unwrap();
 }
+
+// ───────────────────────── rotation of the vote chain institutions (ADR-0045) ─────────────────────────
+
+fn rotation(
+    newcomer: &SigningKey,
+    epoch: u64,
+    prev_epoch_keys: &[SigningKey],
+    approvers: &[usize],
+) -> teko_bft::ValidatorSetChange {
+    let current: Vec<Vec<u8>> = prev_epoch_keys.iter().map(public_key_bytes).collect();
+    let mut new = current.clone();
+    let last = new.len() - 1;
+    new[last] = public_key_bytes(newcomer);
+    let mut c = teko_bft::ValidatorSetChange {
+        chain_id: VOTE_CHAIN.into(),
+        epoch,
+        effective_height: 100,
+        prev_set_hash: teko_bft::set_hash(&current).to_vec(),
+        validators: new,
+        ..Default::default()
+    };
+    for i in approvers {
+        c.sign(&prev_epoch_keys[*i]);
+    }
+    c
+}
+
+#[test]
+fn a_rotation_approved_by_more_than_two_thirds_changes_who_can_certify_a_result() {
+    let mut w = world(4);
+    let (id, holder) = candidacy(
+        &mut w,
+        &cand(Cargo::Governador, "SP", "13", "Ana", "geral-2026"),
+        1,
+    );
+    let newcomer = key(900);
+    let old = w.inst.clone();
+    let relayer = key(777);
+    // 2 of 4 is not more than 2/3; a wrong epoch and a wrong replaced set are refused
+    let e = send(
+        &mut w,
+        &relayer,
+        Op::RotateVoteSet(rotation(&newcomer, 1, &old, &[0, 1])),
+        1,
+    )
+    .unwrap_err();
+    assert!(e.contains("2/3"), "{e}");
+    let e = send(
+        &mut w,
+        &relayer,
+        Op::RotateVoteSet(rotation(&newcomer, 2, &old, &[0, 1, 2])),
+        1,
+    )
+    .unwrap_err();
+    assert!(e.contains("epoch"), "{e}");
+    let mut other = old.clone();
+    other[0] = key(901);
+    let e = send(
+        &mut w,
+        &relayer,
+        Op::RotateVoteSet(rotation(&newcomer, 1, &other, &[0, 1, 2])),
+        1,
+    )
+    .unwrap_err();
+    assert!(e.contains("replace"), "{e}");
+    // 3 of 4 approve: the stored set changes, and the same change cannot be replayed
+    let change = rotation(&newcomer, 1, &old, &[0, 1, 2]);
+    send(&mut w, &relayer, Op::RotateVoteSet(change.clone()), 1).unwrap();
+    assert!(send(&mut w, &relayer, Op::RotateVoteSet(change), 1).is_err());
+
+    // a result signed by the OLD set (with the outgoing institution) no longer reaches 2/3
+    let o = outcome(
+        &id,
+        Office::Governor,
+        Scope::state("SP"),
+        "geral-2026",
+        "governador-sp",
+    );
+    let sign_with = |keys: &[&SigningKey]| {
+        let sigs: Vec<_> = keys.iter().map(|k| sign_outcome(k, &o)).collect();
+        Op::ClaimElected(ClaimElectedOp {
+            outcome: prost::Message::encode_to_vec(&o),
+            signers: sigs.iter().map(|s| s.signer.clone()).collect(),
+            signatures: sigs.iter().map(|s| s.signature.clone()).collect(),
+        })
+    };
+    let (i0, i1, i3) = (&old[0], &old[1], &old[3]);
+    let e = send(&mut w, &relayer, sign_with(&[i0, i1, i3]), 1).unwrap_err();
+    assert!(
+        e.contains("2/3"),
+        "the outgoing institution does not count: {e}"
+    );
+    // with the newcomer in its place the claim works
+    send(&mut w, &relayer, sign_with(&[i0, i1, &newcomer]), 1).unwrap();
+    assert_eq!(elected_of(&w, &holder).len(), 1);
+}

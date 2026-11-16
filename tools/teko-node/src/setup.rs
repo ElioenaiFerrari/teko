@@ -98,7 +98,9 @@ pub fn load_network(dir: &Path) -> Result<NetFiles, NodeError> {
         ));
     }
     peers.sort_by_key(|p| p.0);
-    if peers.len() != profile.validators.len() {
+    // every genesis institution has an address; nodes that joined LATER (a rotation, ADR-0045) are
+    // listed after them and only add to the list
+    if peers.len() < profile.validators.len() {
         return Err(NodeError::Protocol(
             "peers.txt does not match the validators".into(),
         ));
@@ -118,6 +120,15 @@ pub(crate) fn load_key(path: &Path) -> Result<SigningKey, NodeError> {
         .map_err(|_| NodeError::Refused(format!("missing {}", path.display())))?;
     let bytes = hex::decode(text.trim()).map_err(|_| NodeError::Protocol("bad key file".into()))?;
     SigningKey::from_slice(&bytes).map_err(|_| NodeError::Protocol("bad key file".into()))
+}
+
+/// Writes a validator key (hex, mode 0600) into a node folder (a node that joins later, ADR-0045).
+pub fn write_validator_key(node_dir: &Path, key: &SigningKey) -> Result<(), NodeError> {
+    write_private(
+        &node_dir.join("validator.key"),
+        &hex::encode(&key.to_bytes()),
+    )?;
+    Ok(())
 }
 
 pub fn load_validator_key(dir: &Path, index: usize) -> Result<SigningKey, NodeError> {

@@ -143,6 +143,11 @@ pub struct DkgStart {
     pub n: u32,
     #[prost(uint32, tag = "3")]
     pub threshold: u32,
+    /// This participant's 1-based position in the ceremony; 0 = its position among the peers (the
+    /// ceremony of the whole network). After a rotation the participants are the institutions of the
+    /// current set, in the order of that set (ADR-0045).
+    #[prost(uint32, tag = "4")]
+    pub index: u32,
 }
 
 #[derive(Clone, PartialEq, Message)]
@@ -153,6 +158,9 @@ pub struct DkgPackages {
     pub threshold: u32,
     #[prost(message, repeated, tag = "3")]
     pub packages: Vec<Round1Msg>,
+    /// The participants' addresses in ceremony order (position + 1 = ceremony index); empty = all peers.
+    #[prost(string, repeated, tag = "4")]
+    pub participants: Vec<String>,
 }
 
 #[derive(Clone, PartialEq, Message)]

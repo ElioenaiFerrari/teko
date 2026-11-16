@@ -43,23 +43,24 @@ pub(crate) fn dkg_msg(r: DkgReply) -> wire::Msg {
 
 /// Round 1 at a node: make the polynomial, keep it, publish the commitments.
 pub(crate) fn start(state: &mut Option<DkgState>, my_index: usize, m: &DkgStart) -> DkgReply {
-    if m.n < 2 || m.threshold == 0 || m.threshold > m.n || my_index as u32 >= m.n {
+    // the node's place in THIS ceremony: the coordinator says (a rotated set), else its peer position
+    let idx = if m.index > 0 {
+        m.index
+    } else {
+        my_index as u32 + 1
+    };
+    if m.n < 2 || m.threshold == 0 || m.threshold > m.n || idx > m.n {
         return reply(false, "bad parameters");
     }
     let mut rng = UnwrapErr(SysRng);
-    match Participant::new(
-        &mut rng,
-        &m.session,
-        my_index as u32 + 1,
-        m.n,
-        m.threshold as usize,
-    ) {
+    match Participant::new(&mut rng, &m.session, idx, m.n, m.threshold as usize) {
         Ok((p, r1)) => {
             *state = Some(DkgState {
                 participant: p,
                 session: m.session.clone(),
                 n: m.n,
                 threshold: m.threshold as usize,
+                index: idx,
             });
             let mut out = reply(true, "round 1");
             out.round1 = Some(Round1Msg::from(&r1));
@@ -101,10 +102,26 @@ pub(crate) fn finish(
         .collect::<Option<Vec<_>>>()
         .ok_or("malformed package")?;
     verify_packages(&st.session, st.n, st.threshold, &packages).map_err(|e| format!("{e:?}"))?;
-    let me = my_index as u32 + 1;
+    let _ = my_index;
+    let me = st.index;
     let mut received = vec![(me, st.participant.share_for(me).ok_or("own share")?)];
-    for (i, addr) in peers.iter().enumerate() {
-        if i == my_index {
+    // who the shares come from: the ceremony's participants (a rotated set) or all the peers
+    let from: Vec<SocketAddr> = if m.participants.is_empty() {
+        peers.to_vec()
+    } else {
+        m.participants
+            .iter()
+            .map(|a| {
+                a.parse::<SocketAddr>()
+                    .map_err(|_| "bad participant address")
+            })
+            .collect::<Result<_, _>>()?
+    };
+    if from.len() as u32 != st.n {
+        return Err("the participants do not match the ceremony".into());
+    }
+    for (i, addr) in from.iter().enumerate() {
+        if i as u32 + 1 == me {
             continue;
         }
         let req = wire::msg(wire::DKG_SHARE, &DkgShareReq { requester: me });
@@ -177,19 +194,35 @@ pub fn run_ceremony(
     threshold: usize,
 ) -> Result<DkgRecord, NodeError> {
     let addrs = client.addrs().to_vec();
+    run_ceremony_among(client, &addrs, dir, session, threshold)
+}
+
+/// Like `run_ceremony`, among `participants` only (the institutions of the set in force after a
+/// rotation, in that set's order: ceremony index = position + 1, ADR-0045). The record goes to the
+/// chain through `client`, which may know more nodes.
+pub fn run_ceremony_among(
+    client: &NodeClient,
+    participants: &[SocketAddr],
+    dir: &Path,
+    session: &[u8],
+    threshold: usize,
+) -> Result<DkgRecord, NodeError> {
+    let addrs = participants.to_vec();
     let n = addrs.len() as u32;
     let bad = |m: &str| NodeError::Refused(format!("key ceremony: {m}"));
     // round 1: every node publishes its commitments
-    let start_msg = wire::msg(
-        wire::DKG_START,
-        &DkgStart {
-            session: session.to_vec(),
-            n,
-            threshold: threshold as u32,
-        },
-    );
     let mut packages = Vec::new();
-    for a in &addrs {
+    for (pos, a) in addrs.iter().enumerate() {
+        // each participant learns its place in the ceremony from the coordinator
+        let start_msg = wire::msg(
+            wire::DKG_START,
+            &DkgStart {
+                session: session.to_vec(),
+                n,
+                threshold: threshold as u32,
+                index: pos as u32 + 1,
+            },
+        );
         let r: DkgReply = wire::decode(&call(*a, &start_msg, T)?)?;
         if !r.ok {
             return Err(bad(&r.info));
@@ -211,6 +244,7 @@ pub fn run_ceremony(
             session: session.to_vec(),
             threshold: threshold as u32,
             packages: packages.clone(),
+            participants: addrs.iter().map(ToString::to_string).collect(),
         },
     );
     for a in &addrs {

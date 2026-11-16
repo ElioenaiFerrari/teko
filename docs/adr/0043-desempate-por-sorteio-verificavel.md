@@ -18,3 +18,4 @@ Um empate que a regra não desfaz virava `Tie` ("sem eleito"): o resultado era c
 - Quem controlasse votos poderia escolher *quais* empates existem, nunca *quem ganha* o sorteio.
 - A economia continua acreditando em > 2/3 das instituições; a conferência independente é refazer o sorteio do quadro.
 - O sorteio não tem valor legal; a regra de desempate legal (idade) foi descartada pelo dono do produto.
+- **Rotação (ADR-0045):** a cerimônia de chave, e portanto o sorteio, é entre as instituições em vigor; a rotação só vale com nenhum sorteio pendente.

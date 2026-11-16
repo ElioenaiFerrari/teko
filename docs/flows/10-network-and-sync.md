@@ -37,3 +37,10 @@ Nós órfãos de uma execução antiga ("Address already in use"): `make devnet-
 
 ## Limites honestos
 PoA federada, não finalidade bizantina. Sem rede entre máquinas ainda.
+
+## Rotação das instituições (ADR-0045)
+O conjunto de instituições deixa de ser fixo: uma **troca** (época + 1, conjunto novo **ordenado**, altura em que vale, o conjunto que substitui) aprovada por **mais de 2/3 do conjunto em vigor** entra no quadro como entrada do tipo 9 e vale a partir da altura marcada. A `Chain` guarda épocas: cada bloco é conferido contra o conjunto da **sua** altura (inclusive o proponente do consenso), então blocos antigos continuam válidos e qualquer réplica refaz as épocas desde a gênese. A economia recebe a mesma troca (`RotateVoteSet`) e `ClaimElected` passa a exigir o conjunto novo; a cerimônia de chave seguinte é entre as instituições em vigor, com uma sessão que nomeia a época; o dispositivo segue as trocas elo por elo (`CheckMyBallot.rotations`) e guarda uma **catraca** de época. A regra "sem eleição em andamento" é obedecida por quem assina (`teko-node rotation-sign` recusa); a chain só confere assinaturas. `make devnet-rotate` faz tudo isso em dev.
+
+![Rotação das instituições: a proposta, a aprovação de mais de 2/3, a entrada no quadro, a economia e o dispositivo que segue os elos](../diagrams/validator-rotation.png)
+
+Código: `crates/teko-bft/src/rotation.rs` (o documento), `crates/teko-chain/src/chain.rs` (épocas e regras), `crates/teko-credentials/src/module.rs` (`RotateVoteSet`), `crates/teko-device-core` (`institutions_at` e a catraca), `tools/teko-node/src/rotation.rs` (propor, assinar, enviar, `dev_rotate`). Teste em nós reais: `tools/devnet-sim/tests/rotation.rs`.

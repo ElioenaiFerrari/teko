@@ -19,12 +19,16 @@ USO:
                    --founder: endereço da CARTEIRA (do dispositivo) que recebe as recompensas do fundador (opção B, ADR-0028)
   teko-node run    [--dir dev/net] --index I        sobe o validador I (só loopback)
   teko-node stop   [--dir dev/net]                  para os validadores iniciados com `run` (pelos arquivos .pid)
-  teko-node reset  [--dir dev/net]                  apaga SÓ os blocos (blocks.log) de cada nó; mantém as chaves
+  teko-node reset  [--dir dev/net]                  apaga SÓ os blocos (votes.blocks, economy.blocks) de cada nó; mantém as chaves e volta aos nós da gênese
   teko-node status [--dir dev/net]                  altura, raiz e pares de cada nó
   teko-node dkg    [--dir dev/net] [--threshold M]  cerimônia de chave da eleição entre os nós EM EXECUÇÃO (ninguém guarda a chave inteira)
   teko-node blocks [--dir dev/net]                  blocos verificados (cliente que não confia em nós)
   teko-node founder [--dir dev/net] --address tekow1…   troca a carteira do fundador (apaga SÓ a cadeia de economia; pare os nós antes)
   teko-node economy [--dir dev/net]                 livro de economia (BFT): altura, fase de fundador, validadores; verifica a cadeia
+  teko-node rotation-propose --new <hex>,<hex>,… [--effective-in 6]   propõe um conjunto NOVO de instituições (ordenado); grava rotation.pending; recusa com eleição em andamento
+  teko-node rotation-sign    --index I                                  a instituição I aprova a troca pendente com a SUA chave (recusa com eleição em andamento)
+  teko-node rotation-submit                                             envia a troca aprovada (mais de 2/3) à chain de votos e à economia
+  teko-node rotate --out K [--port P]                                   SÓ DEV: troca a instituição K por uma nova (cria a chave, a pasta e o endereço, aprova e envia); depois: teko-node run --index <novo>
 A mainnet está TRAVADA nesta fase.
 ";
 
@@ -45,6 +49,25 @@ fn flags(args: &[String]) -> Result<HashMap<String, String>, String> {
         }
     }
     Ok(m)
+}
+
+fn load_pending(dir: &std::path::Path) -> Result<teko_bft::ValidatorSetChange, String> {
+    let text = std::fs::read_to_string(dir.join("rotation.pending"))
+        .map_err(|_| "não há troca pendente: rode teko-node rotation-propose")?;
+    let bytes = teko_crypto::hex::decode(text.trim()).map_err(|_| "rotation.pending corrompido")?;
+    <teko_bft::ValidatorSetChange as prost::Message>::decode(bytes.as_slice())
+        .map_err(|_| "rotation.pending corrompido".to_string())
+}
+
+fn save_pending(dir: &std::path::Path, c: &teko_bft::ValidatorSetChange) -> Result<(), String> {
+    std::fs::write(
+        dir.join("rotation.pending"),
+        format!(
+            "{}\n",
+            teko_crypto::hex::encode(&prost::Message::encode_to_vec(c))
+        ),
+    )
+    .map_err(|x| x.to_string())
 }
 
 fn run(args: Vec<String>) -> Result<(), String> {
@@ -173,16 +196,26 @@ fn run(args: Vec<String>) -> Result<(), String> {
         }
         "dkg" => {
             let net = load_network(&dir).map_err(e)?;
+            // the ceremony is among the institutions IN FORCE (after a rotation: the new set in its
+            // order, with a session that names the epoch, ADR-0045)
+            let plan = teko_node::rotation::ceremony_plan(&dir).map_err(e)?;
             let t = f
                 .get("threshold")
-                .map_or(Ok(net.profile.threshold), |v| v.parse())
-                .map_err(|_| "--threshold inválido")?;
-            let session = format!("{}|tally-key", net.profile.chain_id);
-            let rec =
-                teko_node::run_ceremony(&NodeClient::new(net.peers), &dir, session.as_bytes(), t)
-                    .map_err(e)?;
+                .map(|v| v.parse::<usize>().map_err(|_| "--threshold inválido"))
+                .transpose()?
+                .unwrap_or(plan.threshold);
+            let client = NodeClient::new(net.peers.clone());
+            let rec = teko_node::run_ceremony_among(
+                &client,
+                &plan.participants,
+                &dir,
+                plan.session.as_bytes(),
+                t,
+            )
+            .map_err(e)?;
             println!(
-                "Cerimônia concluída: chave da eleição de {} validadores, {} de {} decifram.\nChave pública (registrada na cadeia e em {}/tally-key.pub): {}",
+                "Cerimônia concluída (época {}): chave da eleição de {} validadores, {} de {} decifram.\nChave pública (registrada na cadeia e em {}/tally-key.pub): {}",
+                plan.epoch,
                 rec.n,
                 rec.threshold,
                 rec.n,
@@ -208,7 +241,10 @@ fn run(args: Vec<String>) -> Result<(), String> {
             let net = load_network(&dir).map_err(e)?;
             for i in 0..net.peers.len() {
                 let nd = teko_node::node_dir(&dir, i);
-                let _ = std::fs::remove_file(nd.join("blocks.log"));
+                // the vote chain writes `votes.blocks` and `votes.wal`; `blocks.log` is the old name
+                for f in ["blocks.log", "votes.blocks", "votes.wal"] {
+                    let _ = std::fs::remove_file(nd.join(f));
+                }
                 let _ = std::fs::remove_file(nd.join("economy.blocks"));
                 let _ = std::fs::remove_file(nd.join("economy.wal"));
                 // The key ceremony lives IN the chain being wiped: its shares and the
@@ -216,6 +252,25 @@ fn run(args: Vec<String>) -> Result<(), String> {
                 let _ = std::fs::remove_file(nd.join("tally-share.key"));
             }
             let _ = std::fs::remove_file(dir.join("tally-key.pub"));
+            let _ = std::fs::remove_file(dir.join("rotation.pending"));
+            // nodes that joined by a rotation belong to the chain being wiped: back to the genesis set
+            let genesis = net.profile.validators.len();
+            if net.peers.len() > genesis {
+                if let Ok(text) = std::fs::read_to_string(dir.join("peers.txt")) {
+                    let kept: Vec<&str> = text
+                        .lines()
+                        .filter(|l| {
+                            l.split_once('=')
+                                .and_then(|(i, _)| i.trim().parse::<usize>().ok())
+                                .is_none_or(|i| i < genesis)
+                        })
+                        .collect();
+                    let _ = std::fs::write(dir.join("peers.txt"), format!("{}\n", kept.join("\n")));
+                }
+                for i in genesis..net.peers.len() {
+                    let _ = std::fs::remove_dir_all(teko_node::node_dir(&dir, i));
+                }
+            }
             println!(
                 "Cadeia de teste apagada, com a cerimônia da chave (as chaves dos validadores ficaram). Pare os nós antes (`teko-node stop`). Depois: make devnet, make devnet-dkg, make election."
             );
@@ -228,6 +283,26 @@ fn run(args: Vec<String>) -> Result<(), String> {
                 net.profile.kind.name(),
                 net.profile.chain_id
             );
+            // the institutions in force (verified chain): the epoch and how many
+            if let Ok(chain) = c.sync_chain(&net.profile) {
+                let e = chain.epoch_at(chain.height() + 1);
+                let pending = chain
+                    .epochs()
+                    .last()
+                    .filter(|x| x.from_height > chain.height() + 1)
+                    .map_or(String::new(), |x| {
+                        format!(
+                            " · troca PENDENTE para a época {} no bloco {}",
+                            x.epoch, x.from_height
+                        )
+                    });
+                println!(
+                    "  instituições em vigor: época {} · {} instituições{}",
+                    e.epoch,
+                    e.set.len(),
+                    pending
+                );
+            }
             for (i, (a, s)) in c.statuses().into_iter().enumerate() {
                 match s {
                     Some(s) => println!(
@@ -242,6 +317,76 @@ fn run(args: Vec<String>) -> Result<(), String> {
                     None => println!("  nó {i} {a}: FORA DO AR"),
                 }
             }
+        }
+        "rotation-propose" => {
+            let list = f.get("new").ok_or("faltou --new <hex>,<hex>,…")?;
+            let keys = list
+                .split(',')
+                .map(|k| {
+                    teko_crypto::hex::decode(k.trim()).map_err(|_| "--new: chave hex inválida")
+                })
+                .collect::<Result<Vec<_>, _>>()?;
+            let n = f
+                .get("effective-in")
+                .map_or(Ok(teko_node::rotation::DEFAULT_EFFECTIVE_IN), |v| v.parse())
+                .map_err(|_| "--effective-in inválido")?;
+            let change = teko_node::rotation::propose(&dir, keys, n).map_err(e)?;
+            std::fs::write(
+                dir.join("rotation.pending"),
+                format!(
+                    "{}\n",
+                    teko_crypto::hex::encode(&prost::Message::encode_to_vec(&change))
+                ),
+            )
+            .map_err(|x| x.to_string())?;
+            println!(
+                "Proposta da época {} gravada em {}/rotation.pending (vale a partir do bloco {}). Cada instituição aprova: teko-node rotation-sign --index I",
+                change.epoch,
+                dir.display(),
+                change.effective_height
+            );
+        }
+        "rotation-sign" => {
+            let i: usize = f
+                .get("index")
+                .ok_or("faltou --index")?
+                .parse()
+                .map_err(|_| "--index inválido")?;
+            let mut change = load_pending(&dir)?;
+            teko_node::rotation::sign(&dir, i, &mut change).map_err(e)?;
+            save_pending(&dir, &change)?;
+            println!(
+                "Instituição {i} aprovou ({} aprovações até agora).",
+                change.signers.len()
+            );
+        }
+        "rotation-submit" => {
+            let change = load_pending(&dir)?;
+            for l in teko_node::rotation::submit(&dir, &change).map_err(e)? {
+                println!("  {l}");
+            }
+            let _ = std::fs::remove_file(dir.join("rotation.pending"));
+        }
+        "rotate" => {
+            let out: usize = f
+                .get("out")
+                .ok_or("faltou --out K")?
+                .parse()
+                .map_err(|_| "--out inválido")?;
+            let net = load_network(&dir).map_err(e)?;
+            let last_port = net.peers.iter().map(|a| a.port()).max().unwrap_or(7900);
+            let port: u16 = f
+                .get("port")
+                .map_or(Ok(last_port + 1), |v| v.parse())
+                .map_err(|_| "--port inválido")?;
+            let r = teko_node::rotation::dev_rotate(&dir, out, port).map_err(e)?;
+            for l in &r.lines {
+                println!("  {l}");
+            }
+            println!(
+                "NOVO={} (suba com: teko-node run --index {})",
+                r.new_index, r.new_index
+            );
         }
         "founder" => {
             let net = load_network(&dir).map_err(e)?;

@@ -55,8 +55,9 @@ fn kind_name(k: u32) -> String {
 /// Summarizes a chain the client already verified (`NodeClient::sync_chain`).
 pub fn snapshot(chain: &Chain) -> VotesSnapshot {
     let p = chain.profile();
-    // equal power: more than 2/3 of the institutions
-    let quorum = p.validators.len() * 2 / 3 + 1;
+    // equal power: more than 2/3 of the institutions IN FORCE (they change by rotation, ADR-0045)
+    let in_force = chain.epoch_at(chain.height() + 1);
+    let quorum = in_force.set.len() * 2 / 3 + 1;
     let blocks = chain
         .blocks()
         .iter()
@@ -90,7 +91,7 @@ pub fn snapshot(chain: &Chain) -> VotesSnapshot {
         available: true,
         chain_id: p.chain_id.clone(),
         quorum,
-        validators: p.validators.len(),
+        validators: in_force.set.len(),
         height: chain.height(),
         blocks,
     }

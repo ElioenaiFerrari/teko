@@ -11,6 +11,7 @@ teko-crypto.workspace = true
 teko-ledger.workspace = true
 teko-election.workspace = true
 teko-attestation.workspace = true
+teko-bft.workspace = true
 prost.workspace = true
 
 [dev-dependencies]

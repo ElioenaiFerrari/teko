@@ -22,7 +22,7 @@ Candidatos eram linhas de texto no manifesto, a chain de votos não registrava q
 
 ## Consequências e limites honestos
 - **Confiança:** a economia acredita em **mais de 2/3 das instituições** da chain de votos (mesma confiança do BFT); elas poderiam, juntas, assinar um resultado falso, e a economia não consegue recontar (não tem as cédulas). Quem quiser conferir de verdade recalcula a apuração do quadro (a Suite e o explorador fazem).
-- **Conjunto de instituições estático** (copiado na gênese); trocá-lo é PENDENTE. Com 3 instituições, "mais de 2/3" exige as 3.
+- **Conjunto de instituições:** copiado na gênese (época 0) e trocável por rotação aprovada por mais de 2/3 ([ADR-0045](0045-rotacao-das-instituicoes.md)); a economia guarda o conjunto em vigor. Com 3 instituições, "mais de 2/3" exige as 3.
 - **Vaga única apenas.** Proporcional e várias vagas, o 2º turno só entre os dois primeiros são decisões PENDENTES.
 - Uma candidatura revogada depois do pleito assinado continua na cédula (o pleito não muda); o selo avisa, e o remédio é cancelar o pleito com motivo e abrir outro.
 - Sem validade jurídica; sem auditoria; só devnet.

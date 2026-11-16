@@ -122,6 +122,21 @@ def tie_draw():
     d.legend([(MUTED, "mensagem", False), (GREEN, "conferência", True), (BOTO, "registro", False), (RED, "empate", False)])
     return d
 
+def validator_rotation():
+    d = D("validator-rotation", 1100, 0, "Rotação das instituições", "Mais de 2/3 do conjunto em vigor aprova o novo; a chain, a economia e o dispositivo o seguem", "REDE")
+    A = [("i", "Instituições", "conjunto em vigor", "onca", 100), ("c", "Chain de votos", "épocas", "boto", 400), ("e", "Economia", "conjunto guardado", "focal", 690), ("d", "Dispositivo", "catraca de época", "link", 970)]
+    M = [("i", "i", "propõe o conjunto novo (época + 1, ordem, altura)", "default", False),
+         ("i", "i", "> 2/3 assinam, só sem eleição em andamento", "bad", False),
+         ("i", "c", "entrada de troca no quadro (tipo 9)", "boto", False),
+         ("c", "c", "vale a partir da altura; blocos antigos ficam na época deles", "accent", False),
+         ("i", "e", "RotateVoteSet: ClaimElected exige o conjunto novo", "default", False),
+         ("c", "d", "CheckMyBallot leva os elos desde a gênese", "default", False),
+         ("d", "c", "confere elo por elo; a catraca nunca volta", "ok", True)]
+    N = [(1, "i", "A trava é de quem assina: a chain só confere assinaturas", 330), (5, "d", "Outro ramo de trocas é recusado", 330)]
+    d.sequence(A, M, notas=N, passo=36)
+    d.legend([(MUTED, "mensagem", False), (GREEN, "conferência", True), (RED, "trava", False)])
+    return d
+
 def dkg_ceremony():
     d = D("dkg-ceremony", 1100, 0, "Cerimônia de chave (DKG)", "A chave de decifração nasce dividida: ninguém a possui inteira", "CERIMÔNIA")
     A = [("a", "Validador A", "teko-node", "boto", 130), ("b", "Validador B", "teko-node", "boto", 400), ("c", "Validador C", "teko-node", "boto", 670), ("q", "Quadro", "público", "plain", 950)]

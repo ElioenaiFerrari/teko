@@ -70,7 +70,7 @@ pub const ELECTED_TYPE: &str = "eleito";
 pub const CANDIDATE_TYPE: &str = "candidato";
 
 /// The institutions of the vote chain whose certified outcomes this ledger accepts (ADR-0040),
-/// fixed at genesis (rotating the set is PENDING).
+/// at genesis (epoch 0); `RotateVoteSet` replaces it later (ADR-0045).
 pub fn genesis_vote_set(
     ledger: &mut Ledger,
     chain_id: &str,
@@ -90,6 +90,7 @@ pub fn genesis_vote_set(
     let rec = VoteSet {
         chain_id: chain_id.into(),
         validators: validators.to_vec(),
+        epoch: 0,
     };
     ledger
         .genesis_put(CREDENTIALS_MODULE, K_VOTE_SET, rec.encode_to_vec())
@@ -573,6 +574,31 @@ fn credential_id_of(subject: &[u8], commitment: &[u8; 32], claims: &[u8]) -> [u8
     credential_id(ELECTED_TYPE.as_bytes(), subject, commitment, claims, 0)
 }
 
+/// Replaces the stored institutions of the vote chain by a new set that MORE THAN 2/3 of the stored
+/// one approved (ADR-0045). The epoch only goes up by one and the change names the set it replaces,
+/// so a change cannot be replayed or applied out of order. `ClaimElected` reads the stored set, so
+/// from now on it needs more than 2/3 of the NEW one.
+fn rotate_vote_set(
+    ctx: &mut Ctx<'_, '_>,
+    change: &teko_bft::ValidatorSetChange,
+) -> Result<(), ModuleError> {
+    let set = ctx
+        .get(K_VOTE_SET)
+        .and_then(|raw| VoteSet::decode(raw.as_slice()).ok())
+        .ok_or_else(|| err("this network has no vote chain institutions"))?;
+    change
+        .follow(&set.chain_id, set.epoch, &set.validators)
+        .map_err(err)?;
+    let next = VoteSet {
+        chain_id: set.chain_id,
+        validators: change.validators.clone(),
+        epoch: change.epoch,
+    };
+    ctx.set(K_VOTE_SET, next.encode_to_vec());
+    ctx.emit("vote_set_rotated", change.epoch.to_be_bytes().to_vec());
+    Ok(())
+}
+
 impl Module for CredentialsModule {
     fn id(&self) -> u32 {
         CREDENTIALS_MODULE
@@ -585,6 +611,7 @@ impl Module for CredentialsModule {
             Op::Veto(op) => veto(ctx, op),
             Op::Revoke(op) => revoke(ctx, op),
             Op::ClaimElected(op) => claim_elected(ctx, op),
+            Op::RotateVoteSet(change) => rotate_vote_set(ctx, &change),
         }
     }
 }

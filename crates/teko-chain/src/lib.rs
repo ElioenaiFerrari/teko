@@ -20,6 +20,6 @@ mod profile;
 
 pub use app::{MAX_CLOCK_DRIFT_SECS, VoteApp};
 pub use block::{Block, BlockEntry, DecidedBlock, block_hash, genesis_hash};
-pub use chain::{Chain, InclusionEvidence};
+pub use chain::{Chain, Epoch, InclusionEvidence};
 pub use error::ChainError;
 pub use profile::{NetworkKind, NetworkProfile};

@@ -51,6 +51,10 @@ pub const BALLOT_PRECHECK: &str = "teko/v2/ballot-precheck";
 pub const BFT_VOTE: &str = "teko/v2/bft-vote";
 pub const BFT_PROPOSAL: &str = "teko/v2/bft-proposal";
 pub const BFT_BLOCK: &str = "teko/v2/bft-block";
+/// What the institutions sign to approve a new institution set (ADR-0045).
+pub const VALIDATOR_SET_CHANGE: &str = "teko/v2/validator-set-change";
+/// The identity of an ordered institution set (ADR-0045).
+pub const VALIDATOR_SET: &str = "teko/v2/validator-set";
 pub const LEDGER_TX: &str = "teko/v2/ledger-tx";
 pub const LEDGER_TX_ID: &str = "teko/v2/ledger-tx-id";
 pub const LEDGER_ADDRESS: &str = "teko/v2/ledger-address";

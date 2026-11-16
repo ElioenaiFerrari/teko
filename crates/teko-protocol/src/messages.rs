@@ -707,6 +707,11 @@ pub struct CheckMyBallot {
     /// Merkle inclusion proof of the leaf in the block's `log_root`.
     #[prost(bytes = "vec", repeated, tag = "6")]
     pub proof: Vec<Vec<u8>>,
+    /// Every approved change of the vote chain's institutions since the genesis set, in order, each an
+    /// encoded `ValidatorSetChange` (ADR-0045). The device follows them link by link from the set in
+    /// its trust file; empty when the institutions never changed.
+    #[prost(bytes = "vec", repeated, tag = "7")]
+    pub rotations: Vec<Vec<u8>>,
 }
 /// The device checked the certificate and the inclusion. ONLY public facts: never the option.
 #[derive(Clone, PartialEq, prost::Message)]
@@ -721,6 +726,9 @@ pub struct BallotRecorded {
     pub institutions: u32,
     #[prost(string, tag = "4")]
     pub tracker: String,
+    /// The epoch of the institutions that certified the block (0 = the genesis set, ADR-0045).
+    #[prost(uint64, tag = "5")]
+    pub epoch: u64,
 }
 /// PUBLIC credential key for one type.
 #[derive(Clone, PartialEq, prost::Message)]

@@ -14,7 +14,7 @@ Cada rede tem um `chain_id` (`teko-devnet-1`, `teko-testnet-1`). Ele entra no **
 
 ## Como funciona (rede de votos)
 
-- **Validadores = instituições independentes, poder igual** (1 instituição = 1 voto, sem moeda nem stake). O conjunto é fixo no genesis (`network.txt`). Um bloco é **final** com o **certificado de commit**: mais de 2/3 das instituições deram precommit. Com 3 instituições o quórum é 3 (nenhuma falha tolerada); com 4, 3 (tolera 1).
+- **Validadores = instituições independentes, poder igual** (1 instituição = 1 voto, sem moeda nem stake). O conjunto começa na gênese (`network.txt`, época 0) e **pode ser trocado por rotação**, aprovada por mais de 2/3 do conjunto em vigor (épocas, [ADR-0045](adr/0045-rotacao-das-instituicoes.md); `make devnet-rotate`). Um bloco é **final** com o **certificado de commit**: mais de 2/3 das instituições deram precommit. Com 3 instituições o quórum é 3 (nenhuma falha tolerada); com 4, 3 (tolera 1).
 - **Bloco** (`teko-chain`): `chain_id, height (a partir de 1), prev_hash, timestamp, proposer, entries[], log_size, log_root`; a rede decide o bloco **mais** o certificado (`DecidedBlock`). `log_size/log_root` fixam o estado exato do log Merkle depois do bloco; uma réplica refaz o **mesmo** log a partir dos blocos.
 - **A cadeia só ordena.** Ela não julga cédulas: quem conta e rejeita (e conta as rejeitadas) é o `Tallier`, sobre o log. O validador confere só cadeia, altura, pai, proponente, tamanhos, horário e raiz Merkle.
 - **Proponente sorteado pelo motor** (ponderado pelo poder, aqui igual). Se ele está fora do ar ou censura, estoura o *timeout* e a **rodada seguinte** tem outro proponente. Sem quórum a rede **pausa**; nunca bifurca.
@@ -39,6 +39,7 @@ Ao lado da cadeia de votos, cada nó roda o **livro de economia** (moeda, bens, 
 make dev               # menu de desenvolvimento (setas)
 make devnet-blocks-sim # SIMULAÇÃO: N blocos sob demanda (KIND=economy|votes COUNT=5)
 make devnet            # sobe NODES=4 validadores (cria dev/net na 1ª vez; nenhum bloco nasce até haver transação ou voto)
+make devnet-rotate    # SIMULAÇÃO: troca a instituição OUT por uma nova (rotação, ADR-0045); recusa com eleição aberta
 make devnet-dkg       # (cédulas cifradas) cerimônia de chave entre os validadores (limiar: maioria estrita, 3 de 4)
 make election          # liga a eleição à rede (chain_id) e fixa o dispositivo nela
                        # → reinicie o emulador (ele lê o trust.txt na partida)
@@ -57,4 +58,4 @@ Sem rede rodando, tudo continua funcionando com o arquivo local (`dev/board.log`
 
 Garante: **finalidade** (um bloco decidido não é desfeito); nenhum bloco sem mais de 2/3 das instituições; censura por um proponente deixa de bastar (a rodada seguinte tem outro); sem quórum a rede pausa em vez de bifurcar; réplicas independentes reconstroem o mesmo log e conferem tudo; um nó fora do ar não para a rede (com 4 instituições ou mais).
 
-**Não garante:** segurança com 1/3 ou mais das instituições em conluio (podem parar a rede; com 2/3 ou mais podem decidir o que quiserem); privacidade do voto além da cifra das cédulas ([ADR-0019](adr/0019-cedulas-cifradas-elgamal-de-limiar.md)); proteção de rede (TCP simples em loopback, sem criptografia entre nós: a integridade vem dos certificados); troca de instituições depois do genesis (outro ADR). Não há mineração nem tokens na rede de votos. Sem auditoria.
+**Não garante:** segurança com 1/3 ou mais das instituições em conluio (podem parar a rede; com 2/3 ou mais podem decidir o que quiserem); privacidade do voto além da cifra das cédulas ([ADR-0019](adr/0019-cedulas-cifradas-elgamal-de-limiar.md)); proteção de rede (TCP simples em loopback, sem criptografia entre nós: a integridade vem dos certificados); proteção contra mais de 2/3 do conjunto em vigor aprovando uma troca maliciosa (a rotação confia na mesma supermaioria do BFT, ADR-0045). Não há mineração nem tokens na rede de votos. Sem auditoria.

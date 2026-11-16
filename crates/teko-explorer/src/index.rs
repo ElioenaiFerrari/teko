@@ -149,6 +149,10 @@ fn kind_of(tx: &Tx) -> TxKind {
                 "claim_elected",
                 teko_credentials::ELECTED_TYPE.as_bytes().to_vec(),
             )),
+            Some(Op::RotateVoteSet(_)) => Some((
+                "rotate_vote_set",
+                teko_credentials::ELECTED_TYPE.as_bytes().to_vec(),
+            )),
             None => None,
         };
         if let Some((op, ctype)) = parsed {

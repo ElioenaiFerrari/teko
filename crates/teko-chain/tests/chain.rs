@@ -346,3 +346,180 @@ fn a_block_is_never_empty_and_the_first_one_ties_to_the_chain_id() {
     assert_eq!(b.prev_hash, genesis_hash(&c.profile().chain_id).to_vec());
     assert_eq!(b.height, 1);
 }
+
+// ───────────────────────── rotation of the institutions (ADR-0045) ─────────────────────────
+
+use teko_bft::{ValidatorSetChange, set_hash};
+
+fn extra_key(seed: u64) -> SigningKey {
+    generate_signing_key(&mut StdRng::seed_from_u64(seed))
+}
+
+/// An approved change replacing the LAST of the 4 institutions with `newcomer`.
+fn replace_last(
+    keys: &[SigningKey],
+    newcomer: &SigningKey,
+    epoch: u64,
+    effective: u64,
+    approvers: &[usize],
+) -> ValidatorSetChange {
+    let current: Vec<Vec<u8>> = keys[..4].iter().map(public_key_bytes).collect();
+    let mut new = current.clone();
+    new[3] = public_key_bytes(newcomer);
+    let mut c = ValidatorSetChange {
+        chain_id: "teko-devnet-1".into(),
+        epoch,
+        effective_height: effective,
+        prev_set_hash: set_hash(&current).to_vec(),
+        validators: new,
+        ..Default::default()
+    };
+    for i in approvers {
+        c.sign(&keys[*i]);
+    }
+    c
+}
+
+fn change_entry(c: &ValidatorSetChange) -> Entry {
+    Entry::new(EntryKind::VALIDATOR_SET, c.encode_to_vec())
+}
+
+#[test]
+fn an_approved_change_takes_effect_at_its_height_old_blocks_stay_valid_and_a_replica_rebuilds_the_epochs()
+ {
+    let (mut keys, mut c) = setup(NetworkKind::Devnet, 4);
+    let newcomer = extra_key(501);
+    keys.push(newcomer.clone());
+    let change = replace_last(&keys, &newcomer, 1, 5, &[0, 1, 2]);
+    // block 1: ordinary; block 2 carries the change (it takes effect at height 5)
+    let b1 = decide(&c, &keys, &entries(2), 1_000, &[0, 1, 2]);
+    c.apply(b1).unwrap();
+    let b2 = decide(&c, &keys, &[change_entry(&change)], 1_001, &[0, 1, 2]);
+    c.apply(b2).unwrap();
+    assert_eq!(c.epochs().len(), 2, "the epoch exists, pending");
+    assert_eq!(c.set_at(4).len(), 4);
+    // blocks 3 and 4 still belong to the OLD set (the outgoing institution may certify them)
+    for h in [3u64, 4] {
+        assert_eq!(c.set_at(h)[3], public_key_bytes(&keys[3]), "height {h}");
+        let b = decide(&c, &keys, &entries(1), 1_000 + h, &[0, 1, 3]);
+        c.apply(b).unwrap();
+    }
+    // from height 5 the NEW set rules: the outgoing key is no longer an institution
+    assert_eq!(c.set_at(5)[3], public_key_bytes(&newcomer));
+    let old_votes = decide(&c, &keys, &entries(1), 1_100, &[0, 1, 3]);
+    assert!(
+        c.apply(old_votes).is_err(),
+        "the removed institution's vote no longer counts: 2 of 4"
+    );
+    let with_new = decide(&c, &keys, &entries(1), 1_101, &[0, 1, 4]);
+    c.apply(with_new).unwrap();
+    assert_eq!(c.height(), 5);
+    // a second replica rebuilds exactly the same epochs from the blocks alone
+    let mut other = Chain::new(c.profile().clone());
+    for b in c.blocks() {
+        other.apply(b.clone()).unwrap();
+    }
+    assert_eq!(other.epochs(), c.epochs());
+    assert_eq!(other.tip_hash(), c.tip_hash());
+    // the approved changes a device needs to follow
+    assert_eq!(c.changes_after(0), vec![change.clone()]);
+    assert!(c.changes_after(1).is_empty());
+}
+
+#[test]
+fn a_set_change_that_breaks_a_rule_makes_the_block_invalid() {
+    let (mut keys, mut c) = setup(NetworkKind::Devnet, 4);
+    let newcomer = extra_key(502);
+    keys.push(newcomer.clone());
+    c.apply(decide(&c, &keys, &entries(1), 1_000, &[0, 1, 2]))
+        .unwrap();
+    let me = public_key_bytes(&keys[0]);
+    let refused = |c: &Chain, es: &[Entry]| {
+        let payload = c.propose(&me, es, 1_500);
+        c.check(&me, &payload).is_err()
+    };
+    let good = replace_last(&keys, &newcomer, 1, 6, &[0, 1, 2]);
+    assert!(
+        !refused(&c, &[change_entry(&good)]),
+        "the sound change is accepted"
+    );
+    // not more than 2/3, an outsider approving, a wrong epoch, a wrong replaced set
+    assert!(refused(
+        &c,
+        &[change_entry(&replace_last(&keys, &newcomer, 1, 6, &[0, 1]))]
+    ));
+    let mut outsider = replace_last(&keys, &newcomer, 1, 6, &[0, 1]);
+    outsider.sign(&newcomer);
+    assert!(
+        refused(&c, &[change_entry(&outsider)]),
+        "the newcomer cannot approve itself"
+    );
+    assert!(refused(
+        &c,
+        &[change_entry(&replace_last(
+            &keys,
+            &newcomer,
+            2,
+            6,
+            &[0, 1, 2]
+        ))]
+    ));
+    let mut stale = replace_last(&keys, &newcomer, 1, 6, &[]);
+    stale.prev_set_hash = vec![7; 32];
+    for k in &keys[..3] {
+        stale.sign(k);
+    }
+    assert!(refused(&c, &[change_entry(&stale)]));
+    // it must take effect AFTER the block that carries it (that block is height 2)
+    assert!(refused(
+        &c,
+        &[change_entry(&replace_last(
+            &keys,
+            &newcomer,
+            1,
+            2,
+            &[0, 1, 2]
+        ))]
+    ));
+    assert!(refused(
+        &c,
+        &[change_entry(&replace_last(
+            &keys,
+            &newcomer,
+            1,
+            1,
+            &[0, 1, 2]
+        ))]
+    ));
+    // two changes in one block, and a malformed one
+    assert!(refused(&c, &[change_entry(&good), change_entry(&good)]));
+    assert!(refused(
+        &c,
+        &[Entry::new(EntryKind::VALIDATOR_SET, vec![1, 2, 3])]
+    ));
+    // a set of one institution, and a repeated key
+    let mut one = good.clone();
+    one.validators.truncate(1);
+    one.signers.clear();
+    one.signatures.clear();
+    for k in &keys[..3] {
+        one.sign(k);
+    }
+    assert!(refused(&c, &[change_entry(&one)]));
+    let mut dup = good.clone();
+    dup.validators[3] = dup.validators[0].clone();
+    dup.signers.clear();
+    dup.signatures.clear();
+    for k in &keys[..3] {
+        dup.sign(k);
+    }
+    assert!(refused(&c, &[change_entry(&dup)]));
+    // while one is PENDING no other can be carried
+    c.apply(decide(&c, &keys, &[change_entry(&good)], 1_001, &[0, 1, 2]))
+        .unwrap();
+    let again = replace_last(&keys, &newcomer, 2, 9, &[0, 1, 2]);
+    assert!(
+        refused(&c, &[change_entry(&again)]),
+        "a change is already pending"
+    );
+}

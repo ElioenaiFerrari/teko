@@ -1111,11 +1111,15 @@ impl<T: Transport> DeviceClient<T> {
         &mut self,
         election_id: &str,
         contest_id: &str,
-        block: Vec<u8>,
-        commit: Vec<u8>,
-        index: u64,
-        proof: &[[u8; 32]],
+        evidence: BallotEvidence,
     ) -> Result<RecordedReport, ClientError> {
+        let BallotEvidence {
+            block,
+            commit,
+            index,
+            proof,
+            rotations,
+        } = evidence;
         let r = self.expect(
             Request::CheckMyBallot(CheckMyBallot {
                 election_id: election_id.to_string(),
@@ -1124,6 +1128,7 @@ impl<T: Transport> DeviceClient<T> {
                 commit,
                 index,
                 proof: proof.iter().map(|h| h.to_vec()).collect(),
+                rotations,
             }),
             |r| match r {
                 Response::BallotRecorded(r) => Ok(r),
@@ -1135,6 +1140,7 @@ impl<T: Transport> DeviceClient<T> {
             signers: r.signers,
             institutions: r.institutions,
             tracker: r.tracker,
+            epoch: r.epoch,
         })
     }
 
@@ -1337,6 +1343,20 @@ impl<T: Transport> DeviceClient<T> {
     }
 }
 
+/// What the host brings so the DEVICE can check its own ballot alone (ADR-0041, ADR-0045).
+#[derive(Debug, Clone, Default)]
+pub struct BallotEvidence {
+    /// The block payload (what the institutions signed).
+    pub block: Vec<u8>,
+    /// The encoded commit certificate of the block.
+    pub commit: Vec<u8>,
+    /// Index of the ballot's leaf in the cumulative log, and its Merkle proof in the block's root.
+    pub index: u64,
+    pub proof: Vec<[u8; 32]>,
+    /// Every approved change of the institutions since the genesis set (encoded), in order.
+    pub rotations: Vec<Vec<u8>>,
+}
+
 /// What the DEVICE confirmed about its own ballot (ADR-0041): public facts only.
 #[derive(Debug, Clone, Serialize)]
 pub struct RecordedReport {
@@ -1344,6 +1364,8 @@ pub struct RecordedReport {
     pub signers: u32,
     pub institutions: u32,
     pub tracker: String,
+    /// The epoch of the institutions that certified the block (0 = the genesis set, ADR-0045).
+    pub epoch: u64,
 }
 
 /// What the voter chose ON THE DEVICE for a committed ballot (ADR-0041).

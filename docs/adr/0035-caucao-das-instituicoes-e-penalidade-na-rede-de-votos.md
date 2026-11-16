@@ -39,3 +39,4 @@ Aceita provisoriamente nos itens 1 a 4 (caução, evidência como `Slash`, 10% q
 - Explorador: nova linha "Penalidade por equivocação na rede de VOTOS".
 - Limites: se a evidência chegar depois de a caução ter saído por completo do *unbonding* não sobra o que queimar; a caução mínima e a recompensa de disponibilidade seguem em aberto.
 
+> **Atualização (ADR-0045):** o conjunto de instituições pode ser trocado por rotação; `SlashVotes` continua valendo para quem saiu, porque a evidência foi assinada quando ela era instituição.

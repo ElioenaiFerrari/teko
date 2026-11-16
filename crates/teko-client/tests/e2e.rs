@@ -995,10 +995,13 @@ fn the_device_checks_alone_that_its_ballot_is_final_on_the_vote_chain() {
         .check_my_ballot(
             &eid,
             "presidente",
-            ev.decided.payload.clone(),
-            commit_bytes.clone(),
-            index,
-            &ev.proof,
+            teko_client::BallotEvidence {
+                block: ev.decided.payload.clone(),
+                commit: commit_bytes.clone(),
+                index,
+                proof: ev.proof.clone(),
+                rotations: Vec::new(),
+            },
         )
         .unwrap();
     assert_eq!((r.height, r.signers, r.institutions), (2, 3, 4));
@@ -1013,10 +1016,13 @@ fn the_device_checks_alone_that_its_ballot_is_final_on_the_vote_chain() {
         .check_my_ballot(
             &eid,
             "presidente",
-            ev.decided.payload.clone(),
-            weak.encode_to_vec(),
-            index,
-            &ev.proof,
+            teko_client::BallotEvidence {
+                block: ev.decided.payload.clone(),
+                commit: weak.encode_to_vec(),
+                index,
+                proof: ev.proof.clone(),
+                rotations: Vec::new(),
+            },
         )
         .unwrap_err();
     assert_eq!(device_code(err), ErrorCode::BadSignature);
@@ -1024,13 +1030,162 @@ fn the_device_checks_alone_that_its_ballot_is_final_on_the_vote_chain() {
         .check_my_ballot(
             &eid,
             "presidente",
-            ev.decided.payload.clone(),
-            commit_bytes,
-            index + 1,
-            &ev.proof,
+            teko_client::BallotEvidence {
+                block: ev.decided.payload.clone(),
+                commit: commit_bytes,
+                index: index + 1,
+                proof: ev.proof.clone(),
+                rotations: Vec::new(),
+            },
         )
         .unwrap_err();
     assert_eq!(device_code(err), ErrorCode::BadSignature);
+    let _ = fs::remove_dir_all(rig.issuer.dir());
+}
+
+#[test]
+fn the_device_follows_a_rotation_of_the_institutions_that_the_client_brings() {
+    use prost::Message;
+    use teko_bft::{Commit, ValidatorSetChange, Vote, VoteKind, block_id, set_hash};
+    use teko_bulletin::{BulletinBoard, Entry, EntryKind};
+    use teko_chain::{Chain, DecidedBlock, NetworkKind, NetworkProfile};
+    use teko_crypto::public_key_bytes;
+    let rig = start();
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_secs();
+    rig.issuer.dev_election(now).unwrap();
+    let mut c = connect(&rig);
+    onboard(&rig, &mut c);
+    let e = c.load_election(&rig.trust, &election_bundle(&rig)).unwrap();
+    let eid = e.election_id.clone();
+    let ballot = c.sign_ballot(&eid, "presidente", 1).unwrap();
+    let voter_key = teko_crypto::hex::decode(&ballot.voter_key).unwrap();
+    let submitted = teko_election::SubmittedBallot {
+        election_id: eid.clone(),
+        contest_id: "presidente".into(),
+        contest_hash: teko_crypto::hex::decode(&ballot.contest_hash).unwrap(),
+        option_index: 1,
+        voter_key: voter_key.clone(),
+        signature: teko_crypto::hex::decode(&ballot.signature).unwrap(),
+        encrypted: Vec::new(),
+    };
+    // the institutions the device trusts (epoch 0) and a newcomer that replaces the last one
+    let mut keys = vote_institutions();
+    let newcomer = teko_crypto::generate_signing_key(&mut rand::rngs::StdRng::seed_from_u64(909));
+    keys.push(newcomer.clone());
+    let profile = NetworkProfile::new(
+        NetworkKind::Devnet,
+        keys[..4].iter().map(public_key_bytes).collect(),
+        2,
+    )
+    .unwrap();
+    let mut chain = Chain::new(profile);
+    let decide = |chain: &Chain, es: &[Entry], at: u64, who: &[usize]| {
+        let set = chain.validator_set().unwrap();
+        let p = set.proposer(chain.height() + 1, 0).key.clone();
+        let pi = keys.iter().position(|k| public_key_bytes(k) == p).unwrap();
+        let payload = chain.propose(&public_key_bytes(&keys[pi]), es, at);
+        let (h, id) = (chain.height() + 1, block_id(&payload));
+        DecidedBlock {
+            payload,
+            commit: Some(Commit {
+                height: h,
+                round: 0,
+                block_id: id.clone(),
+                precommits: who
+                    .iter()
+                    .map(|i| {
+                        Vote::new(
+                            &chain.profile().chain_id,
+                            &keys[*i],
+                            VoteKind::Precommit,
+                            h,
+                            0,
+                            Some(&id),
+                        )
+                    })
+                    .collect(),
+            }),
+        }
+    };
+    let filler = |n: u8| -> Vec<Entry> {
+        (0..n)
+            .map(|i| Entry::new(EntryKind::MANIFEST, vec![i; 30]))
+            .collect()
+    };
+    // block 1; block 2 carries the change (effective at height 4); block 3 is still the old set's
+    let genesis: Vec<Vec<u8>> = keys[..4].iter().map(public_key_bytes).collect();
+    let mut new_set = genesis.clone();
+    new_set[3] = public_key_bytes(&newcomer);
+    let mut change = ValidatorSetChange {
+        chain_id: chain.profile().chain_id.clone(),
+        epoch: 1,
+        effective_height: 4,
+        prev_set_hash: set_hash(&genesis).to_vec(),
+        validators: new_set,
+        ..Default::default()
+    };
+    for k in &keys[..3] {
+        change.sign(k);
+    }
+    chain
+        .apply(decide(&chain, &filler(2), now, &[0, 1, 2]))
+        .unwrap();
+    chain
+        .apply(decide(
+            &chain,
+            &[Entry::new(EntryKind::VALIDATOR_SET, change.encode_to_vec())],
+            now + 1,
+            &[0, 1, 2],
+        ))
+        .unwrap();
+    chain
+        .apply(decide(&chain, &filler(1), now + 2, &[0, 1, 3]))
+        .unwrap();
+    // block 4 (epoch 1) carries OUR ballot and is certified by the NEW set (the newcomer signs)
+    chain
+        .apply(decide(
+            &chain,
+            &[Entry::new(EntryKind::BALLOT, submitted.encode_to_vec())],
+            now + 3,
+            &[0, 1, 4],
+        ))
+        .unwrap();
+    let index = (0..chain.board().len())
+        .find(|&i| {
+            chain.board().entry(i).is_some_and(|en| {
+                en.kind == EntryKind::BALLOT
+                    && teko_election::SubmittedBallot::decode(en.payload.as_slice())
+                        .is_ok_and(|b| b.voter_key == voter_key)
+            })
+        })
+        .unwrap();
+    let ev = chain.inclusion_evidence(index).unwrap();
+    let evidence = |rotations: Vec<Vec<u8>>| teko_client::BallotEvidence {
+        block: ev.decided.payload.clone(),
+        commit: ev.decided.commit.as_ref().unwrap().encode_to_vec(),
+        index,
+        proof: ev.proof.clone(),
+        rotations,
+    };
+    // WITHOUT the chain of changes the device only knows the genesis set: refused
+    let err = c
+        .check_my_ballot(&eid, "presidente", evidence(Vec::new()))
+        .unwrap_err();
+    assert_eq!(device_code(err), ErrorCode::BadSignature);
+    // with the changes the chain approved, in order, the device follows them and accepts
+    let rotations: Vec<Vec<u8>> = chain
+        .changes_after(0)
+        .iter()
+        .map(Message::encode_to_vec)
+        .collect();
+    assert_eq!(rotations.len(), 1);
+    let r = c
+        .check_my_ballot(&eid, "presidente", evidence(rotations))
+        .unwrap();
+    assert_eq!((r.height, r.epoch, r.signers, r.institutions), (4, 1, 3, 4));
     let _ = fs::remove_dir_all(rig.issuer.dir());
 }
 

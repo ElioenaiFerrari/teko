@@ -127,6 +127,11 @@ static P_LIVE: [Param; 2] = [
 ];
 static P_ELECTION: [Param; 1] = [p("ELECTION", "Id da eleição (opcional)", "")];
 static P_RUNOFF: [Param; 1] = [req("CONTEST", "Pleito (ex.: governador-sp)", "")];
+static P_ROTATE: [Param; 1] = [num(
+    "OUT",
+    "Instituição a trocar (posição no conjunto, padrão 3)",
+    "3",
+)];
 static P_TIE: [Param; 2] = [
     req("CONTEST", "Pleito aberto (ex.: governador-sp)", ""),
     p(
@@ -193,6 +198,15 @@ pub static CATALOG: &[Item] = &[
         NetUp,
         C,
         "derruba e sobe de novo",
+    ),
+    item(
+        "Devnet",
+        "Trocar uma instituição (rotação, ADR-0045)",
+        &["devnet-rotate"],
+        &P_ROTATE,
+        NetUp,
+        C,
+        "só dev: a nova entra com a aprovação das outras; recusa com eleição aberta",
     ),
     item(
         "Devnet",

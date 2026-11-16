@@ -20,5 +20,5 @@ Para o dispositivo verificar sem `std`: `merkle` foi para `teko-crypto` (reexpor
 - Garantia **estatística**: audite o bastante. Pressupõe dispositivo e firmware (assinado M-de-N) honestos na hora de votar.
 - **Não dá para "ver depois em quem votei"**: é o preço de não existir recibo.
 - A contagem é conferida pela Suite (refazendo a apuração), não pelo dispositivo.
-- As instituições do `trust.txt` são estáticas (rotação é PENDENTE, como no ADR-0040).
+- O `trust.txt` define só o conjunto da época 0; as trocas de instituições o dispositivo **segue elo por elo**, com uma catraca de época ([ADR-0045](0045-rotacao-das-instituicoes.md)).
 - Coação sob observação direta e o limiar de instituições decifrando uma cédula específica seguem como no ADR-0019.

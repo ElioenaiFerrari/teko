@@ -51,6 +51,13 @@ pub struct Persisted {
     /// (ADR-0041): ONLY public hashes. Never the option, never the randomness.
     #[prost(message, repeated, tag = "16")]
     pub vote_records: Vec<VoteRecord>,
+    /// The highest epoch of the vote chain's institutions the device has verified, and the hash of
+    /// that epoch's set (ADR-0045). A ratchet: a chain of changes older than this, or on another
+    /// branch, is refused, so a retired supermajority cannot forge a different history.
+    #[prost(uint64, tag = "17")]
+    pub vote_epoch: u64,
+    #[prost(bytes = "vec", tag = "18")]
+    pub vote_set_hash: Vec<u8>,
 }
 
 /// A ballot this device cast. Nothing here reveals the vote: the leaf hash is of an entry the

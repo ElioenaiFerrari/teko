@@ -39,6 +39,8 @@ pub(crate) struct DkgState {
     pub session: Vec<u8>,
     pub n: u32,
     pub threshold: usize,
+    /// This node's 1-based index in THIS ceremony.
+    pub index: u32,
 }
 
 struct State {
@@ -86,7 +88,11 @@ impl Node {
         }
         fs::create_dir_all(&cfg.dir)?;
         let me = public_key_bytes(&cfg.key);
-        if cfg.profile.validators.get(cfg.index) != Some(&me) {
+        // a genesis institution holds its own slot; a node that joined LATER (a rotation, ADR-0045)
+        // sits after them in `peers.txt` and becomes an institution only when the chain says so
+        let genesis_slot = cfg.profile.validators.get(cfg.index);
+        let joined_later = cfg.index >= cfg.profile.validators.len() && cfg.index < cfg.peers.len();
+        if genesis_slot != Some(&me) && !joined_later {
             return Err(NodeError::Refused(
                 "this key is not validator `index` of the network".into(),
             ));

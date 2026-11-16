@@ -2024,13 +2024,24 @@ pub async fn election_check_ballot(
         let note = evidence
             .is_none()
             .then(|| "A sua cédula ainda não entrou em um bloco certificado.".to_string());
+        // every approved change of the institutions since the genesis set: the DEVICE follows them
+        let rotations: Vec<Vec<u8>> = nb
+            .chain()
+            .map(|c| {
+                c.changes_after(0)
+                    .iter()
+                    .map(prost::Message::encode_to_vec)
+                    .collect()
+            })
+            .unwrap_or_default();
+        let evidence = evidence.map(|(i, ev)| (i, ev, rotations));
         Ok((evidence, note, payload))
     })
     .await
     .map_err(|e| ui_err("Internal", e))??;
     let (evidence, mut recorded_note, payload) = located;
     let mut recorded = None;
-    if let Some((index, ev)) = evidence {
+    if let Some((index, ev, rotations)) = evidence {
         use prost::Message;
         let commit = ev
             .decided
@@ -2043,10 +2054,13 @@ pub async fn election_check_ballot(
             c.check_my_ballot(
                 &eid,
                 &cid,
-                ev.decided.payload.clone(),
-                commit,
-                index,
-                &ev.proof,
+                teko_client::BallotEvidence {
+                    block: ev.decided.payload.clone(),
+                    commit,
+                    index,
+                    proof: ev.proof.clone(),
+                    rotations,
+                },
             )
         })
         .await;
@@ -2695,10 +2709,15 @@ pub async fn network_status() -> Result<NetworkReply, UiError> {
                 equivocations: s.as_ref().map_or(0, |s| s.equivocations),
             })
             .collect();
+        let mut n_institutions = net.profile.validators.len();
         let (blocks, height, error) = match admin.read_board() {
             Ok(election_admin::AnyBoard::Net(nb)) => {
                 let chain = nb.chain();
-                let validators = &net.profile.validators;
+                // the institutions in force, from the verified chain (rotation, ADR-0045)
+                let validators: Vec<Vec<u8>> = chain
+                    .map(|c| c.epoch_at(c.height() + 1).set.clone())
+                    .unwrap_or_else(|| net.profile.validators.clone());
+                n_institutions = validators.len();
                 let v = chain
                     .map(|c| {
                         c.blocks()
@@ -2738,7 +2757,7 @@ pub async fn network_status() -> Result<NetworkReply, UiError> {
             name: net.profile.kind.name().to_string(),
             chain_id: net.profile.chain_id.clone(),
             threshold: net.profile.threshold,
-            validators: net.profile.validators.len(),
+            validators: n_institutions,
             height,
             nodes,
             blocks,

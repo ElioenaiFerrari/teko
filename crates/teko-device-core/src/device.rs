@@ -2443,9 +2443,17 @@ impl<H: Hal, R: Rng + CryptoRng> Device<H, R> {
             ),
         )?;
         let bad = |why: &'static str| fail(ErrorCode::BadSignature, why);
-        let validators: Vec<teko_bft::Validator> = self
-            .trust
-            .vote_validators
+        let commit = <teko_bft::Commit as prost::Message>::decode(m.commit.as_slice())
+            .map_err(|_| bad("certificado malformado"))?;
+        // WHICH institutions certified this height: the set of the trust file, followed link by link
+        // through every approved change the host brought (ADR-0045)
+        let Institutions {
+            keys,
+            epoch,
+            final_epoch,
+            final_hash,
+        } = self.institutions_at(commit.height, &m.rotations)?;
+        let validators: Vec<teko_bft::Validator> = keys
             .iter()
             .map(|k| teko_bft::Validator {
                 key: k.clone(),
@@ -2458,8 +2466,6 @@ impl<H: Hal, R: Rng + CryptoRng> Device<H, R> {
                 "instituições da rede de votos inválidas",
             )
         })?;
-        let commit = <teko_bft::Commit as prost::Message>::decode(m.commit.as_slice())
-            .map_err(|_| bad("certificado malformado"))?;
         if !commit.verify(&self.trust.vote_chain_id, &set) {
             return Err(bad(
                 "o certificado NÃO tem mais de 2/3 das instituições em que o dispositivo confia",
@@ -2487,6 +2493,12 @@ impl<H: Hal, R: Rng + CryptoRng> Device<H, R> {
         if !teko_crypto::merkle::verify_inclusion(&leaf, m.index, view.log_size, &proof, &root) {
             return Err(bad("a sua cédula NÃO está neste bloco"));
         }
+        // everything checked: only now does the ratchet move (never down)
+        if final_epoch > self.p.vote_epoch {
+            self.p.vote_epoch = final_epoch;
+            self.p.vote_set_hash = final_hash.to_vec();
+            self.save()?;
+        }
         let tracker = teko_crypto::tracker(&leaf);
         let signers = commit.precommits.len() as u32;
         let institutions = set.validators().len() as u32;
@@ -2495,6 +2507,7 @@ impl<H: Hal, R: Rng + CryptoRng> Device<H, R> {
             Vec::from([
                 format!("Bloco #{}", view.height),
                 format!("Certificado: {signers} de {institutions}"),
+                format!("Instituições: época {epoch}"),
                 String::from("Rastreador:"),
                 tracker.clone(),
             ]),
@@ -2504,7 +2517,76 @@ impl<H: Hal, R: Rng + CryptoRng> Device<H, R> {
             signers,
             institutions,
             tracker,
+            epoch,
         }))
+    }
+
+    /// The institutions that certify block height `height`, following the approved changes the host
+    /// brought from the set in the trust file (epoch 0) link by link: each must create the next epoch,
+    /// replace the set in force and be approved by more than 2/3 of it. The persisted RATCHET refuses
+    /// a list that stops before the epoch the device already verified, or whose set at that epoch is
+    /// another.
+    fn institutions_at(&self, height: u64, rotations: &[Vec<u8>]) -> Result<Institutions, Failure> {
+        let bad = |why: &'static str| fail(ErrorCode::BadSignature, why);
+        let mut epochs: Vec<EpochView> = Vec::new();
+        let genesis = self.trust.vote_validators.clone();
+        epochs.push(EpochView {
+            epoch: 0,
+            from: 1,
+            hash: teko_bft::set_hash(&genesis),
+            keys: genesis,
+        });
+        for raw in rotations {
+            let change = <teko_bft::ValidatorSetChange as prost::Message>::decode(raw.as_slice())
+                .map_err(|_| bad("troca de instituições malformada"))?;
+            let last = epochs
+                .last()
+                .ok_or_else(|| fail(ErrorCode::Internal, "sem época"))?;
+            change
+                .follow(&self.trust.vote_chain_id, last.epoch, &last.keys)
+                .map_err(bad)?;
+            if change.effective_height <= last.from {
+                return Err(bad("as trocas de instituições não avançam em altura"));
+            }
+            epochs.push(EpochView {
+                epoch: change.epoch,
+                from: change.effective_height,
+                hash: teko_bft::set_hash(&change.validators),
+                keys: change.validators,
+            });
+        }
+        let newest = epochs
+            .last()
+            .ok_or_else(|| fail(ErrorCode::Internal, "sem época"))?;
+        let (final_epoch, final_hash) = (newest.epoch, newest.hash);
+        // the ratchet
+        if self.p.vote_epoch > 0 {
+            if final_epoch < self.p.vote_epoch {
+                return Err(bad(
+                    "a lista de trocas é mais antiga que a já conferida por este dispositivo",
+                ));
+            }
+            let known = epochs
+                .iter()
+                .find(|e| e.epoch == self.p.vote_epoch)
+                .map(|e| e.hash.to_vec());
+            if known.as_deref() != Some(self.p.vote_set_hash.as_slice()) {
+                return Err(bad(
+                    "outro ramo de trocas de instituições: este dispositivo já conferiu uma história diferente",
+                ));
+            }
+        }
+        let at = epochs
+            .iter()
+            .rev()
+            .find(|e| e.from <= height)
+            .ok_or_else(|| fail(ErrorCode::Internal, "sem época"))?;
+        Ok(Institutions {
+            keys: at.keys.clone(),
+            epoch: at.epoch,
+            final_epoch,
+            final_hash,
+        })
     }
 
     // ───────────────────────── wipe ─────────────────────────
@@ -2712,6 +2794,23 @@ fn credential_seal_context(ctype: &str, subject: &[u8]) -> Vec<u8> {
     c.push(0);
     c.extend_from_slice(subject);
     c
+}
+
+/// One epoch of the vote chain's institutions, as the device follows them (ADR-0045).
+struct EpochView {
+    epoch: u64,
+    /// The first block height that belongs to the epoch.
+    from: u64,
+    keys: Vec<Vec<u8>>,
+    hash: [u8; 32],
+}
+
+/// The institutions that certify one height, and where the verified chain of changes ends.
+struct Institutions {
+    keys: Vec<Vec<u8>>,
+    epoch: u64,
+    final_epoch: u64,
+    final_hash: [u8; 32],
 }
 
 /// The few fields of a vote-chain block the device reads. The block id (a hash of the WHOLE payload)

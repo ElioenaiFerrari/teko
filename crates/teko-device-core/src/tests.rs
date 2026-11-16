@@ -2220,6 +2220,7 @@ mod encrypted {
             commit,
             index: c.index,
             proof: c.proof.clone(),
+            ..Default::default()
         }))
     }
 
@@ -2289,6 +2290,7 @@ mod encrypted {
             commit: good.clone(),
             index: c.index,
             proof: c.proof.clone(),
+            ..Default::default()
         }));
         assert_eq!(failure_code(&r), Some(ErrorCode::InvalidArgument));
         // and the real thing still works afterwards
@@ -2296,6 +2298,195 @@ mod encrypted {
             check(&mut dev, &m, &c, good, None),
             Response::BallotRecorded(_)
         ));
+    }
+
+    // ───────────── rotation of the institutions (ADR-0045) ─────────────
+
+    fn certify_by(keys: &[&SigningKey], c: &Cast) -> Vec<u8> {
+        let id = teko_bft::block_id(&c.block);
+        let commit = teko_bft::Commit {
+            height: c.height,
+            round: 0,
+            block_id: id.clone(),
+            precommits: keys
+                .iter()
+                .map(|k| {
+                    teko_bft::Vote::new(
+                        VOTE_CHAIN,
+                        k,
+                        teko_bft::VoteKind::Precommit,
+                        c.height,
+                        0,
+                        Some(&id),
+                    )
+                })
+                .collect(),
+        };
+        prost::Message::encode_to_vec(&commit)
+    }
+
+    /// An approved change that replaces the last institution (`w.inst[3]`) by `newcomer`.
+    fn change_to(
+        w: &World,
+        newcomer: &SigningKey,
+        epoch: u64,
+        prev: &[Vec<u8>],
+        effective: u64,
+        approvers: &[usize],
+    ) -> teko_bft::ValidatorSetChange {
+        let mut new = prev.to_vec();
+        let last = new.len() - 1;
+        new[last] = public_key_bytes(newcomer);
+        let mut c = teko_bft::ValidatorSetChange {
+            chain_id: VOTE_CHAIN.into(),
+            epoch,
+            effective_height: effective,
+            prev_set_hash: teko_bft::set_hash(prev).to_vec(),
+            validators: new,
+            ..Default::default()
+        };
+        for i in approvers {
+            c.sign(&w.inst[*i]);
+        }
+        c
+    }
+
+    fn check_with(
+        dev: &mut Dev,
+        m: &ElectionManifest,
+        c: &Cast,
+        commit: Vec<u8>,
+        rotations: &[&teko_bft::ValidatorSetChange],
+    ) -> Response {
+        dev.handle(Request::CheckMyBallot(teko_protocol::CheckMyBallot {
+            election_id: m.election_id.clone(),
+            contest_id: "presidente".into(),
+            block: c.block.clone(),
+            commit,
+            index: c.index,
+            proof: c.proof.clone(),
+            rotations: rotations
+                .iter()
+                .map(|r| prost::Message::encode_to_vec(*r))
+                .collect(),
+        }))
+    }
+
+    #[test]
+    fn the_device_follows_the_chain_of_institution_changes_and_refuses_every_broken_link() {
+        let (w, _, mut dev, _, m) = setup();
+        let c = cast_and_block(&w, &mut dev, &m); // the block is height 7
+        let genesis: Vec<Vec<u8>> = w.inst.iter().map(public_key_bytes).collect();
+        let newcomer = generate_signing_key(&mut StdRng::seed_from_u64(4242));
+        let good = change_to(&w, &newcomer, 1, &genesis, 5, &[0, 1, 2]);
+        let (i0, i1, i2, i3) = (&w.inst[0], &w.inst[1], &w.inst[2], &w.inst[3]);
+        let by_new = certify_by(&[i0, i1, &newcomer], &c);
+        let refused = |r: &Response| failure_code(r) == Some(ErrorCode::BadSignature);
+
+        // WITHOUT the change the device only knows the genesis set: the newcomer's vote is not one
+        assert!(refused(&check_with(&mut dev, &m, &c, by_new.clone(), &[])));
+        // a change approved by 2 of 4, one that skips an epoch, one that replaces another set
+        let weak = change_to(&w, &newcomer, 1, &genesis, 5, &[0, 1]);
+        assert!(refused(&check_with(
+            &mut dev,
+            &m,
+            &c,
+            by_new.clone(),
+            &[&weak]
+        )));
+        let skip = change_to(&w, &newcomer, 2, &genesis, 5, &[0, 1, 2]);
+        assert!(refused(&check_with(
+            &mut dev,
+            &m,
+            &c,
+            by_new.clone(),
+            &[&skip]
+        )));
+        let mut other = genesis.clone();
+        other[0] = public_key_bytes(&generate_signing_key(&mut StdRng::seed_from_u64(77)));
+        let wrong_prev = change_to(&w, &newcomer, 1, &other, 5, &[0, 1, 2]);
+        assert!(refused(&check_with(
+            &mut dev,
+            &m,
+            &c,
+            by_new.clone(),
+            &[&wrong_prev]
+        )));
+        // with the sound link the block (height 7, from epoch 1) is accepted, certified by the NEW set
+        let Response::BallotRecorded(r) = check_with(&mut dev, &m, &c, by_new.clone(), &[&good])
+        else {
+            panic!("the sound chain of changes must be accepted")
+        };
+        assert_eq!((r.epoch, r.signers, r.institutions), (1, 3, 4));
+        // at height 7 the OUTGOING institution no longer counts (set of epoch 1): 2 of 4
+        let by_old = certify_by(&[i0, i1, i3], &c);
+        assert!(refused(&check_with(&mut dev, &m, &c, by_old, &[&good])));
+        // a change that takes effect AFTER the block leaves the block to the old set
+        let later = change_to(&w, &newcomer, 1, &genesis, 9, &[0, 1, 2]);
+        assert!(
+            refused(&check_with(&mut dev, &m, &c, by_new, &[&later])),
+            "height 7 is still epoch 0"
+        );
+        let by_old = certify_by(&[i0, i1, i2], &c);
+        assert!(matches!(
+            check_with(&mut dev, &m, &c, by_old, &[&later]),
+            Response::BallotRecorded(_)
+        ));
+    }
+
+    #[test]
+    fn the_ratchet_never_goes_back_and_never_accepts_another_branch_of_changes() {
+        use prost::Message as _;
+        let (w, hal, mut dev, _, m) = setup();
+        let c = cast_and_block(&w, &mut dev, &m);
+        let genesis: Vec<Vec<u8>> = w.inst.iter().map(public_key_bytes).collect();
+        let newcomer = generate_signing_key(&mut StdRng::seed_from_u64(4243));
+        let rival = generate_signing_key(&mut StdRng::seed_from_u64(4244));
+        let good = change_to(&w, &newcomer, 1, &genesis, 5, &[0, 1, 2]);
+        let (i0, i1, i2) = (&w.inst[0], &w.inst[1], &w.inst[2]);
+        let by_old = certify_by(&[i0, i1, i2], &c);
+        // before any change the ratchet is at epoch 0
+        assert!(matches!(
+            check_with(&mut dev, &m, &c, by_old.clone(), &[]),
+            Response::BallotRecorded(_)
+        ));
+        let p = crate::state::Persisted::decode(hal.raw_storage().unwrap().as_slice()).unwrap();
+        assert_eq!(p.vote_epoch, 0);
+        // the device sees epoch 1 (the block is certified by the epoch that was in force: height 7 >= 5)
+        let by_new = certify_by(&[i0, i1, &newcomer], &c);
+        assert!(matches!(
+            check_with(&mut dev, &m, &c, by_new, &[&good]),
+            Response::BallotRecorded(_)
+        ));
+        let p = crate::state::Persisted::decode(hal.raw_storage().unwrap().as_slice()).unwrap();
+        assert_eq!(
+            (p.vote_epoch, p.vote_set_hash.clone()),
+            (1, teko_bft::set_hash(&good.validators).to_vec())
+        );
+        // a list that stops BEFORE what the device already knows is refused (no going back)...
+        let e = check_with(&mut dev, &m, &c, by_old.clone(), &[]);
+        assert_eq!(failure_code(&e), Some(ErrorCode::BadSignature));
+        // ...and so is ANOTHER branch of epoch 1, even if the retired institutions approved it
+        let fork = change_to(&w, &rival, 1, &genesis, 5, &[0, 1, 2]);
+        let by_fork = certify_by(&[i0, i1, &rival], &c);
+        let e = check_with(&mut dev, &m, &c, by_fork, &[&fork]);
+        assert_eq!(failure_code(&e), Some(ErrorCode::BadSignature));
+        // the ratchet survives a reboot, and a wipe starts a fresh device
+        let mut again = boot(&w, &hal, 8);
+        hal.set_default_pin(Some(PIN));
+        assert!(matches!(
+            again.handle(Request::Unlock(Unlock {})),
+            Response::Unlocked(_)
+        ));
+        let e = check_with(&mut again, &m, &c, by_old, &[]);
+        assert_eq!(
+            failure_code(&e),
+            Some(ErrorCode::BadSignature),
+            "still at epoch 1 after a reboot"
+        );
+        again.handle(Request::Wipe(Wipe {}));
+        let p = crate::state::Persisted::decode(hal.raw_storage().unwrap().as_slice()).unwrap();
+        assert_eq!(p.vote_epoch, 0);
     }
 
     #[test]

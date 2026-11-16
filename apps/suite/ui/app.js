@@ -153,7 +153,9 @@
     fwTried: false,
     fwLoading: false,   // já perguntei ao dispositivo por uma eleição nesta visita?
     picks: {},           // contest_id -> índice escolhido
-    ballots: {},         // contest_id -> cédula assinada (protótipo)
+    ballots: {},         // contest_id -> cédula votada (só rastreador; a opção não é guardada)
+    audits: {},          // contest_id -> última cédula de teste auditada
+    checks: {},          // contest_id -> conferência da própria cédula
     lockMsg: null,
     lastAck: false,
     wiped: false,
@@ -271,6 +273,9 @@
     sign_asset_offer: ['Confirme a sua OFERTA no dispositivo', 'Confira o BEM, o comprador, o preço, a janela de veto e a versão que o dispositivo mostra. Esta é a SUA transação, assinada na sua carteira. Só confirme se for exatamente o negócio combinado.'],
     sign_asset_accept: ['Confirme o ACEITE no dispositivo', 'Confira o BEM, o vendedor, o preço e a janela de veto. O preço sai da sua carteira para um escrow e só volta se o órgão vetar. Só confirme se for exatamente o negócio combinado.'],
     credential_key: ['Confirme a CHAVE DE CREDENCIAL no dispositivo', 'Só a chave pública deste tipo de credencial será mostrada ao órgão que vai emitir. Ela é derivada da sua carteira (volta com a frase de 24 palavras) e não se liga publicamente à sua identidade, ao seu endereço nem ao seu voto.'],
+    ballot_cast: ['Confirme no dispositivo: VOTAR ou AUDITAR', 'Confirmar = esta cédula cifrada é o seu voto. Recusar = voltar e, se quiser, auditar esta cédula de teste (ela é descartada).'],
+    ballot_audit: ['Confirme no dispositivo: auditar a cédula', 'O dispositivo mostra ao computador em quem esta cédula de teste votava e como a cifrou. Ela NÃO é usada como voto.'],
+    check_ballot: ['Confirme: conferir a minha cédula', 'O dispositivo confere, sozinho, que a sua cédula está num bloco certificado pelas instituições. O seu voto não é mostrado.'],
     open_credential: ['Confirme: abrir os atributos da credencial', 'O dispositivo decifra, com a chave derivada da sua carteira, os atributos guardados na chain e mostra o que vai entregar à Suite.'],
     sign_credential_op: ['Confirme a operação do ÓRGÃO no dispositivo', 'Confira o tipo, o titular, os atributos, a validade e o motivo na tela do dispositivo.'],
     sign_transfer: ['Confirme o envio no dispositivo', 'Confira o ENDEREÇO de destino, o valor e a taxa que o dispositivo mostra. Só confirme se for exatamente o que você quer enviar.'],
@@ -862,6 +867,16 @@
   const fmtDate = (secs) => (secs ? new Date(secs * 1000).toLocaleString('pt-BR', { dateStyle: 'short', timeStyle: 'short' }) : '—');
   const scopeLabel = (c) => (c.scope === 'national' ? 'Nacional' : c.scope === 'state' ? `Estado ${c.scope_code}` : `Município ${c.scope_code}`);
 
+  function ballotCheckView(r) {
+    const rec = r.recorded
+      ? `<li>${chip('Conferido pelo dispositivo', 'ok', 'check')} Sua cédula está no <strong>bloco #${r.recorded.height}</strong>, certificado por <strong>${r.recorded.signers} de ${r.recorded.institutions}</strong> instituições. O dispositivo conferiu sozinho o certificado e a prova de inclusão. Rastreador <span class="mono">${esc(r.recorded.tracker)}</span>.</li>`
+      : `<li>${chip('Ainda não conferido', 'warn', 'alert')} ${esc(r.recorded_note || '')}</li>`;
+    const cnt = r.counted
+      ? `<li>${chip(r.counted_state === 'counted' ? 'Contada' : 'Recusada pela apuração', r.counted_state === 'counted' ? 'ok' : 'bad', r.counted_state === 'counted' ? 'check' : 'alert')} ${esc(r.counted)}</li>`
+      : `<li>${chip('Sem veredito', 'warn')} A apuração ainda não viu a sua cédula.</li>`;
+    return `<ul class="muted" style="margin:8px 0 0;padding-left:1.2em">${rec}${cnt}</ul>`;
+  }
+
   function contestCard(c) {
     const [phaseLabel, phaseKind] = PHASES[c.phase] || [c.phase, ''];
     const canVote = c.phase === 'voting_open' && c.eligible && !c.voted && Date.now() / 1000 < c.voting_closes;
@@ -886,9 +901,13 @@
       ${why ? `<p class="muted">${esc(why)}</p>` : ''}
       ${canVote && c.registration_required ? '<p class="muted">Este pleito exige registro anônimo: o dispositivo pedirá <strong>duas confirmações</strong> (registro e voto).</p>' : ''}
       ${canVote ? `<div class="row"><button class="btn btn--gold" data-act="vote" data-contest="${esc(c.contest_id)}">${ico('ballot')}Votar neste pleito</button></div>` : ''}
-      ${ballot ? callout('info', 'shield', 'Cédula assinada pelo dispositivo (protótipo)', `<p>Voto em <strong>${esc(ballot.option_name)}</strong>. Assinatura <span class="mono">${esc(short(ballot.signature, 10, 8))}</span> conferida pela Suite.
-        ${ballot.submitted ? `Enviada ao quadro local (posição #${ballot.board_index}): <a href="#" data-act="gotoresults">veja nos resultados ao vivo</a>.` : esc(ballot.note || 'Não foi enviada ao quadro.')}
-        ${ballot.encrypted ? 'O voto foi <strong>cifrado dentro do dispositivo</strong> e só os totais serão decifrados, depois do fechamento.' : 'Voto em claro (eleição sem cifra): protótipo.'} ${c.registration_required ? 'Registro anônimo conferido; ainda sem prova ZK nem anulador.' : ''}</p>`) : ''}
+      ${canVote && ballot === undefined ? '<p class="muted">Em eleição cifrada, o dispositivo pergunta, na tela dele, se você quer <strong>votar</strong> ou <strong>auditar</strong> a cédula: auditar mostra ao computador, só desta cédula de teste, em quem ela votava, para ele conferir que o dispositivo cifrou o que você escolheu. A cédula auditada é descartada e você pode votar em seguida.</p>' : ''}
+      ${S.audits[c.contest_id] ? callout('ok', 'check', 'Auditoria: o dispositivo cifrou o que você escolheu', `<p>A cédula de teste <span class="mono">${esc(short(S.audits[c.contest_id].ciphertext_hash, 10, 8))}</span> ${esc(S.audits[c.contest_id].summary)}. Ela foi <strong>descartada</strong>: não é o seu voto. Você pode auditar de novo ou votar de verdade.</p>`) : ''}
+      ${ballot ? callout('info', 'shield', 'Seu voto foi registrado', `<p>Rastreador da sua cédula: <strong class="mono">${esc(ballot.tracker || '—')}</strong> (o mesmo aparece na tela do dispositivo). Ele só identifica a cédula; <strong>nada aqui mostra em quem você votou</strong>, de propósito: assim ninguém consegue cobrar ou comprar o seu voto.
+        ${ballot.submitted ? `Enviada ao quadro (posição #${ballot.board_index}): <a href="#" data-act="gotoresults">veja nos resultados ao vivo</a>.` : esc(ballot.note || 'Não foi enviada ao quadro.')}
+        ${ballot.encrypted ? 'O voto foi <strong>cifrado dentro do dispositivo</strong> e só os totais serão decifrados, depois do fechamento.' : 'Voto em claro (eleição sem cifra): protótipo.'}</p>
+        <div class="row"><button class="btn" data-act="checkballot" data-contest="${esc(c.contest_id)}">${ico('shield')}Conferir minha cédula</button></div>
+        ${S.checks[c.contest_id] ? ballotCheckView(S.checks[c.contest_id]) : ''}`) : ''}
     </article>`;
   }
 
@@ -1406,15 +1425,28 @@
       await guarded(async () => { S.election = await call('election_load'); toast('Eleição carregada e verificada pelo dispositivo.', 'ok'); });
       S.elecLoading = false; S.lastKey = ''; render();
     },
+    async checkballot(b) {
+      const id = b.dataset.contest;
+      await guarded(async () => {
+        S.checks[id] = await call('election_check_ballot', { electionId: S.election.election_id, contestId: id });
+      });
+      S.lastKey = ''; render();
+    },
     async vote(b) {
       const id = b.dataset.contest;
       const idx = S.picks[id];
       if (idx === undefined) { toast('Escolha um candidato antes de votar.'); return; }
       await guarded(async () => {
         const r = await call('election_vote', { electionId: S.election.election_id, contestId: id, optionIndex: idx });
-        S.ballots[id] = { ...r.ballot, submitted: r.submitted, board_index: r.board_index, note: r.note };
-        S.election = await call('election_get');
-        toast(S.ballots[id].submitted ? 'Cédula assinada e enviada ao quadro local.' : 'Cédula assinada pelo dispositivo.', 'ok');
+        if (r.audit) {
+          S.audits[id] = r.audit;
+          toast('Auditoria concluída: a cédula de teste foi descartada. Você ainda pode votar.', 'ok');
+        } else {
+          delete S.audits[id];
+          S.ballots[id] = { ...r.ballot, tracker: r.tracker, submitted: r.submitted, board_index: r.board_index, note: r.note };
+          S.election = await call('election_get');
+          toast(r.submitted ? 'Cédula assinada e enviada ao quadro.' : 'Cédula assinada pelo dispositivo.', 'ok');
+        }
       });
       S.lastKey = ''; render();
     },

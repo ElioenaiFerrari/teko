@@ -7,8 +7,12 @@ use std::path::Path;
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
-use teko_bulletin::{BoardError, BulletinBoard, Entry, FileBoard, Hash, MemoryBoard, Receipt};
+use prost::Message as _;
+use teko_bulletin::{
+    BoardError, BulletinBoard, Entry, EntryKind, FileBoard, Hash, MemoryBoard, Receipt,
+};
 use teko_chain::{Chain, NetworkProfile};
+use teko_election::SubmittedBallot;
 use teko_node::{NodeClient, load_network};
 
 /// A board a caller can read: the local file or a verified network replica.
@@ -42,6 +46,27 @@ impl NetBoard {
     }
     pub fn chain(&self) -> Option<&Chain> {
         self.chain.as_ref()
+    }
+
+    /// Board index of the ballot cast with `voter_key` in a contest (a device signs only one;
+    /// the tally refuses duplicates anyway).
+    pub fn find_ballot(
+        &self,
+        election_id: &str,
+        contest_id: &str,
+        voter_key: &[u8],
+    ) -> Option<u64> {
+        let board = self.board()?;
+        (0..board.len()).find(|&i| {
+            board.entry(i).is_some_and(|e| {
+                e.kind == EntryKind::BALLOT
+                    && SubmittedBallot::decode(e.payload.as_slice()).is_ok_and(|b| {
+                        b.election_id == election_id
+                            && b.contest_id == contest_id
+                            && b.voter_key == voter_key
+                    })
+            })
+        })
     }
 }
 

@@ -17,6 +17,7 @@ fn main() {
         addr,
         board: Mutex::new(None),
         cred_keys: Mutex::new(Default::default()),
+        registered: Mutex::new(Default::default()),
     });
     // verify the election board in the background from the start (ADR-0033)
     commands::spawn_board_warmup(suite.clone());
@@ -66,6 +67,7 @@ fn main() {
             commands::election_get,
             commands::candidate_checks,
             commands::election_vote,
+            commands::election_check_ballot,
             commands::results_snapshot,
             commands::explorer_snapshot,
             commands::network_status,

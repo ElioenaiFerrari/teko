@@ -35,6 +35,11 @@ pub struct TrustPolicy {
     pub civic_threshold: usize,
     /// 32-byte wallet addresses of the civic organ's members.
     pub civic_members: Vec<Vec<u8>>,
+    /// The VOTE chain whose institutions certify the blocks the device checks its own ballot
+    /// against (ADR-0041). Empty = this device cannot check a ballot's inclusion.
+    pub vote_chain_id: String,
+    /// Consensus public keys of the vote-chain institutions (equal power; quorum > 2/3).
+    pub vote_validators: Vec<Vec<u8>>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Error)]
@@ -98,6 +103,15 @@ impl TrustPolicy {
                         .parse()
                         .map_err(|_| TrustError::Invalid("bad gov_threshold"))?
                 }
+                "vote_chain_id" => {
+                    if v.is_empty() || v.len() > 64 || !v.is_ascii() {
+                        return Err(TrustError::Invalid("bad vote_chain_id"));
+                    }
+                    p.vote_chain_id = String::from(v);
+                }
+                "vote_validator" => p
+                    .vote_validators
+                    .push(hex::decode(v).map_err(|_| TrustError::Invalid("bad vote_validator"))?),
                 "gov_signer" => p
                     .gov_signers
                     .push(hex::decode(v).map_err(|_| TrustError::Invalid("bad gov_signer"))?),
@@ -124,6 +138,11 @@ impl TrustPolicy {
         {
             return Err(TrustError::Invalid(
                 "civic_chain_id, civic_threshold and civic_member go together (1 <= M <= N)",
+            ));
+        }
+        if p.vote_chain_id.is_empty() != p.vote_validators.is_empty() {
+            return Err(TrustError::Invalid(
+                "vote_chain_id and vote_validator go together",
             ));
         }
         Ok(p)
@@ -156,6 +175,12 @@ impl TrustPolicy {
                 let _ = writeln!(s, "civic_member={}", hex::encode(m));
             }
         }
+        if !self.vote_chain_id.is_empty() {
+            let _ = writeln!(s, "vote_chain_id={}", self.vote_chain_id);
+            for k in &self.vote_validators {
+                let _ = writeln!(s, "vote_validator={}", hex::encode(k));
+            }
+        }
         s
     }
 
@@ -181,8 +206,29 @@ mod tests {
             civic_chain_id: String::from("teko-devnet-1-economy"),
             civic_threshold: 2,
             civic_members: alloc::vec![alloc::vec![7; 32], alloc::vec![8; 32], alloc::vec![9; 32]],
+            vote_chain_id: String::from("teko-devnet-1"),
+            vote_validators: alloc::vec![alloc::vec![2; 33], alloc::vec![3; 33]],
         };
         assert_eq!(TrustPolicy::parse(&p.to_text()).unwrap(), p);
+    }
+
+    #[test]
+    fn the_vote_chain_institutions_are_all_or_nothing() {
+        let base = "authority_root=02\nfw_threshold=1\nfw_signer=02\n";
+        assert!(
+            TrustPolicy::parse(&alloc::format!(
+                "{base}vote_chain_id=x\nvote_validator=02\n"
+            ))
+            .is_ok()
+        );
+        assert!(TrustPolicy::parse(&alloc::format!("{base}vote_chain_id=x\n")).is_err());
+        assert!(TrustPolicy::parse(&alloc::format!("{base}vote_validator=02\n")).is_err());
+        assert!(
+            TrustPolicy::parse(&alloc::format!(
+                "{base}vote_chain_id=x\nvote_validator=zz\n"
+            ))
+            .is_err()
+        );
     }
 
     #[test]

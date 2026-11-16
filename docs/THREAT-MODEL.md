@@ -75,7 +75,7 @@ Colunas: **STRIDE** (S spoofing, T tampering, R repudiation, I info disclosure, 
 | C1o | **Candidatura revogada depois de o pleito ser assinado** | A Suite confere cada candidato contra a chain (selo/alerta); o remédio é cancelar o pleito com motivo e abrir outro | O pleito assinado não muda; quem não olha o alerta vê o candidato |
 | C1g | **Computador faz o usuário travar stake sem querer** | `SignStake` mostra ação, valor, taxa e rede no dispositivo e só assina após o botão (ADR-0027) | Usuário que confirma sem conferir; penalidade por voto duplo é real no livro |
 | C1c | **Frase mal anotada ou passphrase esquecida** | 3 posições sorteadas no onboarding; "Verificar backup" a qualquer momento; avisos fortes sobre a passphrase | Fundos perdidos se a anotação estiver errada e o dispositivo se perder |
-| C2 | Comprador exige **prova de como votou** (recibo) | O dispositivo não emite comprovante transferível de voto | Receipt-freeness completa exige desenho da fase de votação; **trabalho futuro** |
+| C2 | Comprador exige **prova de como votou** (recibo) | O dispositivo não emite comprovante transferível de voto; **não guarda opção nem aleatório** e a Suite só mostra o rastreador (ADR-0041) | Receipt-freeness completa exige desenho da fase de votação; **trabalho futuro** |
 | C3 | Votar sob vigilância (coerção presencial) | Fora de escopo desta fase; mecanismos como re-voto pertencem à fase da blockchain | Total nesta fase |
 | C4 | Comprador exige entrega do dispositivo + PIN | Impossível impedir tecnicamente; mitigado por re-voto/revogação (futuro) | Total |
 | C5 | Prova de posse de `s` ("eu tenho a credencial") vendida | O segredo não é exportável; prova ZK não prova *como* votou | Venda do dispositivo inteiro |
@@ -151,6 +151,9 @@ Não implementadas; ver `PHASE-2-VOTING.md`. Cada linha vira teste quando houver
 | V2 | *Stuffing*: autoridade emite mais credenciais que elegíveis | Contagem pública emitidas vs. elegíveis; auditoria | Autoridade ainda decide quem é elegível |
 | V3 | Voto duplo | Nullifier por eleição verificado no quadro | Falha do esquema de nullifier para P-256 (lacuna §4.3) |
 | V4 | Host troca o candidato | Cédula confirmada no dispositivo com nome **do manifesto M-de-N** | Usuário não confere a tela |
+| V4b | Dispositivo cifra OUTRA opção que a da tela | **Desafio de Benaloh**: compromisso antes da escolha; auditoria revela e o computador abre a cédula (ADR-0041); pego com chance ½ por auditoria | Garantia estatística: o eleitor precisa auditar |
+| V4c | Cédula não entrou no quadro ou o bloco não é final | O **dispositivo** confere sozinho certificado > 2/3, bloco e inclusão da própria folha (`CheckMyBallot`) | Confiança nas instituições do `trust.txt` |
+| V4d | Cédula registrada mas não contada | A Suite refaz a apuração e mostra o veredito da cédula | O dispositivo não refaz a soma |
 | V5 | Manifesto falso | Dispositivo exige M-de-N válido e fase correta | Colusão de M instituições |
 | V6 | **Compra de voto / recibo** | **Não mitigada na 1ª versão** (ADR-0015) | **Total** até haver re-voto/receipt-freeness |
 | V7 | Coerção presencial | Fora de escopo | Total |
@@ -179,7 +182,7 @@ Não implementadas; ver `PHASE-2-VOTING.md`. Cada linha vira teste quando houver
 | V32 | "Colher agora, decifrar depois" (computador quântico) abre cédulas cifradas guardadas no quadro público | Nenhuma além de não decifrar votos individuais (só somas) | Sigilo de longo prazo **não** garantido contra adversário quântico; sem solução de limiar pós-quântica auditada |
 | V33 | Cédula cifrada inválida (voto duplo na mesma cédula, valor 2, nenhuma opção) ou reaproveitada em outro pleito/chave | Provas 0/1 e soma=1 com Fiat-Shamir forte ligado a eleição, pleito, posição e chave do eleitor; o `Tallier` e o cliente verificam | Implementação própria, sem auditoria |
 | V34 | Validador publica parte de decifração errada ou fora de hora | Prova de Chaum-Pedersen por opção contra a chave de verificação da cerimônia; duplicata, fora do fechamento, outro pleito ou fora da cerimônia são recusados; totais só liberam se somarem as cédulas aceitas | Um validador pode deixar de publicar (precisa de M) |
-| V35 | Aleatoriedade da cédula vaza do dispositivo (firmware malicioso) e permite provar o voto a um comprador | Aleatoriedade zeroizada, nunca em nenhuma resposta (teste); firmware M-de-N | Receipt-freeness só "honest-but-remembering" |
+| V35 | Aleatoriedade da cédula vaza do dispositivo (firmware malicioso) e permite provar o voto a um comprador | Aleatoriedade zeroizada, nunca em nenhuma resposta (teste); firmware M-de-N | Receipt-freeness só "honest-but-remembering"; o aleatório só sai numa cédula **auditada** (descartada) |
 | V36 | Cerimônia de chave comprometida (chave maliciosa, viés, parte inconsistente) | Feldman VSS + prova de posse por participante; registro público reverificado por qualquer um e igual ao manifesto assinado | Viés da chave pública (Pedersen/GJKR); canal entre validadores sem autenticação no protótipo |
 | V25 | Nó adversário serve cadeia falsa ao cliente | O cliente reverifica o certificado de commit (mais de 2/3), o proponente, o encadeamento e a raiz Merkle de cada bloco | Um nó pode omitir blocos recentes (atraso); conluio de 2/3 ou mais das instituições |
 | V15 | Mudança de domicílio perto da eleição (voto duplo em dois lugares ou perda do direito) | Data de corte e fotografia da lista (decisão #10) | Casos de borda |

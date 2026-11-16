@@ -10,9 +10,10 @@ use tauri::{AppHandle, Emitter, Manager, State};
 use teko_attestation::TrustPolicy;
 use teko_bulletin::BulletinBoard;
 use teko_client::{
-    AttributeResult, AuthenticityReport, CivicIdInfo, ClientError, DeviceClient, DeviceStatus,
-    ElectionSummary, FirmwareInfo, SignedBallot, SignedDocument, UnlockOutcome, VerifiedDocument,
-    inspect_firmware, resolve_dev_dir, verify_signed_document,
+    AttributeResult, AuditReport, AuthenticityReport, BallotOutcome, CivicIdInfo, ClientError,
+    DeviceClient, DeviceStatus, ElectionSummary, FirmwareInfo, RecordedReport, SignedBallot,
+    SignedDocument, UnlockOutcome, VerifiedDocument, inspect_firmware, resolve_dev_dir,
+    verify_signed_document,
 };
 use teko_crypto::hex;
 use teko_election::{Phase, ResultsVisibility, SubmittedBallot, SubmittedRegistration, Tallier};
@@ -32,6 +33,9 @@ pub struct SuiteInner {
     pub board: Mutex<Option<BoardState>>,
     /// Credential keys this session exported (type -> hex), to list what was issued to them.
     pub cred_keys: Mutex<std::collections::BTreeMap<String, String>>,
+    /// Contests whose anonymous registration this session already did (a voter registers once,
+    /// even if they audit test ballots first, ADR-0041).
+    pub registered: Mutex<std::collections::BTreeSet<(String, String)>>,
 }
 
 pub struct BoardState {
@@ -178,6 +182,9 @@ fn prompt_name(kind: ButtonKind) -> &'static str {
         ButtonKind::CredentialKey => "credential_key",
         ButtonKind::SignCredentialOp => "sign_credential_op",
         ButtonKind::OpenCredential => "open_credential",
+        ButtonKind::BallotCast => "ballot_cast",
+        ButtonKind::BallotAudit => "ballot_audit",
+        ButtonKind::CheckBallot => "check_ballot",
         ButtonKind::Unspecified => "unknown",
     }
 }
@@ -1814,16 +1821,25 @@ pub async fn election_get(
 
 #[derive(Serialize)]
 pub struct VoteReceipt {
-    ballot: SignedBallot,
+    /// Set when the ballot was CAST. The Suite does not show the chosen option afterwards: what
+    /// the voter keeps is the tracker, so nothing on screen is a receipt that can be sold or
+    /// coerced (ADR-0041).
+    ballot: Option<SignedBallot>,
+    /// Set when the voter chose, on the device, to AUDIT the ballot instead: it was opened and
+    /// checked here, and the vote is still available.
+    audit: Option<AuditReport>,
     /// PROTOTYPE: the Suite plays the board operator and appends the ballot.
     submitted: bool,
     board_index: Option<u64>,
     note: Option<String>,
+    /// Short code of the ballot on the board; the same one the device shows.
+    tracker: Option<String>,
 }
 
-/// PROTOTYPE: the device signs the ballot after the user confirms on ITS screen
-/// (candidate name from the verified manifest); the Suite then appends it to the
-/// local bulletin board so it shows up in the live results.
+/// The device signs the ballot after the user confirms on ITS screen (candidate name from the
+/// verified manifest). In an encrypted election the device first commits to the ciphertext and the
+/// voter then chooses, ON THE DEVICE, to cast it or to audit it (ADR-0041). A cast ballot is
+/// appended to the board so it shows up in the live results.
 #[tauri::command]
 pub async fn election_vote(
     app: AppHandle,
@@ -1834,23 +1850,242 @@ pub async fn election_vote(
 ) -> Result<VoteReceipt, UiError> {
     let trust = load_trust()?;
     let bytes = read_bundle()?;
-    let (ballot, reg_note) = with_device(app, suite.inner().clone(), move |c| {
+    let already = lock_set(&suite).contains(&(election_id.clone(), contest_id.clone()));
+    let (outcome, reg_note) = with_device(app, suite.inner().clone(), move |c| {
         if !c.has_election() {
             c.use_election_bundle(&trust, &bytes)?;
         }
-        let reg_note = register_anonymously(c, &election_id, &contest_id)?;
+        let reg_note = if already {
+            None
+        } else {
+            register_anonymously(c, &election_id, &contest_id)?
+        };
         Ok((
-            c.sign_ballot(&election_id, &contest_id, option_index)?,
+            c.sign_ballot_or_audit(&election_id, &contest_id, option_index)?,
             reg_note,
         ))
     })
     .await?;
-    let submitted = submit_to_board(&ballot);
-    Ok(VoteReceipt {
-        ballot,
-        submitted: submitted.is_ok(),
-        board_index: submitted.as_ref().ok().copied(),
-        note: submitted.err().or(reg_note),
+    // registration is done once per contest, whatever the voter does next
+    if let Ok(mut set) = suite.registered.lock() {
+        set.insert((outcome_election(&outcome), outcome_contest(&outcome)));
+    }
+    match outcome {
+        BallotOutcome::Audited(a) => Ok(VoteReceipt {
+            ballot: None,
+            audit: Some(a),
+            submitted: false,
+            board_index: None,
+            note: reg_note,
+            tracker: None,
+        }),
+        BallotOutcome::Cast(ballot) => {
+            let tracker = submitted_of(&ballot)
+                .ok()
+                .map(|sb| teko_crypto::tracker(&leaf_of(&sb)));
+            let submitted = submit_to_board(&ballot);
+            Ok(VoteReceipt {
+                ballot: Some(SignedBallot {
+                    // the option the voter chose is not echoed back
+                    option_name: String::new(),
+                    option_index: 0,
+                    ..ballot
+                }),
+                audit: None,
+                submitted: submitted.is_ok(),
+                board_index: submitted.as_ref().ok().copied(),
+                note: submitted.err().or(reg_note),
+                tracker,
+            })
+        }
+    }
+}
+
+fn lock_set(suite: &Suite) -> std::collections::BTreeSet<(String, String)> {
+    suite
+        .registered
+        .lock()
+        .map(|g| g.clone())
+        .unwrap_or_default()
+}
+
+fn outcome_election(o: &BallotOutcome) -> String {
+    match o {
+        BallotOutcome::Cast(b) => b.election_id.clone(),
+        BallotOutcome::Audited(a) => a.election_id.clone(),
+    }
+}
+
+fn outcome_contest(o: &BallotOutcome) -> String {
+    match o {
+        BallotOutcome::Cast(b) => b.contest_id.clone(),
+        BallotOutcome::Audited(a) => a.contest_id.clone(),
+    }
+}
+
+/// The board entry of a cast ballot.
+fn submitted_of(b: &SignedBallot) -> Result<SubmittedBallot, String> {
+    let h = |s: &str| hex::decode(s).map_err(|e| e.to_string());
+    Ok(SubmittedBallot {
+        election_id: b.election_id.clone(),
+        contest_id: b.contest_id.clone(),
+        contest_hash: h(&b.contest_hash)?,
+        // Encrypted mode: the vote lives only in the ciphertexts; the signed body has option 0.
+        option_index: if b.encrypted.is_empty() {
+            b.option_index
+        } else {
+            0
+        },
+        voter_key: h(&b.voter_key)?,
+        signature: h(&b.signature)?,
+        encrypted: h(&b.encrypted)?,
+    })
+}
+
+/// The Merkle leaf of a ballot entry (`EntryKind::BALLOT` byte, then the payload).
+fn leaf_of(sb: &SubmittedBallot) -> [u8; 32] {
+    use prost::Message;
+    let mut data = vec![teko_bulletin::EntryKind::BALLOT.0];
+    data.extend_from_slice(&sb.encode_to_vec());
+    teko_bulletin::merkle::leaf_hash(&data)
+}
+
+#[derive(Serialize)]
+pub struct BallotCheckReply {
+    /// What the DEVICE confirmed alone: the block, how many institutions certified it, the tracker.
+    recorded: Option<RecordedReport>,
+    /// Why the device could not confirm (not on the chain yet, no vote network, refusal...).
+    recorded_note: Option<String>,
+    /// What the public tally did with this ballot, recomputed from the verified board.
+    counted: Option<String>,
+    /// `counted`, `rejected` or `unknown`.
+    counted_state: &'static str,
+    /// The contest's totals are already decrypted (so "counted" is visible in the results).
+    revealed: bool,
+}
+
+/// "Check my ballot" (ADR-0041): (1) the DEVICE verifies, alone, that its ballot is in a block
+/// certified by more than 2/3 of the institutions it trusts, with the Merkle proof; (2) the Suite
+/// replays the verified board and says what the tally did with that very ballot. Neither relies on
+/// anyone's word, and the chosen option is not involved.
+#[tauri::command]
+pub async fn election_check_ballot(
+    app: AppHandle,
+    suite: State<'_, Suite>,
+    election_id: String,
+    contest_id: String,
+) -> Result<BallotCheckReply, UiError> {
+    let trust = load_trust()?;
+    let bytes = read_bundle()?;
+    let (eid, cid) = (election_id.clone(), contest_id.clone());
+    let voter_key = with_device(app.clone(), suite.inner().clone(), move |c| {
+        if !c.has_election() {
+            c.use_election_bundle(&trust, &bytes)?;
+        }
+        c.voter_key(&eid, &cid)
+    })
+    .await?;
+    let voter_key = hex::decode(&voter_key).map_err(|e| ui_err("Internal", e))?;
+    // locate the entry and gather the evidence from the verified replica
+    let (eid, cid) = (election_id.clone(), contest_id.clone());
+    let located = tauri::async_runtime::spawn_blocking(move || {
+        let admin = Admin::open(resolve_dev_dir()).map_err(|e| ui_err("NoElection", e))?;
+        let board = admin
+            .read_board()
+            .map_err(|e| ui_err("NoElection", format!("quadro ilegível: {e}")))?;
+        let election_admin::AnyBoard::Net(nb) = &board else {
+            return Ok::<_, UiError>((
+                None,
+                Some(
+                    "A conferência pelo dispositivo precisa da rede de votos (make devnet)."
+                        .to_string(),
+                ),
+                None,
+            ));
+        };
+        let Some(index) = nb.find_ballot(&eid, &cid, &voter_key) else {
+            return Ok((
+                None,
+                Some("A sua cédula ainda não está no quadro.".to_string()),
+                None,
+            ));
+        };
+        let payload = board.entry(index).map(|e| e.payload.clone());
+        let evidence = nb
+            .chain()
+            .and_then(|c| c.inclusion_evidence(index))
+            .map(|ev| (index, ev));
+        let note = evidence
+            .is_none()
+            .then(|| "A sua cédula ainda não entrou em um bloco certificado.".to_string());
+        Ok((evidence, note, payload))
+    })
+    .await
+    .map_err(|e| ui_err("Internal", e))??;
+    let (evidence, mut recorded_note, payload) = located;
+    let mut recorded = None;
+    if let Some((index, ev)) = evidence {
+        use prost::Message;
+        let commit = ev
+            .decided
+            .commit
+            .as_ref()
+            .map(Message::encode_to_vec)
+            .unwrap_or_default();
+        let (eid, cid) = (election_id.clone(), contest_id.clone());
+        let r = with_device(app, suite.inner().clone(), move |c| {
+            c.check_my_ballot(
+                &eid,
+                &cid,
+                ev.decided.payload.clone(),
+                commit,
+                index,
+                &ev.proof,
+            )
+        })
+        .await;
+        match r {
+            Ok(rep) => recorded = Some(rep),
+            Err(e) => recorded_note = Some(e.message),
+        }
+    }
+    // what the public tally did with it
+    let (mut counted, mut counted_state, mut revealed) = (None, "unknown", false);
+    if let Some(p) = payload {
+        let status = tauri::async_runtime::spawn_blocking(move || {
+            Admin::open(resolve_dev_dir())
+                .map_err(|e| e.to_string())
+                .and_then(|a| a.ballot_verdict(&p).map_err(|e| e.to_string()))
+        })
+        .await
+        .map_err(|e| ui_err("Internal", e))?;
+        if let Ok(Some(st)) = status {
+            revealed = st.revealed;
+            match st.verdict {
+                teko_election::BallotVerdict::Counted => {
+                    counted_state = "counted";
+                    counted = Some(if st.revealed {
+                        "Contada: entrou na soma que foi decifrada e publicada.".to_string()
+                    } else if st.encrypted {
+                        "Contada: entrou na soma cifrada (os totais só aparecem depois do fechamento)."
+                            .to_string()
+                    } else {
+                        "Contada nos resultados ao vivo.".to_string()
+                    });
+                }
+                teko_election::BallotVerdict::Rejected(why) => {
+                    counted_state = "rejected";
+                    counted = Some(format!("NÃO foi contada: {why}."));
+                }
+            }
+        }
+    }
+    Ok(BallotCheckReply {
+        recorded,
+        recorded_note,
+        counted,
+        counted_state,
+        revealed,
     })
 }
 
@@ -1934,23 +2169,8 @@ fn submit_to_board(b: &SignedBallot) -> Result<u64, String> {
             "O quadro ainda não foi publicado: a cédula não entrou na contagem ao vivo.".into(),
         );
     }
-    let h = |s: &str| hex::decode(s).map_err(|e| e.to_string());
-    let ballot = SubmittedBallot {
-        election_id: b.election_id.clone(),
-        contest_id: b.contest_id.clone(),
-        contest_hash: h(&b.contest_hash)?,
-        // Encrypted mode: the vote lives only in the ciphertexts; the signed body has option 0.
-        option_index: if b.encrypted.is_empty() {
-            b.option_index
-        } else {
-            0
-        },
-        voter_key: h(&b.voter_key)?,
-        signature: h(&b.signature)?,
-        encrypted: h(&b.encrypted)?,
-    };
     admin
-        .submit_ballot(&ballot)
+        .submit_ballot(&submitted_of(b)?)
         .map(|r| r.index)
         .map_err(|e| e.to_string())
 }

@@ -62,6 +62,12 @@ pub enum ButtonKind {
     SignCredentialOp = 26,
     /// "Open the sealed attributes of a credential?" prompt (ADR-0039).
     OpenCredential = 27,
+    /// "Cast this ballot?" prompt of the cast-or-audit challenge (ADR-0041).
+    BallotCast = 28,
+    /// "Audit this ballot? It will NOT be used" prompt of the cast-or-audit challenge (ADR-0041).
+    BallotAudit = 29,
+    /// "Check that my ballot is recorded?" prompt (ADR-0041).
+    CheckBallot = 30,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, prost::Enumeration)]
@@ -640,6 +646,67 @@ pub struct CredentialKeyEntry {
     #[prost(bytes = "vec", tag = "2")]
     pub public_key: Vec<u8>,
 }
+/// Interim message of `SignBallot` in an encrypted election (ADR-0041): the device COMMITS to the
+/// ciphertext BEFORE the voter chooses, on the device, to cast or to audit it. The host must keep
+/// it: a ballot that is cast or audited afterwards has to be exactly this one.
+#[derive(Clone, PartialEq, prost::Message)]
+pub struct BallotCommitment {
+    #[prost(bytes = "vec", tag = "1")]
+    pub ciphertext_hash: Vec<u8>,
+    #[prost(bytes = "vec", tag = "2")]
+    pub encrypted: Vec<u8>,
+}
+/// The voter chose to AUDIT the committed ballot on the device: it is SPOILED (never signed or
+/// cast) and the device reveals what it encrypted and how, so the host can open it and check that
+/// it holds the option that was asked for. A ballot that is cast never gets this.
+#[derive(Clone, PartialEq, prost::Message)]
+pub struct BallotAudited {
+    /// Position of the option the ballot encodes (the device's claim: the host re-checks it).
+    #[prost(uint32, tag = "1")]
+    pub option_position: u32,
+    /// The randomness of each option's ciphertext (32-byte scalars).
+    #[prost(bytes = "vec", repeated, tag = "2")]
+    pub randomness: Vec<Vec<u8>>,
+    /// The contest voter key the proofs are bound to (public).
+    #[prost(bytes = "vec", tag = "3")]
+    pub voter_key: Vec<u8>,
+}
+/// "Is MY ballot recorded?" (ADR-0041). The host brings a block of the vote chain, its commit
+/// certificate and the Merkle proof of the ballot's leaf; the DEVICE checks them alone against the
+/// institutions in its trust file and against the leaf hash it kept when it cast the ballot.
+#[derive(Clone, PartialEq, prost::Message)]
+pub struct CheckMyBallot {
+    #[prost(string, tag = "1")]
+    pub election_id: String,
+    #[prost(string, tag = "2")]
+    pub contest_id: String,
+    /// The block payload (what the institutions signed).
+    #[prost(bytes = "vec", tag = "3")]
+    pub block: Vec<u8>,
+    /// The encoded commit certificate of that block.
+    #[prost(bytes = "vec", tag = "4")]
+    pub commit: Vec<u8>,
+    /// Index of the ballot's leaf in the cumulative bulletin log.
+    #[prost(uint64, tag = "5")]
+    pub index: u64,
+    /// Merkle inclusion proof of the leaf in the block's `log_root`.
+    #[prost(bytes = "vec", repeated, tag = "6")]
+    pub proof: Vec<Vec<u8>>,
+}
+/// The device checked the certificate and the inclusion. ONLY public facts: never the option.
+#[derive(Clone, PartialEq, prost::Message)]
+pub struct BallotRecorded {
+    #[prost(uint64, tag = "1")]
+    pub height: u64,
+    /// Distinct institutions whose valid precommit is in the certificate.
+    #[prost(uint32, tag = "2")]
+    pub signers: u32,
+    /// Institutions the device trusts for this chain.
+    #[prost(uint32, tag = "3")]
+    pub institutions: u32,
+    #[prost(string, tag = "4")]
+    pub tracker: String,
+}
 /// PUBLIC credential key for one type.
 #[derive(Clone, PartialEq, prost::Message)]
 pub struct CredentialKey {
@@ -767,6 +834,7 @@ define_messages! {
         GetCredentialKey(GetCredentialKey) = 0x0022,
         GetCredentialKeys(GetCredentialKeys) = 0x0023,
         OpenCredentialBundle(OpenCredentialBundle) = 0x0024,
+        CheckMyBallot(CheckMyBallot) = 0x0025,
     }
 }
 
@@ -801,6 +869,9 @@ define_messages! {
         CredentialKey(CredentialKey) = 0x011A,
         CredentialKeys(CredentialKeys) = 0x011B,
         CredentialBundleOpened(CredentialBundleOpened) = 0x011C,
+        BallotCommitment(BallotCommitment) = 0x011D,
+        BallotAudited(BallotAudited) = 0x011E,
+        BallotRecorded(BallotRecorded) = 0x011F,
     }
 }
 

@@ -38,6 +38,8 @@ pub struct DeviceClient<T: Transport> {
     on_button: Option<OnButton>,
     /// Manifest of the election last loaded (to verify ballots against).
     election: Option<ElectionManifest>,
+    /// The ciphertext the device committed to in the ballot being signed (ADR-0041).
+    commitment: Option<BallotCommitment>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -177,6 +179,7 @@ impl<T: Transport> DeviceClient<T> {
             next_id: 1,
             on_button: None,
             election: None,
+            commitment: None,
         }
     }
 
@@ -203,6 +206,7 @@ impl<T: Transport> DeviceClient<T> {
                         cb(ButtonKind::try_from(b.kind).unwrap_or(ButtonKind::Unspecified));
                     }
                 }
+                Response::BallotCommitment(c) => self.commitment = Some(c),
                 Response::Failure(f) => return Err(ClientError::Device(f.into())),
                 other => return Ok(other),
             }
@@ -1100,12 +1104,68 @@ impl<T: Transport> DeviceClient<T> {
     /// from its own verified copy of the manifest; we only send the INDEX.
     /// The signature is verified here before being handed to the user.
     /// PROTOTYPE: nothing is submitted anywhere and there is no ZK proof yet.
+    /// Asks the DEVICE to check, alone, that the ballot it cast is in a block certified by more than
+    /// 2/3 of the institutions it trusts (ADR-0041). The host only brings the evidence (block,
+    /// certificate, Merkle proof); nothing is taken on its word.
+    pub fn check_my_ballot(
+        &mut self,
+        election_id: &str,
+        contest_id: &str,
+        block: Vec<u8>,
+        commit: Vec<u8>,
+        index: u64,
+        proof: &[[u8; 32]],
+    ) -> Result<RecordedReport, ClientError> {
+        let r = self.expect(
+            Request::CheckMyBallot(CheckMyBallot {
+                election_id: election_id.to_string(),
+                contest_id: contest_id.to_string(),
+                block,
+                commit,
+                index,
+                proof: proof.iter().map(|h| h.to_vec()).collect(),
+            }),
+            |r| match r {
+                Response::BallotRecorded(r) => Ok(r),
+                o => Err(o),
+            },
+        )?;
+        Ok(RecordedReport {
+            height: r.height,
+            signers: r.signers,
+            institutions: r.institutions,
+            tracker: r.tracker,
+        })
+    }
+
+    /// Like `sign_ballot_or_audit`, for callers that only handle a cast ballot: an AUDITED ballot
+    /// comes back as an error carrying the audit result (the vote was NOT used).
     pub fn sign_ballot(
         &mut self,
         election_id: &str,
         contest_id: &str,
         option_index: u32,
     ) -> Result<SignedBallot, ClientError> {
+        match self.sign_ballot_or_audit(election_id, contest_id, option_index)? {
+            BallotOutcome::Cast(b) => Ok(b),
+            BallotOutcome::Audited(a) => Err(ClientError::Unexpected(format!(
+                "cédula de teste auditada ({}): o voto NÃO foi usado",
+                a.summary
+            ))),
+        }
+    }
+
+    /// Asks the device to sign a ballot. In an encrypted election the device first COMMITS to the
+    /// ciphertext and the voter then chooses, ON THE DEVICE, to cast it or to audit it (ADR-0041).
+    /// An audited ballot is opened here with the randomness the device reveals: it must hold the
+    /// option that was asked for, or the device lied and the call fails loudly.
+    pub fn sign_ballot_or_audit(
+        &mut self,
+        election_id: &str,
+        contest_id: &str,
+        option_index: u32,
+    ) -> Result<BallotOutcome, ClientError> {
+        self.commitment = None;
         let manifest = self
             .election
             .clone()
@@ -1118,18 +1178,54 @@ impl<T: Transport> DeviceClient<T> {
             .option_name(option_index)
             .ok_or_else(|| ClientError::Verification("opção inexistente".into()))?
             .to_string();
-        let b = self.expect(
-            Request::SignBallot(SignBallot {
-                election_id: election_id.to_string(),
-                contest_id: contest_id.to_string(),
-                option_index,
-            }),
-            |r| match r {
-                Response::BallotSignature(b) => Ok(b),
-                o => Err(o),
-            },
-        )?;
+        let resp = self.request(Request::SignBallot(SignBallot {
+            election_id: election_id.to_string(),
+            contest_id: contest_id.to_string(),
+            option_index,
+        }))?;
         let encrypted_mode = !manifest.tally_key.is_empty();
+        let b = match resp {
+            Response::BallotSignature(b) => b,
+            Response::BallotAudited(a) => {
+                let commitment = self.commitment.take().ok_or_else(|| {
+                    ClientError::Verification(
+                        "o dispositivo auditou uma cédula sem ter se comprometido com ela".into(),
+                    )
+                })?;
+                let want = contest
+                    .options
+                    .iter()
+                    .position(|o| o.index == option_index)
+                    .ok_or_else(|| ClientError::Verification("opção inexistente".into()))?;
+                return audit_report(
+                    &manifest,
+                    contest,
+                    election_id,
+                    contest_id,
+                    want,
+                    &commitment,
+                    &a,
+                )
+                .map(BallotOutcome::Audited);
+            }
+            other => {
+                return Err(ClientError::Unexpected(format!(
+                    "resposta inesperada: {other:?}"
+                )));
+            }
+        };
+        if encrypted_mode {
+            // what is cast is exactly what the device committed to before the choice
+            let committed = self
+                .commitment
+                .take()
+                .is_some_and(|c| c.encrypted == b.encrypted);
+            if !committed {
+                return Err(ClientError::Verification(
+                    "a cédula votada NÃO é a que o dispositivo anunciou antes da escolha".into(),
+                ));
+            }
+        }
         if encrypted_mode != !b.encrypted.is_empty() {
             return Err(ClientError::Verification(
                 "o dispositivo devolveu uma cédula em modo diferente do da eleição".into(),
@@ -1163,7 +1259,7 @@ impl<T: Transport> DeviceClient<T> {
                 ));
             }
         }
-        Ok(SignedBallot {
+        Ok(BallotOutcome::Cast(SignedBallot {
             election_id: election_id.to_string(),
             contest_id: contest_id.to_string(),
             contest_hash: hex::encode(&body.contest_hash),
@@ -1173,8 +1269,88 @@ impl<T: Transport> DeviceClient<T> {
             voter_key: hex::encode(&b.voter_key),
             signature: hex::encode(&b.signature),
             encrypted: hex::encode(&b.encrypted),
-        })
+        }))
     }
+}
+
+/// What the DEVICE confirmed about its own ballot (ADR-0041): public facts only.
+#[derive(Debug, Clone, Serialize)]
+pub struct RecordedReport {
+    pub height: u64,
+    pub signers: u32,
+    pub institutions: u32,
+    pub tracker: String,
+}
+
+/// What the voter chose ON THE DEVICE for a committed ballot (ADR-0041).
+#[derive(Debug, Clone)]
+pub enum BallotOutcome {
+    Cast(SignedBallot),
+    Audited(AuditReport),
+}
+
+/// Result of opening an AUDITED (spoiled, never cast) ballot.
+#[derive(Debug, Clone, Serialize)]
+pub struct AuditReport {
+    pub election_id: String,
+    pub contest_id: String,
+    pub contest_title: String,
+    pub option_name: String,
+    pub ciphertext_hash: String,
+    /// One line for the screen: "a cédula de teste continha X".
+    pub summary: String,
+}
+
+/// Opens an audited ballot: the commitment must be self-consistent, the proofs valid, and the
+/// ballot must hold EXACTLY the option that was asked for. Anything else is a device that lied.
+fn audit_report(
+    manifest: &ElectionManifest,
+    contest: &teko_election::Contest,
+    election_id: &str,
+    contest_id: &str,
+    want_position: usize,
+    commitment: &BallotCommitment,
+    a: &BallotAudited,
+) -> Result<AuditReport, ClientError> {
+    let bad = |m: &str| ClientError::Verification(format!("auditoria: {m}"));
+    if manifest.tally_key.is_empty() {
+        return Err(bad("esta eleição não é cifrada: não há o que auditar"));
+    }
+    if teko_election::ciphertext_hash(&commitment.encrypted) != commitment.ciphertext_hash {
+        return Err(bad("o compromisso não confere com a própria cédula"));
+    }
+    let pk = teko_ballot_crypto::point_from_bytes(&manifest.tally_key)
+        .ok_or_else(|| bad("chave da eleição inválida"))?;
+    let n = contest.options.len();
+    let ctx = teko_election::ballot_ctx(election_id, contest_id, &a.voter_key);
+    let eb = teko_ballot_crypto::EncryptedBallot::from_bytes(n, &commitment.encrypted)
+        .ok_or_else(|| bad("cédula malformada"))?;
+    let rs: Option<Vec<_>> = a
+        .randomness
+        .iter()
+        .map(|r| teko_ballot_crypto::scalar_from_bytes(r))
+        .collect();
+    let rs = rs.ok_or_else(|| bad("aleatório malformado"))?;
+    let opened = teko_ballot_crypto::open_ballot(&pk, n, &ctx, &eb, &rs)
+        .ok_or_else(|| bad("a cédula NÃO abre com o aleatório revelado"))?;
+    if opened != want_position {
+        return Err(bad(
+            "o dispositivo cifrou OUTRA opção, não a que você escolheu: NÃO use este dispositivo",
+        ));
+    }
+    let name = contest
+        .options
+        .get(opened)
+        .map(|o| o.name.clone())
+        .unwrap_or_default();
+    Ok(AuditReport {
+        election_id: election_id.to_string(),
+        contest_id: contest_id.to_string(),
+        contest_title: contest.title.clone(),
+        option_name: name.clone(),
+        ciphertext_hash: hex::encode(&commitment.ciphertext_hash),
+        summary: format!("continha o voto em {name}"),
+    })
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -1336,4 +1512,86 @@ fn asset_tx(
         ClientError::Verification("a assinatura devolvida não confere com a transação".into())
     })?;
     Ok(tx)
+}
+
+#[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
+mod audit_tests {
+    use super::*;
+    use p256::elliptic_curve::Field;
+    use rand::SeedableRng;
+    use rand::rngs::StdRng;
+    use teko_ballot_crypto::{Point, Scalar, encrypt_ballot_with, point_to_bytes, scalar_to_bytes};
+
+    fn fixture() -> (ElectionManifest, teko_election::Contest, Point) {
+        let x = Scalar::random(&mut StdRng::seed_from_u64(1));
+        let pk = Point::GENERATOR * x;
+        let contest = teko_election::Contest {
+            contest_id: "presidente".into(),
+            title: "Presidente".into(),
+            options: (0..3u32)
+                .map(|i| teko_election::ElectionOption {
+                    index: i,
+                    name: format!("Candidato {i}"),
+                    ..Default::default()
+                })
+                .collect(),
+            ..Default::default()
+        };
+        let m = ElectionManifest {
+            election_id: "e".into(),
+            tally_key: point_to_bytes(&pk).to_vec(),
+            ..Default::default()
+        };
+        (m, contest, pk)
+    }
+
+    /// What a device would send for a ballot encrypting `encrypts` (the voter asked for `asked`).
+    fn run(encrypts: usize, asked: usize, tamper_hash: bool) -> Result<AuditReport, ClientError> {
+        let (m, c, pk) = fixture();
+        let vk = vec![2u8; 33];
+        let ctx = teko_election::ballot_ctx("e", "presidente", &vk);
+        let (eb, rs) =
+            encrypt_ballot_with(&pk, 3, encrypts, &ctx, &mut StdRng::seed_from_u64(9)).unwrap();
+        let bytes = eb.to_bytes();
+        let mut hash = teko_election::ciphertext_hash(&bytes);
+        if tamper_hash {
+            hash[0] ^= 1;
+        }
+        audit_report(
+            &m,
+            &c,
+            "e",
+            "presidente",
+            asked,
+            &BallotCommitment {
+                ciphertext_hash: hash,
+                encrypted: bytes,
+            },
+            &BallotAudited {
+                option_position: encrypts as u32,
+                randomness: rs.iter().map(|r| scalar_to_bytes(r).to_vec()).collect(),
+                voter_key: vk,
+            },
+        )
+    }
+
+    #[test]
+    fn an_honest_device_passes_the_audit() {
+        let r = run(1, 1, false).unwrap();
+        assert_eq!(r.option_name, "Candidato 1");
+        assert!(r.summary.contains("Candidato 1"));
+    }
+
+    #[test]
+    fn a_device_that_encrypted_another_option_is_caught() {
+        let e = run(0, 2, false).unwrap_err().to_string();
+        assert!(e.contains("OUTRA opção"), "{e}");
+    }
+
+    #[test]
+    fn a_commitment_that_does_not_match_its_ballot_is_refused() {
+        let e = run(1, 1, true).unwrap_err().to_string();
+        assert!(e.contains("compromisso"), "{e}");
+    }
 }

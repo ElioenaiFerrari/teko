@@ -89,6 +89,14 @@ impl SubmittedBallot {
     }
 }
 
+/// What the tally did with one ballot (ADR-0041): it entered the count, or was refused for a reason
+/// that is the same one the reject counters report.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum BallotVerdict {
+    Counted,
+    Rejected(&'static str),
+}
+
 /// Why ballots were NOT counted (they are counted as rejected, never dropped silently).
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct RejectCounts {
@@ -265,6 +273,8 @@ pub struct Tallier {
     orphans: u64,
     count: u64,
     unattributed: RejectCounts,
+    watch: BTreeSet<[u8; 32]>,
+    verdicts: BTreeMap<[u8; 32], BallotVerdict>,
 }
 
 impl Tallier {
@@ -286,6 +296,8 @@ impl Tallier {
             orphans: 0,
             count: 0,
             unattributed: RejectCounts::default(),
+            watch: BTreeSet::new(),
+            verdicts: BTreeMap::new(),
         }
     }
 
@@ -403,8 +415,15 @@ impl Tallier {
             LogKind::Dkg => self.feed_dkg(e.payload),
             LogKind::Result => self.feed_result(e.payload),
             LogKind::Ballot => {
+                let watched = self.watch.contains(&payload_hash(e.payload));
                 let (Some(m), Some(s)) = (self.manifest.as_ref(), self.status.as_ref()) else {
                     self.orphans += 1;
+                    if watched {
+                        self.verdicts.insert(
+                            payload_hash(e.payload),
+                            BallotVerdict::Rejected("antes de qualquer eleição válida"),
+                        );
+                    }
                     return;
                 };
                 let pre = match pre {
@@ -413,7 +432,7 @@ impl Tallier {
                     }
                     _ => None,
                 };
-                count_ballot(
+                let verdict = count_ballot(
                     m,
                     s,
                     &mut self.contests,
@@ -424,8 +443,23 @@ impl Tallier {
                     e.payload,
                     pre,
                 );
+                if watched {
+                    self.verdicts.insert(payload_hash(e.payload), verdict);
+                }
             }
         }
+    }
+
+    /// Asks to remember what happens to THIS ballot payload (ADR-0041): was it counted or refused,
+    /// and why. Call BEFORE feeding it. Only watched ballots are remembered, so a tally of a million
+    /// ballots keeps nothing extra.
+    pub fn watch_ballot(&mut self, payload: &[u8]) {
+        self.watch.insert(payload_hash(payload));
+    }
+
+    /// The verdict on a watched ballot, once it has been fed.
+    pub fn verdict_of(&self, payload: &[u8]) -> Option<BallotVerdict> {
+        self.verdicts.get(&payload_hash(payload)).copied()
     }
 
     fn feed_manifest(&mut self, payload: &[u8]) {
@@ -846,29 +880,29 @@ fn count_ballot(
     unattributed: &mut RejectCounts,
     payload: &[u8],
     pre: Option<BallotCheck>,
-) {
+) -> BallotVerdict {
     let Ok(b) = SubmittedBallot::decode(payload) else {
         unattributed.malformed += 1;
-        return;
+        return BallotVerdict::Rejected("malformada");
     };
     let Some(contest) = m
         .contest(&b.contest_id)
         .filter(|_| b.election_id == m.election_id)
     else {
         unattributed.unknown_contest += 1;
-        return;
+        return BallotVerdict::Rejected("pleito desconhecido");
     };
     let Some(ct) = contests.iter_mut().find(|c| c.contest_id == b.contest_id) else {
         unattributed.unknown_contest += 1;
-        return;
+        return BallotVerdict::Rejected("pleito desconhecido");
     };
     if b.contest_hash.as_slice() != contest_hash(contest).as_slice() {
         ct.rejected.wrong_contest_version += 1;
-        return;
+        return BallotVerdict::Rejected("versão do pleito diferente");
     }
     if s.phase_of(&b.contest_id) != Some(Phase::VotingOpen) {
         ct.rejected.not_open += 1;
-        return;
+        return BallotVerdict::Rejected("a votação não estava aberta");
     }
     let encrypted_mode = !m.tally_key.is_empty();
     // Plaintext mode keeps the option; encrypted mode has NO option to read: the vote
@@ -877,11 +911,11 @@ fn count_ballot(
     if !encrypted_mode {
         if !b.encrypted.is_empty() {
             ct.rejected.bad_proof += 1; // an encrypted ballot in a plaintext election
-            return;
+            return BallotVerdict::Rejected("cédula cifrada em eleição em claro");
         }
         let Some(pos) = ct.options.iter().position(|o| o.index == b.option_index) else {
             ct.rejected.unknown_option += 1;
-            return;
+            return BallotVerdict::Rejected("opção inexistente");
         };
         opt = pos;
     }
@@ -893,7 +927,7 @@ fn count_ballot(
     };
     if !signature_ok {
         ct.rejected.bad_signature += 1;
-        return;
+        return BallotVerdict::Rejected("assinatura inválida");
     }
     let mut cts: Option<EncryptedBallot> = None;
     if encrypted_mode {
@@ -903,7 +937,7 @@ fn count_ballot(
                 Some(eb) => cts = Some(eb),
                 None => {
                     ct.rejected.bad_proof += 1;
-                    return;
+                    return BallotVerdict::Rejected("provas da cédula inválidas");
                 }
             },
             None => {
@@ -920,7 +954,7 @@ fn count_ballot(
                     }
                     _ => {
                         ct.rejected.bad_proof += 1;
-                        return;
+                        return BallotVerdict::Rejected("provas da cédula inválidas");
                     }
                 }
             }
@@ -930,11 +964,11 @@ fn count_ballot(
         && !registered.contains(&(b.contest_id.clone(), b.voter_key.clone()))
     {
         ct.rejected.unregistered += 1;
-        return;
+        return BallotVerdict::Rejected("sem registro anônimo");
     }
     if !seen.insert((b.contest_id.clone(), b.voter_key.clone())) {
         ct.rejected.duplicate += 1;
-        return;
+        return BallotVerdict::Rejected("esta chave já votou neste pleito");
     }
     ct.accepted += 1;
     match cts {
@@ -952,6 +986,7 @@ fn count_ballot(
             }
         }
     }
+    BallotVerdict::Counted
 }
 
 #[cfg(test)]
@@ -1280,6 +1315,61 @@ mod tests {
             [1, 0, 0],
             "the FIRST vote stands"
         );
+    }
+
+    #[test]
+    fn a_watched_ballot_gets_its_own_verdict_and_only_watched_ones_are_kept() {
+        let (k, pol, m) = world(3);
+        let mut log = open_president(&m, &k);
+        let first = b(&m, PRESIDENT, 9, 0);
+        let dup = b(&m, PRESIDENT, 9, 2);
+        let other = b(&m, PRESIDENT, 8, 1);
+        let mut bad = ballot_msg(&m, PRESIDENT, 7, 0);
+        bad.signature[0] ^= 1;
+        let bad = (LogKind::Ballot, bad.encode_to_vec());
+        log.extend([first.clone(), dup.clone(), other.clone(), bad.clone()]);
+        let mut t = Tallier::new(pol);
+        for x in [&first, &dup, &bad] {
+            t.watch_ballot(&x.1);
+        }
+        for (kind, p) in &log {
+            t.feed(LogEntry {
+                kind: *kind,
+                payload: p,
+            });
+        }
+        assert_eq!(t.verdict_of(&first.1), Some(BallotVerdict::Counted));
+        assert!(matches!(
+            t.verdict_of(&dup.1),
+            Some(BallotVerdict::Rejected(why)) if why.contains("já votou")
+        ));
+        assert!(matches!(
+            t.verdict_of(&bad.1),
+            Some(BallotVerdict::Rejected(why)) if why.contains("assinatura")
+        ));
+        assert_eq!(t.verdict_of(&other.1), None, "not watched: nothing kept");
+        // the verdicts agree with the counters
+        let c = t.snapshot().contest(PRESIDENT).cloned().unwrap();
+        assert_eq!(
+            (c.accepted, c.rejected.duplicate, c.rejected.bad_signature),
+            (2, 1, 1)
+        );
+    }
+
+    #[test]
+    fn a_ballot_outside_the_voting_window_is_refused_with_that_reason() {
+        let (_, pol, m) = world(3);
+        let early = b(&m, PRESIDENT, 9, 0);
+        let mut t = Tallier::new(pol);
+        t.watch_ballot(&early.1);
+        t.feed(LogEntry {
+            kind: early.0,
+            payload: &early.1,
+        });
+        assert!(matches!(
+            t.verdict_of(&early.1),
+            Some(BallotVerdict::Rejected(_))
+        ));
     }
 
     #[test]

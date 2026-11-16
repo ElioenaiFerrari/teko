@@ -14,7 +14,10 @@
 //!
 //! NOT AUDITED. Heights are decided one at a time; catching up a node that missed a
 //! height uses the commit certificate (`Commit::verify`) from another node.
+#![cfg_attr(not(test), no_std)]
 #![cfg_attr(test, allow(clippy::unwrap_used, clippy::expect_used, clippy::panic))]
+
+extern crate alloc;
 
 mod engine;
 mod types;

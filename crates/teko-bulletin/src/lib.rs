@@ -17,7 +17,9 @@
 
 mod board;
 mod error;
-pub mod merkle;
+/// Pure Merkle functions: they live in `teko-crypto` so the DEVICE can verify inclusion proofs
+/// without `std` (ADR-0041); re-exported here so every existing path keeps working.
+pub use teko_crypto::merkle;
 
 pub use board::{
     BulletinBoard, Entry, EntryKind, FileBoard, MemoryBoard, Receipt, SignedHead, sign_head,

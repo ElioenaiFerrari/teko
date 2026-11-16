@@ -10,6 +10,13 @@ use crate::profile::NetworkProfile;
 
 pub(crate) const MAX_ENTRY_PAYLOAD: usize = 1024 * 1024;
 
+/// A certified block and the Merkle proof that one entry is in it (see `inclusion_evidence`).
+#[derive(Clone, Debug)]
+pub struct InclusionEvidence {
+    pub decided: DecidedBlock,
+    pub proof: Vec<teko_bulletin::Hash>,
+}
+
 /// A verified replica: the final blocks, plus the bulletin log they rebuild. Nothing enters
 /// except through `apply`, which checks everything: the commit certificate (more than 2/3 of the
 /// institutions, equal power), the proposer, the content and the exact Merkle state.
@@ -59,6 +66,21 @@ impl Chain {
     /// The bulletin log rebuilt from the blocks (read-only).
     pub fn board(&self) -> &MemoryBoard {
         &self.board
+    }
+
+    /// What a voter's DEVICE needs to check, alone, that the entry at `index` is final (ADR-0041):
+    /// the first certified block whose log already holds it, and the Merkle proof of the entry in
+    /// THAT block's `log_root`. `None` if the entry is not in a block yet.
+    pub fn inclusion_evidence(&self, index: u64) -> Option<InclusionEvidence> {
+        let (decided, size) = self.blocks.iter().find_map(|d| {
+            let b = d.block().ok()?;
+            (b.log_size > index).then(|| (d.clone(), b.log_size))
+        })?;
+        let leaves: Vec<_> = (0..size)
+            .map(|i| self.board.entry(i).map(Entry::leaf_hash))
+            .collect::<Option<_>>()?;
+        let proof = teko_bulletin::merkle::inclusion_proof(&leaves, usize::try_from(index).ok()?)?;
+        Some(InclusionEvidence { decided, proof })
     }
 
     /// Consumes the chain, keeping the verified Merkle log.

@@ -10,6 +10,7 @@
   const ID = 'teko1qpzry9x8gf2tvdw0s3jn54khce6mua7lq9xk4m';
   const FP = 'a1b2c3d4e5f60718';
   const dev = {
+    registered: {}, audited: {},
     connected: q !== 'none',
     state: q === 'virgin' ? 'virgin' : q === 'wallet' ? 'initialized' : q === 'ready' || q === 'locked' ? 'credentials_issued' : 'virgin',
     locked: q === 'locked',
@@ -107,11 +108,19 @@
       const c = contests().find((x) => x.contest_id === contestId);
       if (!c.eligible) throw { code: 'NotEligible', message: 'fora do seu domicílio', retry_after_ms: 0, remaining: 0 };
       if (c.phase !== 'voting_open') throw { code: 'WrongPhase', message: 'votação fechada', retry_after_ms: 0, remaining: 0 };
-      if (c.registration_required) await prompt('register', 1200);
-      await prompt('sign_ballot', 1500); voted[contestId] = true;
+      if (c.registration_required && !dev.registered[contestId]) { await prompt('register', 1200); dev.registered[contestId] = true; }
+      await prompt('sign_ballot', 1500);
+      await prompt('ballot_cast', 1200);
+      // the first attempt of each contest is AUDITED (the voter refused to cast), the second is cast
+      if (!dev.audited[contestId]) {
+        await prompt('ballot_audit', 1200); dev.audited[contestId] = true;
+        return { ballot: null, audit: { election_id: 'eleicoes-exemplo-2026', contest_id: contestId, contest_title: c.title, option_name: c.option_names[optionIndex], ciphertext_hash: '9f' + 'c1'.repeat(31), summary: `continha o voto em ${c.option_names[optionIndex]}` }, submitted: false, board_index: null, note: null, tracker: null };
+      }
+      voted[contestId] = true;
       const rc = live[contestId]; if (rc) rc.votes[optionIndex] += 1;
-      return { ballot: { election_id: 'eleicoes-exemplo-2026', contest_id: contestId, contest_title: c.title, option_index: optionIndex, option_name: c.option_names[optionIndex], voter_key: '03' + 'cd'.repeat(32), signature: 'ef'.repeat(64) }, submitted: true, board_index: 4242, note: null };
+      return { ballot: { election_id: 'eleicoes-exemplo-2026', contest_id: contestId, contest_title: c.title, option_index: 0, option_name: '', voter_key: '03' + 'cd'.repeat(32), signature: 'ef'.repeat(64), encrypted: 'aa' }, audit: null, submitted: true, board_index: 4242, note: null, tracker: 'TK-7QMF-2XKD' };
     },
+    election_check_ballot: async () => { await prompt('check_ballot', 1300); return { recorded: { height: 7, signers: 3, institutions: 4, tracker: 'TK-7QMF-2XKD' }, recorded_note: null, counted: 'Contada: entrou na soma cifrada (os totais só aparecem depois do fechamento).', counted_state: 'counted', revealed: false }; },
     explorer_snapshot: async () => {
       if (!published) return { available: false, reason: 'O quadro de avisos ainda está vazio: publique a eleição.' };
       const cs = contests().map((c) => ({ contest_id: c.contest_id, title: c.title, office: 'governor', scope: c.scope, scope_code: c.scope_code, phase: c.phase, registration_opens: c.voting_opens - 2 * DAY, voting_opens: c.voting_opens, voting_closes: c.voting_closes, registration_required: true, options: c.option_names.map((n, i) => ({ number: String(10 + i), name: n })) }));

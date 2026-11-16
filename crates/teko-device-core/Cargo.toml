@@ -15,6 +15,7 @@ teko-crypto.workspace = true
 teko-attestation.workspace = true
 teko-election.workspace = true
 teko-ballot-crypto.workspace = true
+teko-bft.workspace = true
 teko-wallet.workspace = true
 prost.workspace = true
 zeroize.workspace = true
@@ -28,6 +29,7 @@ teko-assets.workspace = true
 teko-credentials.workspace = true
 p256.workspace = true
 teko-registration.workspace = true
+teko-chain.workspace = true
 proptest.workspace = true
 rand.workspace = true
 

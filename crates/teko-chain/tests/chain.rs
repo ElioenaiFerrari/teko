@@ -108,6 +108,59 @@ fn blocks_chain_and_a_second_replica_rebuilds_exactly_the_same_merkle_log() {
 }
 
 #[test]
+fn every_entry_has_a_certified_block_and_a_proof_that_a_device_can_check_alone() {
+    let (k, mut c) = setup(NetworkKind::Devnet, 4);
+    assert!(c.inclusion_evidence(0).is_none(), "nothing yet");
+    for round in 0..4u8 {
+        let b = decide(
+            &c,
+            &k,
+            &entries(round + 1),
+            1_000 + u64::from(round),
+            &[0, 1, 2],
+        );
+        c.apply(b).unwrap();
+    }
+    let n = c.board().len();
+    for i in 0..n {
+        let ev = c.inclusion_evidence(i).unwrap();
+        let block = ev.decided.block().unwrap();
+        // the FIRST block that holds it
+        assert!(block.log_size > i);
+        let before = c
+            .blocks()
+            .iter()
+            .filter_map(|d| d.block().ok())
+            .filter(|b| b.log_size > i)
+            .map(|b| b.height)
+            .min()
+            .unwrap();
+        assert_eq!(block.height, before);
+        let leaf = c.board().entry(i).unwrap().leaf_hash();
+        let root: [u8; 32] = block.log_root.as_slice().try_into().unwrap();
+        assert!(teko_bulletin::merkle::verify_inclusion(
+            &leaf,
+            i,
+            block.log_size,
+            &ev.proof,
+            &root
+        ));
+        // another entry's leaf does not verify with this proof
+        let other = c.board().entry((i + 1) % n).unwrap().leaf_hash();
+        if other != leaf {
+            assert!(!teko_bulletin::merkle::verify_inclusion(
+                &other,
+                i,
+                block.log_size,
+                &ev.proof,
+                &root
+            ));
+        }
+    }
+    assert!(c.inclusion_evidence(n).is_none());
+}
+
+#[test]
 fn finality_needs_more_than_two_thirds_of_the_institutions() {
     // 4 institutions: 3 are a quorum, 2 are not (so the chain tolerates one failure)
     let (k, mut c) = setup(NetworkKind::Devnet, 4);

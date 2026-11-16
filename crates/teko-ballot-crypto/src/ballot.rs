@@ -44,10 +44,26 @@ pub fn encrypt_ballot<R: Rng + CryptoRng>(
     ctx: &[u8],
     rng: &mut R,
 ) -> Option<EncryptedBallot> {
+    let (b, mut rs) = encrypt_ballot_with(pk, n, choice, ctx, rng)?;
+    rs.zeroize();
+    Some(b)
+}
+
+/// Like `encrypt_ballot`, but also returns the per-option randomness. It exists for ONE use: the
+/// cast-or-audit challenge (ADR-0041), where the device reveals the randomness of a SPOILED ballot
+/// (one that is never signed or cast) so the voter's computer can open it. The caller MUST wipe
+/// the randomness and never reveal it for a ballot that is cast.
+pub fn encrypt_ballot_with<R: Rng + CryptoRng>(
+    pk: &ProjectivePoint,
+    n: usize,
+    choice: usize,
+    ctx: &[u8],
+    rng: &mut R,
+) -> Option<(EncryptedBallot, Vec<Scalar>)> {
     if n == 0 || n > MAX_OPTIONS || choice >= n {
         return None;
     }
-    let mut rs: Vec<Scalar> = (0..n).map(|_| Scalar::random(rng)).collect();
+    let rs: Vec<Scalar> = (0..n).map(|_| Scalar::random(rng)).collect();
     let mut cts = Vec::with_capacity(n);
     let mut bit_proofs = Vec::with_capacity(n);
     for (i, r) in rs.iter().enumerate() {
@@ -58,12 +74,47 @@ pub fn encrypt_ballot<R: Rng + CryptoRng>(
     }
     let r_total = rs.iter().fold(Scalar::ZERO, |a, r| a + *r);
     let sum_proof = prove_sum(pk, &total(&cts), &r_total, ctx, rng);
-    rs.zeroize();
-    Some(EncryptedBallot {
-        cts,
-        bit_proofs,
-        sum_proof,
-    })
+    Some((
+        EncryptedBallot {
+            cts,
+            bit_proofs,
+            sum_proof,
+        },
+        rs,
+    ))
+}
+
+/// Opens a ballot with the randomness that made it: returns the ONE option it encodes, or `None`
+/// if it does not encode exactly one option (or the proofs are invalid, or `rs` is not the
+/// randomness of THIS ballot). This is what the voter's computer runs on an AUDITED ballot to
+/// confirm that the device encrypted the option it was asked to.
+pub fn open_ballot(
+    pk: &ProjectivePoint,
+    n: usize,
+    ctx: &[u8],
+    b: &EncryptedBallot,
+    rs: &[Scalar],
+) -> Option<usize> {
+    if rs.len() != n || !verify_ballot(pk, n, ctx, b) {
+        return None;
+    }
+    let g = ProjectivePoint::GENERATOR;
+    let mut chosen: Option<usize> = None;
+    for (i, (ct, r)) in b.cts.iter().zip(rs).enumerate() {
+        if ct.c1 != g * r {
+            return None;
+        }
+        let m = ct.c2 - pk * r;
+        if m == ProjectivePoint::IDENTITY {
+            continue;
+        }
+        if m == g && chosen.is_none() {
+            chosen = Some(i);
+        } else {
+            return None;
+        }
+    }
+    chosen
 }
 
 pub fn verify_ballot(pk: &ProjectivePoint, n: usize, ctx: &[u8], b: &EncryptedBallot) -> bool {
@@ -167,6 +218,44 @@ mod tests {
         );
         assert!(encrypt_ballot(&pk, 0, 0, CTX, &mut rng).is_none());
         assert!(encrypt_ballot(&pk, MAX_OPTIONS + 1, 0, CTX, &mut rng).is_none());
+    }
+
+    #[test]
+    fn an_audited_ballot_opens_to_exactly_the_option_it_encrypts() {
+        let (_, pk) = keypair(5);
+        let mut rng = StdRng::seed_from_u64(6);
+        for n in [2usize, 5, MAX_OPTIONS] {
+            for choice in [0, n - 1] {
+                let (b, rs) = encrypt_ballot_with(&pk, n, choice, CTX, &mut rng).unwrap();
+                assert_eq!(open_ballot(&pk, n, CTX, &b, &rs), Some(choice));
+                // the plain encrypt gives ballots of the same shape (and drops the randomness)
+                let c = encrypt_ballot(&pk, n, choice, CTX, &mut rng).unwrap();
+                assert!(verify_ballot(&pk, n, CTX, &c));
+            }
+        }
+    }
+
+    #[test]
+    fn a_wrong_randomness_a_tampered_ballot_or_another_context_does_not_open() {
+        let (_, pk) = keypair(7);
+        let mut rng = StdRng::seed_from_u64(8);
+        let n = 4;
+        let (b, rs) = encrypt_ballot_with(&pk, n, 2, CTX, &mut rng).unwrap();
+        let (_, other_rs) = encrypt_ballot_with(&pk, n, 2, CTX, &mut rng).unwrap();
+        assert_eq!(open_ballot(&pk, n, CTX, &b, &other_rs), None);
+        let mut bad = rs.clone();
+        bad[0] += Scalar::ONE;
+        assert_eq!(open_ballot(&pk, n, CTX, &b, &bad), None);
+        assert_eq!(open_ballot(&pk, n, CTX, &b, &rs[..n - 1]), None);
+        assert_eq!(open_ballot(&pk, n, b"outro", &b, &rs), None);
+        let mut t = b.clone();
+        t.cts.swap(0, 2);
+        assert_eq!(open_ballot(&pk, n, CTX, &t, &rs), None);
+        // a ballot that says "this option" to the proofs but encodes ANOTHER (a lying device):
+        // the device encrypts option 1 while the screen said option 2: opening reveals 1, not 2
+        let (lie, lie_rs) = encrypt_ballot_with(&pk, n, 1, CTX, &mut rng).unwrap();
+        assert_eq!(open_ballot(&pk, n, CTX, &lie, &lie_rs), Some(1));
+        assert_ne!(open_ballot(&pk, n, CTX, &lie, &lie_rs), Some(2));
     }
 
     #[test]

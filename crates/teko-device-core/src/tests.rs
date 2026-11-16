@@ -26,10 +26,13 @@ use crate::{Decision, Device, DeviceConfig};
 
 const PIN: &str = "482913";
 const CIVIC_CHAIN: &str = "teko-devnet-1-economy";
+const VOTE_CHAIN: &str = "teko-devnet-1";
 
 struct World {
     /// The civic organ's members (ADR-0038).
     organ: Vec<SigningKey>,
+    /// The vote-chain institutions (ADR-0041).
+    inst: Vec<SigningKey>,
     signers: Vec<SigningKey>,
     gov: Vec<SigningKey>,
     trust: TrustPolicy,
@@ -42,6 +45,7 @@ fn world() -> World {
     let signers: Vec<SigningKey> = (0..3).map(|_| generate_signing_key(&mut rng)).collect();
     let gov: Vec<SigningKey> = (0..3).map(|_| generate_signing_key(&mut rng)).collect();
     let organ: Vec<SigningKey> = (0..3).map(|_| generate_signing_key(&mut rng)).collect();
+    let inst: Vec<SigningKey> = (0..4).map(|_| generate_signing_key(&mut rng)).collect();
     let batch = generate_signing_key(&mut rng);
     let cert = issue_batch_cert(&authority, "lote-test", &public_key_bytes(&batch));
     let trust = TrustPolicy {
@@ -58,6 +62,8 @@ fn world() -> World {
             .iter()
             .map(|k| teko_crypto::ledger_address(&public_key_bytes(k)).to_vec())
             .collect(),
+        vote_chain_id: VOTE_CHAIN.into(),
+        vote_validators: inst.iter().map(public_key_bytes).collect(),
     };
     let factory = FactoryData {
         batch_key: batch.to_bytes().to_vec(),
@@ -65,6 +71,7 @@ fn world() -> World {
     };
     World {
         organ,
+        inst,
         signers,
         gov,
         trust,
@@ -1895,6 +1902,7 @@ fn a_device_bound_to_a_network_refuses_elections_of_any_other_network() {
 mod encrypted {
     use super::*;
     use p256::elliptic_curve::Field;
+    use prost::Message as _;
     use teko_ballot_crypto::{
         EncryptedBallot, Point, Scalar, point_to_bytes, solve_small_dlog,
         verify_ballot as verify_eb,
@@ -1993,6 +2001,352 @@ mod encrypted {
         ]
         .concat();
         assert!(!hay.windows(32).any(|w| w == secret.as_slice()));
+    }
+
+    /// The voter key of a contest, as the host sees it.
+    fn vk(dev: &mut Dev, contest: &str) -> Vec<u8> {
+        match voter_key(dev, contest) {
+            Response::VoterKey(k) => k.voter_key,
+            other => panic!("{other:?}"),
+        }
+    }
+
+    fn commitments(hal: &ScriptedHal) -> Vec<teko_protocol::BallotCommitment> {
+        hal.interim()
+            .into_iter()
+            .filter_map(|r| match r {
+                Response::BallotCommitment(c) => Some(c),
+                _ => None,
+            })
+            .collect()
+    }
+
+    #[test]
+    fn the_voter_can_audit_a_ballot_which_is_spoiled_while_the_real_vote_is_still_available() {
+        let (_, hal, mut dev, x, m) = setup();
+        let pk = Point::GENERATOR * x;
+        let c = m.contest("presidente").unwrap();
+        let n = c.options.len();
+        let key = vk(&mut dev, "presidente");
+        let ctx = ballot_ctx(&m.election_id, "presidente", &key);
+
+        // prompts: "confirm the vote" yes, "cast?" NO, "audit?" yes
+        hal.clear_interim();
+        hal.push_decision(Decision::Confirm);
+        hal.push_decision(Decision::Reject);
+        hal.push_decision(Decision::Confirm);
+        let Response::BallotAudited(a) = vote(&mut dev, "presidente", 2) else {
+            panic!("not audited")
+        };
+        // the device COMMITTED to the ciphertext before the choice, and the audit opens THAT ballot
+        let cm = commitments(&hal);
+        assert_eq!(cm.len(), 1);
+        assert_eq!(cm[0].ciphertext_hash, ciphertext_hash(&cm[0].encrypted));
+        let eb = EncryptedBallot::from_bytes(n, &cm[0].encrypted).unwrap();
+        let rs: Vec<Scalar> = a
+            .randomness
+            .iter()
+            .map(|r| teko_ballot_crypto::scalar_from_bytes(r).unwrap())
+            .collect();
+        assert_eq!(
+            teko_ballot_crypto::open_ballot(&pk, n, &ctx, &eb, &rs),
+            Some(2)
+        );
+        assert_eq!(a.option_position, 2);
+
+        // nothing was recorded: the vote is still available, and the next ballot is a NEW encryption
+        hal.clear_interim();
+        let Response::BallotSignature(b) = vote(&mut dev, "presidente", 2) else {
+            panic!("the real vote must still work after an audit")
+        };
+        assert_ne!(b.encrypted, cm[0].encrypted, "fresh randomness every time");
+        // ...and the randomness that was revealed belongs to the spoiled ballot only
+        let eb2 = EncryptedBallot::from_bytes(n, &b.encrypted).unwrap();
+        assert_eq!(
+            teko_ballot_crypto::open_ballot(&pk, n, &ctx, &eb2, &rs),
+            None
+        );
+        // the device refuses a second ballot in this contest
+        let r = vote(&mut dev, "presidente", 1);
+        assert_eq!(failure_code(&r), Some(ErrorCode::AlreadyVoted));
+    }
+
+    #[test]
+    fn what_is_cast_is_exactly_what_was_committed_and_its_randomness_is_never_revealed_or_stored() {
+        let (_, hal, mut dev, _, m) = setup();
+        hal.clear_interim();
+        let Response::BallotSignature(b) = vote(&mut dev, "presidente", 1) else {
+            panic!()
+        };
+        let cm = commitments(&hal);
+        assert_eq!(cm.len(), 1);
+        assert_eq!(
+            cm[0].encrypted, b.encrypted,
+            "the cast ballot is the committed one"
+        );
+        // no response of a CAST ballot carries anything but ciphertext, hashes and the signature
+        assert!(
+            hal.interim()
+                .iter()
+                .all(|r| !matches!(r, Response::BallotAudited(_)))
+        );
+        // the device keeps only public hashes about it, never the option or the randomness
+        let stored = hal.raw_storage().unwrap();
+        let p = crate::state::Persisted::decode(stored.as_slice()).unwrap();
+        assert_eq!(p.vote_records.len(), 1);
+        let rec = &p.vote_records[0];
+        assert_eq!(rec.contest_id, "presidente");
+        assert_eq!(
+            rec.contest_hash,
+            contest_hash(m.contest("presidente").unwrap()).to_vec()
+        );
+        // the recorded leaf is the leaf of the entry the host will publish (ADR-0041)
+        let entry = teko_election::SubmittedBallot {
+            election_id: m.election_id.clone(),
+            contest_id: "presidente".into(),
+            contest_hash: rec.contest_hash.clone(),
+            option_index: 0,
+            voter_key: b.voter_key.clone(),
+            signature: b.signature.clone(),
+            encrypted: b.encrypted.clone(),
+        };
+        let mut data = vec![4u8];
+        data.extend_from_slice(&prost::Message::encode_to_vec(&entry));
+        let leaf = teko_crypto::tagged_hash(teko_crypto::tags::BULLETIN_LEAF, &[data.as_slice()]);
+        assert_eq!(rec.leaf_hash, leaf.to_vec());
+        // the tracker on the device screen is that leaf's
+        let shown = hal
+            .screens()
+            .into_iter()
+            .rev()
+            .find(|s| s.title == "VOTO REGISTRADO")
+            .unwrap();
+        assert!(shown.lines.contains(&teko_crypto::tracker(&leaf)));
+        // a wipe erases the record
+        dev.handle(Request::Wipe(Wipe {}));
+        let after = crate::state::Persisted::decode(hal.raw_storage().unwrap().as_slice()).unwrap();
+        assert!(after.vote_records.is_empty());
+    }
+
+    /// Casts a ballot and returns what the host would publish, with a vote-chain block around it.
+    struct Cast {
+        leaf: [u8; 32],
+        index: u64,
+        proof: Vec<Vec<u8>>,
+        block: Vec<u8>,
+        height: u64,
+    }
+
+    fn cast_and_block(w: &World, dev: &mut Dev, m: &ElectionManifest) -> Cast {
+        let Response::BallotSignature(b) = vote(dev, "presidente", 1) else {
+            panic!("no ballot")
+        };
+        let entry = teko_election::SubmittedBallot {
+            election_id: m.election_id.clone(),
+            contest_id: "presidente".into(),
+            contest_hash: contest_hash(m.contest("presidente").unwrap()).to_vec(),
+            option_index: 0,
+            voter_key: b.voter_key,
+            signature: b.signature,
+            encrypted: b.encrypted,
+        };
+        let mut data = vec![4u8];
+        data.extend_from_slice(&prost::Message::encode_to_vec(&entry));
+        let leaf = teko_crypto::merkle::leaf_hash(&data);
+        // other people's leaves around it
+        let mut leaves: Vec<[u8; 32]> = (0u8..5)
+            .map(|i| teko_crypto::merkle::leaf_hash(&[i]))
+            .collect();
+        leaves.insert(3, leaf);
+        let proof = teko_crypto::merkle::inclusion_proof(&leaves, 3).unwrap();
+        let _ = w;
+        let block = teko_chain::Block {
+            chain_id: VOTE_CHAIN.into(),
+            height: 7,
+            prev_hash: vec![0; 32],
+            timestamp: 1,
+            proposer: Vec::new(),
+            entries: Vec::new(),
+            log_size: leaves.len() as u64,
+            log_root: teko_crypto::merkle::root(&leaves).to_vec(),
+        };
+        Cast {
+            leaf,
+            index: 3,
+            proof: proof.iter().map(|h| h.to_vec()).collect(),
+            block: prost::Message::encode_to_vec(&block),
+            height: 7,
+        }
+    }
+
+    fn certify(w: &World, c: &Cast, signers: &[usize], chain: &str) -> Vec<u8> {
+        let id = teko_bft::block_id(&c.block);
+        let commit = teko_bft::Commit {
+            height: c.height,
+            round: 0,
+            block_id: id.clone(),
+            precommits: signers
+                .iter()
+                .map(|i| {
+                    teko_bft::Vote::new(
+                        chain,
+                        &w.inst[*i],
+                        teko_bft::VoteKind::Precommit,
+                        c.height,
+                        0,
+                        Some(&id),
+                    )
+                })
+                .collect(),
+        };
+        prost::Message::encode_to_vec(&commit)
+    }
+
+    fn check(
+        dev: &mut Dev,
+        m: &ElectionManifest,
+        c: &Cast,
+        commit: Vec<u8>,
+        block: Option<Vec<u8>>,
+    ) -> Response {
+        dev.handle(Request::CheckMyBallot(teko_protocol::CheckMyBallot {
+            election_id: m.election_id.clone(),
+            contest_id: "presidente".into(),
+            block: block.unwrap_or_else(|| c.block.clone()),
+            commit,
+            index: c.index,
+            proof: c.proof.clone(),
+        }))
+    }
+
+    #[test]
+    fn the_device_checks_alone_that_its_ballot_is_in_a_certified_block() {
+        let (w, hal, mut dev, _, m) = setup();
+        let c = cast_and_block(&w, &mut dev, &m);
+        let commit = certify(&w, &c, &[0, 1, 2], VOTE_CHAIN);
+        let Response::BallotRecorded(r) = check(&mut dev, &m, &c, commit, None) else {
+            panic!("not recorded")
+        };
+        assert_eq!((r.height, r.signers, r.institutions), (7, 3, 4));
+        assert_eq!(r.tracker, teko_crypto::tracker(&c.leaf));
+        // the screen shows the tracker and never the vote
+        let s = hal
+            .screens()
+            .into_iter()
+            .rev()
+            .find(|s| s.title == "SUA CÉDULA ESTÁ REGISTRADA")
+            .unwrap();
+        assert!(s.lines.contains(&r.tracker));
+    }
+
+    #[test]
+    fn the_device_refuses_what_it_cannot_prove_by_itself() {
+        let (w, _, mut dev, _, m) = setup();
+        let c = cast_and_block(&w, &mut dev, &m);
+        let good = certify(&w, &c, &[0, 1, 2], VOTE_CHAIN);
+        let refused = |r: &Response| failure_code(r) == Some(ErrorCode::BadSignature);
+        // 2 of 4 institutions: not more than 2/3
+        assert!(refused(&check(
+            &mut dev,
+            &m,
+            &c,
+            certify(&w, &c, &[0, 1], VOTE_CHAIN),
+            None
+        )));
+        // certificate of another network
+        assert!(refused(&check(
+            &mut dev,
+            &m,
+            &c,
+            certify(&w, &c, &[0, 1, 2], "outra-rede"),
+            None
+        )));
+        // a block that is not the certified one
+        let mut other = c.block.clone();
+        other.push(0);
+        assert!(refused(&check(&mut dev, &m, &c, good.clone(), Some(other))));
+        // a leaf that is not mine / a wrong proof
+        let mut c2 = Cast {
+            leaf: c.leaf,
+            index: 2,
+            proof: c.proof.clone(),
+            block: c.block.clone(),
+            height: c.height,
+        };
+        assert!(refused(&check(&mut dev, &m, &c2, good.clone(), None)));
+        c2.index = 3;
+        c2.proof[0][0] ^= 1;
+        assert!(refused(&check(&mut dev, &m, &c2, good.clone(), None)));
+        // a contest this device did not vote in
+        let r = dev.handle(Request::CheckMyBallot(teko_protocol::CheckMyBallot {
+            election_id: m.election_id.clone(),
+            contest_id: "governador-sp".into(),
+            block: c.block.clone(),
+            commit: good.clone(),
+            index: c.index,
+            proof: c.proof.clone(),
+        }));
+        assert_eq!(failure_code(&r), Some(ErrorCode::InvalidArgument));
+        // and the real thing still works afterwards
+        assert!(matches!(
+            check(&mut dev, &m, &c, good, None),
+            Response::BallotRecorded(_)
+        ));
+    }
+
+    #[test]
+    fn the_check_needs_the_button_the_unlocked_device_and_a_trusted_vote_network() {
+        let (w, hal, mut dev, _, m) = setup();
+        let c = cast_and_block(&w, &mut dev, &m);
+        let good = certify(&w, &c, &[0, 1, 2], VOTE_CHAIN);
+        hal.push_decision(Decision::Reject);
+        assert_eq!(
+            failure_code(&check(&mut dev, &m, &c, good.clone(), None)),
+            Some(ErrorCode::UserRejected)
+        );
+        // a rebooted device is locked until the PIN is typed on it
+        let mut rebooted = boot(&w, &hal, 8);
+        assert!(failure_code(&check(&mut rebooted, &m, &c, good, None)).is_some());
+    }
+
+    #[test]
+    fn a_device_that_trusts_no_vote_network_checks_nothing() {
+        let mut w = world();
+        w.trust.vote_chain_id = String::new();
+        w.trust.vote_validators = Vec::new();
+        let hal = ScriptedHal::new();
+        let mut dev = boot(&w, &hal, 8);
+        let blob = vec![1u8; 64];
+        install_fw(&mut dev, &manifest(&w, 1, &blob, &[0, 1]), &blob);
+        hal.set_default_pin(Some(PIN));
+        dev.handle(Request::SetupPin(SetupPin {}));
+        create_wallet(&mut dev, &hal);
+        let r = dev.handle(Request::CheckMyBallot(
+            teko_protocol::CheckMyBallot::default(),
+        ));
+        assert!(failure_code(&r).is_some());
+    }
+
+    #[test]
+    fn refusing_both_the_cast_and_the_audit_cancels_and_records_nothing() {
+        let (_, hal, mut dev, _, _) = setup();
+        hal.push_decision(Decision::Confirm);
+        hal.push_decision(Decision::Reject); // not cast
+        hal.push_decision(Decision::Reject); // not audited either
+        let r = vote(&mut dev, "presidente", 0);
+        assert_eq!(failure_code(&r), Some(ErrorCode::UserRejected));
+        let stored = hal.raw_storage().unwrap();
+        let p = crate::state::Persisted::decode(stored.as_slice()).unwrap();
+        assert!(p.vote_records.is_empty() && p.ballots_signed.is_empty());
+        // a timeout at the choice is a failure, never a vote
+        hal.push_decision(Decision::Confirm);
+        hal.push_decision(Decision::Timeout);
+        let r = vote(&mut dev, "presidente", 0);
+        assert_eq!(failure_code(&r), Some(ErrorCode::Timeout));
+        assert!(matches!(
+            vote(&mut dev, "presidente", 0),
+            Response::BallotSignature(_)
+        ));
     }
 
     #[test]

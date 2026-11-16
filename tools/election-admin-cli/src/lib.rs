@@ -233,6 +233,15 @@ pub fn tally_board(policy: &GovernancePolicy, board: &impl BulletinBoard) -> Ele
     )
 }
 
+/// The verdict on one ballot, plus where the contest's totals stand.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct BallotStatus {
+    pub verdict: teko_election::BallotVerdict,
+    /// The contest's totals are decrypted and verified.
+    pub revealed: bool,
+    pub encrypted: bool,
+}
+
 pub struct Admin {
     dir: PathBuf,
     policy: GovernancePolicy,
@@ -501,6 +510,30 @@ impl Admin {
         let mut t = self.new_tallier();
         feed_new(&mut t, &board);
         Ok(t.snapshot())
+    }
+
+    /// What the tally did with THIS ballot (ADR-0041): counted, or refused and why. Replays the
+    /// verified board, so it does not depend on anyone's word. `None` if the ballot is not on the
+    /// board. Also says whether the contest's totals are already decrypted.
+    pub fn ballot_verdict(&self, payload: &[u8]) -> Result<Option<BallotStatus>, AdminError> {
+        let board = self.read_board()?;
+        if board.is_empty() {
+            return Err(AdminError::NotPublished);
+        }
+        let mut t = self.new_tallier();
+        t.watch_ballot(payload);
+        feed_new(&mut t, &board);
+        let Some(verdict) = t.verdict_of(payload) else {
+            return Ok(None);
+        };
+        let contest = SubmittedBallot::decode(payload)
+            .ok()
+            .and_then(|b| t.snapshot().contest(&b.contest_id).cloned());
+        Ok(Some(BallotStatus {
+            verdict,
+            revealed: contest.as_ref().is_some_and(|c| c.revealed),
+            encrypted: contest.as_ref().is_some_and(|c| c.encrypted),
+        }))
     }
 
     #[cfg(feature = "operator")]

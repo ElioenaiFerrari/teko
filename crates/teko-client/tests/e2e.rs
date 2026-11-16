@@ -85,6 +85,14 @@ impl Rig {
     }
 }
 
+/// The four TEST institutions of the vote chain.
+fn vote_institutions() -> Vec<teko_crypto::SigningKey> {
+    let mut rng = rand::rngs::StdRng::seed_from_u64(31337);
+    (0..4)
+        .map(|_| teko_crypto::generate_signing_key(&mut rng))
+        .collect()
+}
+
 fn start() -> Rig {
     let issuer = Issuer::open(scratch_dir("e2e"));
     let mut trust = issuer.dev_setup().unwrap();
@@ -97,6 +105,12 @@ fn start() -> Rig {
     trust.civic_members = organ
         .iter()
         .map(|k| teko_crypto::ledger_address(&teko_crypto::public_key_bytes(k)).to_vec())
+        .collect();
+    // The vote-chain institutions the device trusts to certify blocks (ADR-0041)
+    trust.vote_chain_id = "teko-devnet-1".into();
+    trust.vote_validators = vote_institutions()
+        .iter()
+        .map(teko_crypto::public_key_bytes)
         .collect();
     fs::write(issuer.dir().join("trust.txt"), trust.to_text()).unwrap();
     let factory = issuer.provision_device().unwrap();
@@ -824,6 +838,198 @@ fn an_encrypted_election_the_device_encrypts_the_vote_and_the_public_tally_canno
         (1, 0, true, false)
     );
     assert!(p.options.iter().all(|o| o.votes == 0));
+    let _ = fs::remove_dir_all(rig.issuer.dir());
+}
+
+#[test]
+fn the_voter_audits_a_test_ballot_on_the_device_and_then_casts_the_real_one() {
+    use p256::elliptic_curve::Field;
+    use teko_ballot_crypto::{Point, Scalar, point_to_bytes};
+    use teko_client::BallotOutcome;
+    let rig = start();
+    let x = Scalar::random(&mut rand::rngs::StdRng::seed_from_u64(6));
+    let net = rig.issuer.dir().join("net");
+    fs::create_dir_all(&net).unwrap();
+    fs::write(
+        net.join("tally-key.pub"),
+        teko_crypto::hex::encode(&point_to_bytes(&(Point::GENERATOR * x))),
+    )
+    .unwrap();
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_secs();
+    rig.issuer.dev_election(now).unwrap();
+    let mut c = connect(&rig);
+    onboard(&rig, &mut c);
+    let e = c.load_election(&rig.trust, &election_bundle(&rig)).unwrap();
+    let eid = e.election_id.clone();
+    let req = c.begin_registration(&eid, "presidente").unwrap();
+    let sig = rig
+        .issuer
+        .sign_registration(&eid, "presidente", &req, &rig.lookup())
+        .unwrap();
+    c.finish_registration(&eid, "presidente", &sig).unwrap();
+
+    // 1st attempt: the voter refuses to cast and chooses to AUDIT on the device
+    rig.hal.push_decision(Decision::Confirm); // "your vote: X"
+    rig.hal.push_decision(Decision::Reject); // not cast
+    rig.hal.push_decision(Decision::Confirm); // audit
+    match c.sign_ballot_or_audit(&eid, "presidente", 1).unwrap() {
+        BallotOutcome::Audited(a) => assert!(a.summary.contains("continha o voto em"), "{a:?}"),
+        BallotOutcome::Cast(_) => panic!("must have been audited"),
+    }
+    // 2nd attempt: cast for real; the voting record was not touched by the audit
+    match c.sign_ballot_or_audit(&eid, "presidente", 1).unwrap() {
+        BallotOutcome::Cast(b) => assert!(!b.encrypted.is_empty()),
+        BallotOutcome::Audited(_) => panic!("must have been cast"),
+    }
+    // and now the device refuses a second ballot in this contest
+    assert_eq!(
+        device_code(c.sign_ballot_or_audit(&eid, "presidente", 1).unwrap_err()),
+        ErrorCode::AlreadyVoted
+    );
+    let _ = fs::remove_dir_all(rig.issuer.dir());
+}
+
+#[test]
+fn the_device_checks_alone_that_its_ballot_is_final_on_the_vote_chain() {
+    use prost::Message;
+    use teko_bft::{Commit, Vote, VoteKind, block_id};
+    use teko_bulletin::{BulletinBoard, Entry, EntryKind};
+    use teko_chain::{Chain, DecidedBlock, NetworkKind, NetworkProfile};
+    use teko_crypto::public_key_bytes;
+    let rig = start();
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_secs();
+    rig.issuer.dev_election(now).unwrap();
+    let mut c = connect(&rig);
+    onboard(&rig, &mut c);
+    let e = c.load_election(&rig.trust, &election_bundle(&rig)).unwrap();
+    let eid = e.election_id.clone();
+    let ballot = c.sign_ballot(&eid, "presidente", 1).unwrap();
+    let voter_key = teko_crypto::hex::decode(&ballot.voter_key).unwrap();
+    let submitted = teko_election::SubmittedBallot {
+        election_id: eid.clone(),
+        contest_id: "presidente".into(),
+        contest_hash: teko_crypto::hex::decode(&ballot.contest_hash).unwrap(),
+        option_index: 1,
+        voter_key: voter_key.clone(),
+        signature: teko_crypto::hex::decode(&ballot.signature).unwrap(),
+        encrypted: Vec::new(),
+    };
+
+    // The vote chain: 4 institutions, other people's entries, and OUR ballot in the middle.
+    let keys = vote_institutions();
+    let profile = NetworkProfile::new(
+        NetworkKind::Devnet,
+        keys.iter().map(public_key_bytes).collect(),
+        2,
+    )
+    .unwrap();
+    assert_eq!(profile.chain_id, rig.trust.vote_chain_id);
+    let mut chain = Chain::new(profile);
+    let decide = |chain: &Chain, es: &[Entry], at: u64, who: &[usize]| {
+        let set = chain.validator_set().unwrap();
+        let p = set.proposer(chain.height() + 1, 0).key.clone();
+        let pi = keys.iter().position(|k| public_key_bytes(k) == p).unwrap();
+        let payload = chain.propose(&public_key_bytes(&keys[pi]), es, at);
+        let (h, id) = (chain.height() + 1, block_id(&payload));
+        DecidedBlock {
+            payload,
+            commit: Some(Commit {
+                height: h,
+                round: 0,
+                block_id: id.clone(),
+                precommits: who
+                    .iter()
+                    .map(|i| {
+                        Vote::new(
+                            &chain.profile().chain_id,
+                            &keys[*i],
+                            VoteKind::Precommit,
+                            h,
+                            0,
+                            Some(&id),
+                        )
+                    })
+                    .collect(),
+            }),
+        }
+    };
+    let others = |n: u8| -> Vec<Entry> {
+        (0..n)
+            .map(|i| Entry::new(EntryKind::MANIFEST, vec![i; 30]))
+            .collect()
+    };
+    let b1 = decide(&chain, &others(3), now, &[0, 1, 2]);
+    chain.apply(b1).unwrap();
+    let mut es = others(2);
+    es.push(Entry::new(EntryKind::BALLOT, submitted.encode_to_vec()));
+    let b2 = decide(&chain, &es, now + 1, &[0, 1, 2]);
+    chain.apply(b2).unwrap();
+    let b3 = decide(&chain, &others(2), now + 2, &[1, 2, 3]);
+    chain.apply(b3).unwrap();
+
+    // the Suite side: find the ballot by the voter key, bring the evidence
+    let index = (0..chain.board().len())
+        .find(|&i| {
+            chain.board().entry(i).is_some_and(|en| {
+                en.kind == EntryKind::BALLOT
+                    && teko_election::SubmittedBallot::decode(en.payload.as_slice())
+                        .is_ok_and(|b| b.voter_key == voter_key)
+            })
+        })
+        .unwrap();
+    let ev = chain.inclusion_evidence(index).unwrap();
+    assert_eq!(
+        ev.decided.block().unwrap().height,
+        2,
+        "the FIRST block that holds it"
+    );
+    let commit_bytes = ev.decided.commit.as_ref().unwrap().encode_to_vec();
+    let r = c
+        .check_my_ballot(
+            &eid,
+            "presidente",
+            ev.decided.payload.clone(),
+            commit_bytes.clone(),
+            index,
+            &ev.proof,
+        )
+        .unwrap();
+    assert_eq!((r.height, r.signers, r.institutions), (2, 3, 4));
+    assert!(r.tracker.starts_with("TK-"));
+
+    // a forged certificate (1 of 4) and a proof for another position are refused by the DEVICE
+    let weak = Commit {
+        precommits: ev.decided.commit.as_ref().unwrap().precommits[..1].to_vec(),
+        ..ev.decided.commit.clone().unwrap()
+    };
+    let err = c
+        .check_my_ballot(
+            &eid,
+            "presidente",
+            ev.decided.payload.clone(),
+            weak.encode_to_vec(),
+            index,
+            &ev.proof,
+        )
+        .unwrap_err();
+    assert_eq!(device_code(err), ErrorCode::BadSignature);
+    let err = c
+        .check_my_ballot(
+            &eid,
+            "presidente",
+            ev.decided.payload.clone(),
+            commit_bytes,
+            index + 1,
+            &ev.proof,
+        )
+        .unwrap_err();
+    assert_eq!(device_code(err), ErrorCode::BadSignature);
     let _ = fs::remove_dir_all(rig.issuer.dir());
 }
 

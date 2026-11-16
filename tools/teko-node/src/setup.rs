@@ -280,14 +280,18 @@ pub fn sync_civic_trust(dir: &Path, g: &teko_economy::EconomyGenesis) -> Result<
     let Ok(text) = fs::read_to_string(&trust_path) else {
         return Ok(());
     };
-    let Some(civic) = g.credtypes.iter().find(|c| c.name == "civic") else {
-        return Ok(());
-    };
     let mut trust = teko_attestation::TrustPolicy::parse(&text)
         .map_err(|e| NodeError::Protocol(format!("trust.txt: {e}")))?;
-    trust.civic_chain_id.clone_from(&g.chain_id);
-    trust.civic_threshold = civic.threshold as usize;
-    trust.civic_members = civic.members.iter().map(|a| a.to_vec()).collect();
+    if let Some(civic) = g.credtypes.iter().find(|c| c.name == "civic") {
+        trust.civic_chain_id.clone_from(&g.chain_id);
+        trust.civic_threshold = civic.threshold as usize;
+        trust.civic_members = civic.members.iter().map(|a| a.to_vec()).collect();
+    }
+    // the vote-chain institutions: the device checks its ballot's certificate against them (ADR-0041)
+    if !g.vote_validators.is_empty() && !g.coin.vote_chain_id.is_empty() {
+        trust.vote_chain_id.clone_from(&g.coin.vote_chain_id);
+        trust.vote_validators = g.vote_validators.clone();
+    }
     fs::write(&trust_path, trust.to_text())?;
     Ok(())
 }

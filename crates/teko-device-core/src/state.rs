@@ -47,4 +47,23 @@ pub struct Persisted {
     /// The wallet was derived with a BIP-39 passphrase (the passphrase is NOT stored).
     #[prost(bool, tag = "15")]
     pub wallet_passphrase: bool,
+    /// What the device keeps about the ballots it cast, to check later that each is recorded
+    /// (ADR-0041): ONLY public hashes. Never the option, never the randomness.
+    #[prost(message, repeated, tag = "16")]
+    pub vote_records: Vec<VoteRecord>,
+}
+
+/// A ballot this device cast. Nothing here reveals the vote: the leaf hash is of an entry the
+/// board already shows (the ciphertext is public).
+#[derive(Clone, PartialEq, Message)]
+pub struct VoteRecord {
+    #[prost(string, tag = "1")]
+    pub election_id: alloc::string::String,
+    #[prost(string, tag = "2")]
+    pub contest_id: alloc::string::String,
+    #[prost(bytes = "vec", tag = "3")]
+    pub contest_hash: Vec<u8>,
+    /// Merkle leaf hash of the `BALLOT` entry on the board.
+    #[prost(bytes = "vec", tag = "4")]
+    pub leaf_hash: Vec<u8>,
 }

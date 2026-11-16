@@ -17,7 +17,7 @@ use teko_crypto::civic::{
 use teko_crypto::credential::{Claim, claim_digest};
 use teko_crypto::{
     SigningKey, canonical_service_id, civic_id, derive_key, derive_signing_key, pairwise_id,
-    public_key_bytes, sign_tagged, tags, voter,
+    public_key_bytes, sign_tagged, tagged_hash, tags, voter,
 };
 use teko_election::ballot_ctx;
 use teko_election::{
@@ -432,6 +432,7 @@ impl<H: Hal, R: Rng + CryptoRng> Device<H, R> {
             Request::OpenCredentialBundle(m) => {
                 self.open_credential_bundle(&m.ctype, &m.subject, &m.sealed)
             }
+            Request::CheckMyBallot(m) => self.check_my_ballot(&m),
             Request::SignCredentialOp(m) => self.sign_credential_op(&m),
             Request::SignStake(m) => {
                 self.sign_stake(&m.chain_id, m.action, m.amount, m.fee, m.nonce)
@@ -2187,23 +2188,86 @@ impl<H: Hal, R: Rng + CryptoRng> Device<H, R> {
         let key = voter::derive_voter_key(&root, election_id, contest_id)
             .map_err(|_| fail(ErrorCode::Internal, "chave de eleitor"))?;
         let voter_pk = public_key_bytes(&key);
-        // In encrypted mode the DEVICE encrypts and proves: the randomness is made here
-        // and wiped inside `encrypt_ballot`; the host only gets ciphertexts. The signed
-        // body carries the ciphertext hash, never the option.
+        // In encrypted mode the DEVICE encrypts and proves: the host only gets ciphertexts. The
+        // signed body carries the ciphertext hash, never the option.
         let (body_option, ciphertext_hash, encrypted) = if encrypted_mode {
             let pk = teko_ballot_crypto::point_from_bytes(&manifest.tally_key)
                 .ok_or_else(|| fail(ErrorCode::Internal, "chave da eleição inválida"))?;
             let ctx = ballot_ctx(election_id, contest_id, &voter_pk);
-            let eb = teko_ballot_crypto::encrypt_ballot(
-                &pk,
-                contest.options.len(),
-                position,
-                &ctx,
-                &mut self.rng,
-            )
-            .ok_or_else(|| fail(ErrorCode::Internal, "cifra da cédula falhou"))?;
+            let n = contest.options.len();
+            let (eb, mut rs) =
+                teko_ballot_crypto::encrypt_ballot_with(&pk, n, position, &ctx, &mut self.rng)
+                    .ok_or_else(|| fail(ErrorCode::Internal, "cifra da cédula falhou"))?;
             let bytes = eb.to_bytes();
-            (0, teko_election::ciphertext_hash(&bytes), bytes)
+            let hash = teko_election::ciphertext_hash(&bytes);
+            // CAST OR AUDIT (ADR-0041): the device COMMITS to this ciphertext first (the host gets
+            // it now), and only then does the voter choose, on the device. A device that encrypted
+            // something else cannot know whether this ballot will be audited.
+            self.hal.notify(&Response::BallotCommitment(
+                teko_protocol::BallotCommitment {
+                    ciphertext_hash: hash.clone(),
+                    encrypted: bytes.clone(),
+                },
+            ));
+            let cast = match self.confirm(
+                ButtonKind::BallotCast,
+                Screen::new(
+                    "VOTAR OU AUDITAR?",
+                    Vec::from([
+                        String::from("CONFIRMAR = VOTAR: esta"),
+                        String::from("cédula será o seu voto."),
+                        String::from("RECUSAR = voltar e, se"),
+                        String::from("quiser, AUDITAR esta"),
+                        String::from("cédula de teste."),
+                    ]),
+                ),
+            ) {
+                Ok(()) => true,
+                Err(f) if f.code() == ErrorCode::UserRejected => false,
+                Err(f) => {
+                    rs.zeroize();
+                    return Err(f);
+                }
+            };
+            if !cast {
+                let audit = self.confirm(
+                    ButtonKind::BallotAudit,
+                    Screen::new(
+                        "AUDITAR CÉDULA?",
+                        Vec::from([
+                            String::from("Esta cédula NÃO será"),
+                            String::from("votada: o dispositivo"),
+                            String::from("mostrará ao computador"),
+                            String::from("em quem ela votava e"),
+                            String::from("como a cifrou, para ele"),
+                            String::from("conferir. Depois você"),
+                            String::from("poderá votar de verdade."),
+                        ]),
+                    ),
+                );
+                return match audit {
+                    Ok(()) => {
+                        let randomness: Vec<Vec<u8>> = rs
+                            .iter()
+                            .map(|r| teko_ballot_crypto::scalar_to_bytes(r).to_vec())
+                            .collect();
+                        rs.zeroize();
+                        // the voting record is untouched: auditing does not use the vote
+                        Ok(Response::BallotAudited(teko_protocol::BallotAudited {
+                            option_position: position as u32,
+                            randomness,
+                            voter_key: voter_pk.clone(),
+                        }))
+                    }
+                    Err(f) => {
+                        rs.zeroize();
+                        Err(f)
+                    }
+                };
+            }
+            // CAST: the randomness is wiped and never leaves the device
+            rs.zeroize();
+            (0, hash, bytes)
         } else {
             (option_index, Vec::new(), Vec::new())
         };
@@ -2217,14 +2281,147 @@ impl<H: Hal, R: Rng + CryptoRng> Device<H, R> {
                 ciphertext_hash,
             },
         );
+        // What the board will hold, and its Merkle leaf: public, so safe to keep. It lets the
+        // device check later, ALONE, that this very ballot is recorded (ADR-0041).
+        let entry = teko_election::SubmittedBallot {
+            election_id: String::from(election_id),
+            contest_id: String::from(contest_id),
+            contest_hash: chash.to_vec(),
+            option_index: body_option,
+            voter_key: voter_pk.clone(),
+            signature: signature.clone(),
+            encrypted: encrypted.clone(),
+        };
+        let mut leaf_data = Vec::from([BOARD_BALLOT_KIND]);
+        leaf_data.extend_from_slice(&entry.encode_to_vec());
+        let leaf = tagged_hash(tags::BULLETIN_LEAF, &[leaf_data.as_slice()]);
         // Record BEFORE releasing the signature: a crash can lose the delivery,
         // but can never leave a signature out that the device forgot it made.
         self.p.ballots_signed.push(chash.to_vec());
+        self.p.vote_records.push(crate::state::VoteRecord {
+            election_id: String::from(election_id),
+            contest_id: String::from(contest_id),
+            contest_hash: chash.to_vec(),
+            leaf_hash: leaf.to_vec(),
+        });
         self.save()?;
+        // the tracker is on the screen too: the voter can compare it later
+        self.hal.show(&Screen::new(
+            "VOTO REGISTRADO",
+            Vec::from([
+                String::from("Rastreador da sua cédula:"),
+                teko_crypto::tracker(&leaf),
+                String::from("(só identifica a cédula,"),
+                String::from("não revela o voto)"),
+            ]),
+        ));
         Ok(Response::BallotSignature(BallotSignature {
             signature,
             voter_key: voter_pk,
             encrypted,
+        }))
+    }
+
+    /// Checks, ALONE, that the ballot this device cast is in a block of the vote chain certified by
+    /// more than 2/3 of the institutions in the trust file (ADR-0041). Nothing is taken on trust
+    /// from the host: the certificate, the chain, the block hash and the Merkle proof are all
+    /// re-verified here against the leaf hash the device itself kept. The answer carries only
+    /// public facts; the option never leaves the device (it is not even stored).
+    fn check_my_ballot(&mut self, m: &teko_protocol::CheckMyBallot) -> Result<Response, Failure> {
+        self.require_ready()?;
+        let rec = self
+            .p
+            .vote_records
+            .iter()
+            .find(|r| r.election_id == m.election_id && r.contest_id == m.contest_id)
+            .cloned()
+            .ok_or_else(|| fail(ErrorCode::InvalidArgument, "este dispositivo não votou aí"))?;
+        if self.trust.vote_chain_id.is_empty() {
+            return Err(fail(
+                ErrorCode::InvalidState,
+                "este dispositivo não confia em nenhuma rede de votos",
+            ));
+        }
+        let leaf: [u8; 32] = rec
+            .leaf_hash
+            .as_slice()
+            .try_into()
+            .map_err(|_| fail(ErrorCode::Internal, "registro do voto corrompido"))?;
+        self.confirm(
+            ButtonKind::CheckBallot,
+            Screen::new(
+                "CONFERIR MINHA CÉDULA?",
+                Vec::from([
+                    String::from("O dispositivo vai conferir,"),
+                    String::from("sozinho, que a sua cédula"),
+                    String::from("está no quadro, certificada"),
+                    String::from("pelas instituições."),
+                    String::from("O seu voto não é mostrado."),
+                ]),
+            ),
+        )?;
+        let bad = |why: &'static str| fail(ErrorCode::BadSignature, why);
+        let validators: Vec<teko_bft::Validator> = self
+            .trust
+            .vote_validators
+            .iter()
+            .map(|k| teko_bft::Validator {
+                key: k.clone(),
+                power: 1,
+            })
+            .collect();
+        let set = teko_bft::ValidatorSet::new(validators).map_err(|_| {
+            fail(
+                ErrorCode::Internal,
+                "instituições da rede de votos inválidas",
+            )
+        })?;
+        let commit = <teko_bft::Commit as prost::Message>::decode(m.commit.as_slice())
+            .map_err(|_| bad("certificado malformado"))?;
+        if !commit.verify(&self.trust.vote_chain_id, &set) {
+            return Err(bad(
+                "o certificado NÃO tem mais de 2/3 das instituições em que o dispositivo confia",
+            ));
+        }
+        if teko_bft::block_id(&m.block) != commit.block_id {
+            return Err(bad("o bloco não é o que as instituições certificaram"));
+        }
+        let view = <BlockView as prost::Message>::decode(m.block.as_slice())
+            .map_err(|_| bad("bloco malformado"))?;
+        if view.chain_id != self.trust.vote_chain_id || view.height != commit.height {
+            return Err(bad("bloco de outra rede ou de outra altura"));
+        }
+        let root: [u8; 32] = view
+            .log_root
+            .as_slice()
+            .try_into()
+            .map_err(|_| bad("raiz do quadro inválida"))?;
+        let proof: Option<Vec<[u8; 32]>> = m
+            .proof
+            .iter()
+            .map(|h| <[u8; 32]>::try_from(h.as_slice()).ok())
+            .collect();
+        let proof = proof.ok_or_else(|| bad("prova de inclusão malformada"))?;
+        if !teko_crypto::merkle::verify_inclusion(&leaf, m.index, view.log_size, &proof, &root) {
+            return Err(bad("a sua cédula NÃO está neste bloco"));
+        }
+        let tracker = teko_crypto::tracker(&leaf);
+        let signers = commit.precommits.len() as u32;
+        let institutions = set.validators().len() as u32;
+        self.hal.show(&Screen::new(
+            "SUA CÉDULA ESTÁ REGISTRADA",
+            Vec::from([
+                format!("Bloco #{}", view.height),
+                format!("Certificado: {signers} de {institutions}"),
+                String::from("Rastreador:"),
+                tracker.clone(),
+            ]),
+        ));
+        Ok(Response::BallotRecorded(teko_protocol::BallotRecorded {
+            height: view.height,
+            signers,
+            institutions,
+            tracker,
         }))
     }
 
@@ -2434,6 +2631,23 @@ fn credential_seal_context(ctype: &str, subject: &[u8]) -> Vec<u8> {
     c.extend_from_slice(subject);
     c
 }
+
+/// The few fields of a vote-chain block the device reads. The block id (a hash of the WHOLE payload)
+/// is what the institutions signed, so reading a subset of the fields is safe.
+#[derive(Clone, PartialEq, prost::Message)]
+struct BlockView {
+    #[prost(string, tag = "1")]
+    chain_id: String,
+    #[prost(uint64, tag = "2")]
+    height: u64,
+    #[prost(uint64, tag = "7")]
+    log_size: u64,
+    #[prost(bytes = "vec", tag = "8")]
+    log_root: Vec<u8>,
+}
+
+/// The board entry kind of a ballot (`EntryKind::BALLOT`), the first byte of its Merkle leaf.
+const BOARD_BALLOT_KIND: u8 = 4;
 
 /// A credential type name: short, no spoofing characters.
 fn clean_ctype(s: &str) -> Result<String, Failure> {

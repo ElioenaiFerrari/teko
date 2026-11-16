@@ -18,9 +18,11 @@ pub mod hex;
 mod ids;
 mod keys;
 pub mod ledger;
+pub mod merkle;
 pub mod seal;
 mod sign;
 pub mod tags;
+mod tracker;
 pub mod voter;
 
 pub use error::CryptoError;
@@ -33,5 +35,6 @@ pub use keys::{
     verifying_key_from_bytes,
 };
 pub use sign::{sign_tagged, verify_tagged};
+pub use tracker::tracker;
 
 pub use p256::ecdsa::{SigningKey, VerifyingKey};

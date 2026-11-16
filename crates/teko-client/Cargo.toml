@@ -32,6 +32,9 @@ device-emulator.workspace = true
 issuer-cli.workspace = true
 election-admin = { workspace = true, features = ["operator"] }
 teko-election.workspace = true
+teko-chain.workspace = true
+teko-bft.workspace = true
+teko-bulletin.workspace = true
 teko-crypto.workspace = true
 teko-device-core = { workspace = true, features = ["testing"] }
 rand.workspace = true

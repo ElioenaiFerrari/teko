@@ -78,6 +78,22 @@ def election_to_elected():
     d.legend([(MUTED, "transação ou entrada", False), (GREEN, "efeito", True), (RED, "2º turno", False)])
     return d
 
+def verify_my_vote():
+    d = D("verify-my-vote", 1100, 0, "Conferir o próprio voto", "Auditar antes de votar; depois conferir registro e contagem, sem guardar em quem você votou", "VOTAÇÃO")
+    A = [("d", "Dispositivo", "cifra, assina e confere", "onca", 110), ("s", "Suite", "repassa e replica", "link", 400), ("v", "Chain de votos", "instituições (BFT)", "boto", 690), ("a", "Apuração", "refeita por qualquer um", "focal", 970)]
+    M = [("d", "s", "compromisso: a cédula cifrada, antes da escolha", "default", False),
+         ("d", "s", "AUDITAR (botão): opção + aleatório; a cédula é descartada", "accent", True),
+         ("s", "s", "abre a cédula: tem de conter a opção pedida", "ok", False),
+         ("d", "s", "VOTAR (botão): assina a MESMA cédula; guarda só a folha", "default", False),
+         ("s", "v", "a cédula entra num bloco certificado (> 2/3)", "boto", False),
+         ("s", "d", "CheckMyBallot: bloco + certificado + prova", "default", False),
+         ("d", "d", "confere sozinho: certificado, bloco e inclusão", "ok", False),
+         ("s", "a", "refaz a apuração: contada ou recusada", "default", False)]
+    N = [(1, "d", "Dispositivo desonesto: pego com chance 1/2 por auditoria", 340), (6, "d", "Mostra bloco, 3 de 4 e o rastreador; nunca a opção", 340)]
+    d.sequence(A, M, notas=N, passo=34)
+    d.legend([(MUTED, "mensagem", False), (GREEN, "conferência", True), (BOTO, "registro", False)])
+    return d
+
 def dkg_ceremony():
     d = D("dkg-ceremony", 1100, 0, "Cerimônia de chave (DKG)", "A chave de decifração nasce dividida: ninguém a possui inteira", "CERIMÔNIA")
     A = [("a", "Validador A", "teko-node", "boto", 130), ("b", "Validador B", "teko-node", "boto", 400), ("c", "Validador C", "teko-node", "boto", 670), ("q", "Quadro", "público", "plain", 950)]

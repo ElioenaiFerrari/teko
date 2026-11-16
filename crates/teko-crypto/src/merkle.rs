@@ -1,7 +1,10 @@
 //! RFC 6962 / 9162 Merkle tree over leaf hashes, with inclusion and
 //! consistency proofs. Pure functions; no I/O.
 
-use teko_crypto::{tagged_hash, tags};
+use alloc::vec;
+use alloc::vec::Vec;
+
+use crate::{tagged_hash, tags};
 
 pub type Hash = [u8; 32];
 

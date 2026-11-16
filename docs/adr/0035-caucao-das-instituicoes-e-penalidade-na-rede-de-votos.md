@@ -1,6 +1,6 @@
 # ADR-0035 — Caução das instituições e penalidade na rede de votos
 
-**Status:** Proposto (2026-11-15) · **Decisão do dono do produto:** alternativa 2 (caução) aceita; penalidade de **10%**. **Em aberto (PENDENTE):** recompensa por disponibilidade das instituições. Complementa o [ADR-0034](0034-votos-em-bft-institucional-e-sem-blocos-vazios.md).
+**Status:** Aceito provisoriamente e **implementado** (2026-11-16) · **Decisão do dono do produto:** alternativa 2 (caução) aceita; penalidade de **10%**. **Em aberto (PENDENTE):** recompensa por disponibilidade das instituições. Complementa o [ADR-0034](0034-votos-em-bft-institucional-e-sem-blocos-vazios.md).
 
 ## Contexto
 No ADR-0034 a rede de votos ficou **sem moeda**: as instituições votam com poder igual, sem recompensa nem penalidade, e a evidência de equivocação (dois votos assinados em conflito pela mesma instituição) só é **contada e mostrada**. Isso desacopla voto de moeda (princípio 5), mas deixa uma lacuna: uma instituição que equivoca não perde nada dentro do sistema, e nada incentiva manter o nó no ar.
@@ -31,3 +31,11 @@ No ADR-0034 a rede de votos ficou **sem moeda**: as instituições votam com pod
 
 ## Decisão
 Aceita provisoriamente nos itens 1 a 4 (caução, evidência como `Slash`, 10% queimado, sem pagamento por bloco). Item 5 (recompensa de disponibilidade): **PENDENTE**.
+
+## Implementado
+- `teko-coin`: `Op::SlashVotes { evidence }` (byte 7) e o campo `vote_chain_id` da configuração (também no `economy.txt` como `vote_chain_id=`, preenchido pelo `teko-node init` com o `chain_id` da rede de votos). A evidência é verificada contra **esse** `chain_id` (votos assinados para a economia ou para outra rede são recusados) e a `Slash` da economia não aceita evidência de votos. Sem janela de altura (as alturas são as da rede de votos); a mesma ofensa (instituição, altura, rodada, tipo, rede) é penalizada **uma vez**; vale `slash_bps` (10% na devnet) sobre o stake e o que está saindo, **queimado**; a penalidade recai sobre o **dono** ao qual a chave da instituição está ligada (`SetValidatorKey`). Desligado se `vote_chain_id` for vazio.
+- `teko-chain`: `VoteApp` guarda a evidência que o motor produz (`note_evidence`/`take_evidence`).
+- `teko-node`: a lane de votos entrega a evidência e o nó a leva à economia como `SlashVotes` assinada pela chave do nó e espalhada aos pares (cada nó que detecta envia; a repetição é recusada pelo livro). Sem lane de economia não há o que queimar.
+- Explorador: nova linha "Penalidade por equivocação na rede de VOTOS".
+- Limites: se a evidência chegar depois de a caução ter saído por completo do *unbonding* não sobra o que queimar; a caução mínima e a recompensa de disponibilidade seguem em aberto.
+

@@ -265,7 +265,23 @@ fn results_loop(s: &Arc<Shared>) {
     while !s.stop.load(Ordering::SeqCst) {
         thread::sleep(tick);
         decrypt_closed_contests(s, interval);
+        punish_vote_equivocations(s);
     }
+}
+
+/// Equivocation the vote lane detected becomes a `SlashVotes` in the economy, where the
+/// institution's bond is (ADR-0035). Without an economy lane there is nothing to burn.
+fn punish_vote_equivocations(s: &Arc<Shared>) {
+    let evidence = lock_lane(&s.votes).app_mut().take_evidence();
+    let Some(econ) = s.econ.as_ref().filter(|_| !evidence.is_empty()) else {
+        return;
+    };
+    let (msgs, peers, index) = {
+        let mut e = lock_lane(econ);
+        let msgs = crate::economy::punish_vote_equivocations(&mut e, &s.cfg.key, &evidence);
+        (msgs, e.peers.clone(), e.index)
+    };
+    lane::send_all(&peers, index, msgs);
 }
 
 /// The RESULT service: when this node's own verified replica shows an encrypted contest

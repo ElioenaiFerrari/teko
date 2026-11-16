@@ -161,6 +161,8 @@ pub fn init_economy(
         founder_key,
         owner,
     );
+    // the vote chain's institutions bond in this economy (ADR-0035)
+    g.coin.vote_chain_id.clone_from(&net.profile.chain_id);
     if let Some(n) = founder_target {
         g.coin.founder_target = n;
     }

@@ -293,3 +293,13 @@ Legenda: **P** = `proptest` (muitos casos), **U** = unitário, **E** = ponta a p
 - **Quadro de avisos de operador único:** sem testemunhas independentes, um operador pode mostrar logs diferentes a pessoas diferentes (*split view*). Só um head fixado e comparado por terceiros detecta isso; não há essa comparação implementada.
 - **Fuzzing contínuo do parser:** só `proptest`; sem `cargo-fuzz`.
 | A gênese dá as primeiras moedas à carteira do fundador (`--alloc`): altura 0 já mostra o saldo, a oferta fecha, e o fundador consegue travar stake sem nenhum bloco antes | node: `the_genesis_gives_the_founder_the_first_coins_so_the_network_can_start_with_no_block_at_all` |
+
+## Caução das instituições e penalidade na rede de votos (ADR-0035)
+
+| Garantia | Teste |
+|---|---|
+| Equivocação na rede de votos queima 10% da caução, uma vez por ofensa; nada é devolvido a ninguém e o teto não muda | coin: `equivocation_on_the_vote_chain_burns_ten_percent_of_the_bond_once` |
+| Evidência de outra rede (inclusive a da própria economia) é recusada, a `Slash` da economia não aceita evidência de votos, e votos iguais ou lixo são recusados | coin: `vote_chain_evidence_must_be_for_the_vote_chain_and_the_two_penalties_do_not_mix` |
+| A penalidade recai sobre o dono ao qual a chave da instituição está ligada | coin: `an_institution_is_punished_through_the_owner_its_key_is_linked_to` |
+| Sem `vote_chain_id` configurado a penalidade fica desligada; o payload faz ida e volta | coin: `vote_chain_penalties_are_off_...`, `the_vote_slash_payload_round_trips` |
+| Ponta a ponta: uma instituição que assina dois prevotes em conflito é detectada ao vivo pelo nó, a evidência vai à economia e 10% da caução é queimada | node: `an_institution_that_equivocates_on_the_vote_chain_loses_ten_percent_of_its_bond_in_the_economy` |

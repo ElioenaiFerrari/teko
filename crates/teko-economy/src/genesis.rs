@@ -27,6 +27,7 @@ pub struct ClassSpec {
 /// min_total_stake=100000000
 /// min_validator_stake=10000000
 /// max_validators=16
+/// vote_chain_id=teko-devnet-1                       (the vote chain whose institutions bond here, ADR-0035)
 /// founder=<hex consensus key> tekow1…        (the OWNER address gets the rewards)
 /// class=imovel 2 <hex key> <hex key> <hex key>
 /// alloc=tekow1… 5000000000                          (TEST networks only; normally absent)
@@ -63,6 +64,7 @@ impl EconomyGenesis {
                 min_total_stake: 100 * YPY_PER_TEKO,
                 min_validator_stake: 10 * YPY_PER_TEKO,
                 max_validators: 16,
+                vote_chain_id: String::new(),
             },
             founders: vec![(founder_key, owner)],
             classes: Vec::new(),
@@ -108,6 +110,9 @@ impl EconomyGenesis {
             c.min_validator_stake,
             c.max_validators
         );
+        if !c.vote_chain_id.is_empty() {
+            s.push_str(&format!("vote_chain_id={}\n", c.vote_chain_id));
+        }
         for (k, o) in &self.founders {
             s.push_str(&format!(
                 "founder={} {}\n",
@@ -168,6 +173,7 @@ impl EconomyGenesis {
                 "min_total_stake" => g.coin.min_total_stake = num(v, k)?,
                 "min_validator_stake" => g.coin.min_validator_stake = num(v, k)?,
                 "max_validators" => g.coin.max_validators = num(v, k)? as u32,
+                "vote_chain_id" => g.coin.vote_chain_id = v.to_string(),
                 "founder" => {
                     let mut it = v.split_whitespace();
                     let (Some(key), Some(owner), None) = (it.next(), it.next(), it.next()) else {

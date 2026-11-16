@@ -89,6 +89,10 @@ pub struct CoinConfig {
     /// Maximum validators once the set is derived from stake (0 = unlimited).
     #[prost(uint32, tag = "12")]
     pub max_validators: u32,
+    /// `chain_id` of the VOTE chain whose institutions put a bond here (ADR-0035). Equivocation
+    /// evidence signed for it burns part of the bond (`SlashVotes`). Empty = not enabled.
+    #[prost(string, tag = "13")]
+    pub vote_chain_id: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -117,6 +121,10 @@ pub enum Op {
     Slash {
         evidence: Vec<u8>,
     },
+    /// Penalty for equivocation on the VOTE chain (ADR-0035): evidence signed for `vote_chain_id`.
+    SlashVotes {
+        evidence: Vec<u8>,
+    },
     Faucet,
     /// Links the sender (stake owner) to the CONSENSUS key its validator node uses.
     SetValidatorKey {
@@ -132,6 +140,7 @@ impl Op {
             Op::Unstake { amount } => teko_crypto::ledger::coin_stake_payload(2, *amount),
             Op::Claim => teko_crypto::ledger::coin_stake_payload(3, 0),
             Op::Slash { evidence } => [&[4u8][..], evidence].concat(),
+            Op::SlashVotes { evidence } => [&[7u8][..], evidence].concat(),
             Op::Faucet => vec![5],
             Op::SetValidatorKey { key } => [&[6u8][..], key].concat(),
         }
@@ -165,6 +174,9 @@ impl Op {
                 evidence: rest.to_vec(),
             }),
             5 if rest.is_empty() => Ok(Op::Faucet),
+            7 => Ok(Op::SlashVotes {
+                evidence: rest.to_vec(),
+            }),
             6 if rest.len() == 33 || rest.len() == 65 => {
                 Ok(Op::SetValidatorKey { key: rest.to_vec() })
             }
@@ -476,7 +488,8 @@ impl Module for CoinModule {
                 ctx.emit("faucet-TEST-COINS", got.to_be_bytes().to_vec());
                 Ok(())
             }
-            Op::Slash { evidence } => slash(ctx, &cfg, &evidence),
+            Op::Slash { evidence } => slash(ctx, &cfg, &evidence, Penalty::Economy),
+            Op::SlashVotes { evidence } => slash(ctx, &cfg, &evidence, Penalty::Votes),
             Op::SetValidatorKey { key } => {
                 let key_addr = address_of(&key);
                 if let Some(owner) = ctx.get(&k_vo(&key_addr))
@@ -498,18 +511,50 @@ impl Module for CoinModule {
     }
 }
 
-fn slash(ctx: &mut Ctx<'_, '_>, cfg: &CoinConfig, raw: &[u8]) -> Result<(), ModuleError> {
+/// Which chain the equivocation happened on.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Penalty {
+    /// This economy chain: evidence signed for `ctx.chain_id`, only while the bond is still
+    /// slashable (the heights are this chain's).
+    Economy,
+    /// The VOTE chain (ADR-0035): evidence signed for `cfg.vote_chain_id`. Its heights are the
+    /// vote chain's, so there is no height window; the bond (and what is unbonding) is what
+    /// remains to burn, once per offence.
+    Votes,
+}
+
+fn slash(
+    ctx: &mut Ctx<'_, '_>,
+    cfg: &CoinConfig,
+    raw: &[u8],
+    kind: Penalty,
+) -> Result<(), ModuleError> {
+    let evidence_chain: &str = match kind {
+        Penalty::Economy => ctx.chain_id,
+        Penalty::Votes if cfg.vote_chain_id.is_empty() => {
+            return Err(ModuleError::new("vote-chain penalties are not enabled"));
+        }
+        Penalty::Votes => &cfg.vote_chain_id,
+    };
     let ev = Evidence::decode(raw).map_err(|_| ModuleError::new("malformed evidence"))?;
-    if !ev.verify(ctx.chain_id) {
+    if !ev.verify(evidence_chain) {
         return Err(ModuleError::new("invalid evidence"));
     }
     let (Some(a), Some(validator)) = (&ev.a, ev.validator()) else {
         return Err(ModuleError::new("invalid evidence"));
     };
-    // Evidence must be recent enough that the bonded coins are still slashable.
-    if a.height > ctx.height || ctx.height > a.height.saturating_add(cfg.unbonding_period) {
+    // Economy evidence must be recent enough that the bonded coins are still slashable.
+    if kind == Penalty::Economy
+        && (a.height > ctx.height || ctx.height > a.height.saturating_add(cfg.unbonding_period))
+    {
         return Err(ModuleError::new("evidence outside the slashing window"));
     }
+    // vote-chain offences carry their chain id, so they never collide with economy offences
+    let scope: &[u8] = if kind == Penalty::Votes {
+        evidence_chain.as_bytes()
+    } else {
+        &[]
+    };
     let marker = tagged_hash(
         tags::COIN_SLASH,
         &[
@@ -517,6 +562,7 @@ fn slash(ctx: &mut Ctx<'_, '_>, cfg: &CoinConfig, raw: &[u8]) -> Result<(), Modu
             &a.height.to_be_bytes(),
             &a.round.to_be_bytes(),
             &a.kind.to_be_bytes(),
+            scope,
         ],
     );
     let marker_key = [P_SLASHED, &marker].concat();

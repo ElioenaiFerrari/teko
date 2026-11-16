@@ -27,6 +27,7 @@
       case 'unstake': return `Pediu a saída de ${amt(k.amount)} do stake`;
       case 'claim': return 'Resgatou o stake liberado';
       case 'slash': return `Penalidade por equivocação${k.validator ? ` (validador <span class="mono">${esc(short(k.validator, 8))}</span>)` : ''}`;
+      case 'slash_votes': return `Penalidade por equivocação na rede de VOTOS (caução da instituição${k.validator ? `, chave <span class="mono">${esc(short(k.validator, 8))}</span>` : ''})`;
       case 'faucet': return 'Moedas de TESTE (faucet da devnet)';
       case 'set_validator_key': return `Vinculou a chave de validador <span class="mono">${esc(short(k.key, 8))}</span>`;
       case 'assets': return `Bens: ${esc(k.op)} · classe ${esc(k.class)}${k.asset ? ` · ${esc(k.asset)}` : ''}`;

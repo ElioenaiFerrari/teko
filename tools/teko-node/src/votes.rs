@@ -72,8 +72,12 @@ impl LaneApp for VoteApp {
             .map(Message::encode_to_vec)
             .collect()
     }
-    // `on_evidence`: the vote chain has no coin to burn. The evidence is only counted (shown in
-    // the status) and punishing an institution is a decision of the governance, outside the chain.
+    /// The vote chain has no coin to burn: the evidence is kept for the node to take it to the
+    /// ECONOMY, where the institution's bond is (ADR-0035). It is also counted in the status.
+    fn on_evidence(&mut self, ev: &teko_bft::Evidence, _key: &teko_crypto::SigningKey) -> Vec<Msg> {
+        self.note_evidence(ev.clone());
+        Vec::new()
+    }
 }
 
 /// Opens the vote lane of a node: the chain is rebuilt from `votes.blocks` (every block

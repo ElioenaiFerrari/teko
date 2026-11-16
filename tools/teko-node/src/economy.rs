@@ -86,26 +86,54 @@ impl LaneApp for EconApp {
     /// and gossips it (the ledger also refuses a repeat). The node account pays no fee, so this
     /// works while `fee_per_byte` is 0 (ADR-0030).
     fn on_evidence(&mut self, ev: &Evidence, key: &SigningKey) -> Vec<Msg> {
-        let me = teko_ledger::address_of(&teko_crypto::public_key_bytes(key));
-        let queued = self.queued_from(&me);
-        let nonce = self.chain.ledger().nonce_of(&me) + queued;
-        let tx = Tx::new_signed(
+        slash_msgs(
+            self,
             key,
-            self.chain.ledger().chain_id(),
-            nonce,
-            teko_coin::COIN_MODULE,
             teko_coin::Op::Slash {
                 evidence: ev.encode_to_vec(),
-            }
-            .encode(),
-        );
-        let raw = tx.to_bytes();
-        if self.submit(tx).is_ok() {
-            vec![wire::msg(wire::ECON_TX_FWD, &SubmitTxs { txs: vec![raw] })]
-        } else {
-            Vec::new()
-        }
+            },
+        )
     }
+}
+
+/// Queues a penalty transaction signed by this node and returns the message that gossips it.
+fn slash_msgs(app: &mut EconApp, key: &SigningKey, op: teko_coin::Op) -> Vec<Msg> {
+    let me = teko_ledger::address_of(&teko_crypto::public_key_bytes(key));
+    let queued = app.queued_from(&me);
+    let nonce = app.chain.ledger().nonce_of(&me) + queued;
+    let tx = Tx::new_signed(
+        key,
+        app.chain.ledger().chain_id(),
+        nonce,
+        teko_coin::COIN_MODULE,
+        op.encode(),
+    );
+    let raw = tx.to_bytes();
+    if app.submit(tx).is_ok() {
+        vec![wire::msg(wire::ECON_TX_FWD, &SubmitTxs { txs: vec![raw] })]
+    } else {
+        Vec::new()
+    }
+}
+
+/// Equivocation detected on the VOTE chain becomes a `SlashVotes` in the economy, where the
+/// institution's bond is (ADR-0035). Returns the messages that gossip the transactions.
+pub(crate) fn punish_vote_equivocations(
+    econ: &mut Econ,
+    key: &SigningKey,
+    evidence: &[Evidence],
+) -> Vec<Msg> {
+    let mut out = Vec::new();
+    for ev in evidence {
+        out.extend(slash_msgs(
+            econ.app_mut(),
+            key,
+            teko_coin::Op::SlashVotes {
+                evidence: ev.encode_to_vec(),
+            },
+        ));
+    }
+    out
 }
 
 /// Opens the economy lane of a node: the chain is rebuilt from `economy.blocks` (every block

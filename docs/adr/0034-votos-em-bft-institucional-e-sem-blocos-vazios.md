@@ -46,6 +46,7 @@ Aceita provisoriamente com as três recomendações (1: poder igual e conjunto f
 ## Implementado
 - `teko-chain`: `Block` (sem assinaturas), `DecidedBlock` (bloco + `Commit`), `Chain` (réplica verificada: certificado, proponente, horário, conteúdo, raiz Merkle), `VoteApp` (`teko_bft::App` com mempool e conferência de relógio de 60 s). `teko-economy`: horário estritamente crescente e conferido contra o relógio (60 s).
 - `teko-node`: `lane.rs` é o hospedeiro BFT **genérico** (timers, gossip, persistência, WAL, sincronização) das duas cadeias; `economy.rs` e `votes.rs` só trazem o que é de cada uma. Nenhum bloco por temporizador; `block_interval_ms` do perfil virou o intervalo de agrupamento de uma rajada. Arquivos: `votes.blocks`/`votes.wal` e `economy.blocks`/`economy.wal`.
+- A penalidade das instituições (caução e `Slash` na economia) está no [ADR-0035](0035-caucao-das-instituicoes-e-penalidade-na-rede-de-votos.md).
 - Removidos: o PoA M-de-N de `teko-chain` (assinatura de bloco, rodízio `(height+round) % N`, troca de turno por tempo) e `empty_block_interval_ms` da economia.
 - Explorador e Suite mostram precommits e quórum no lugar de assinaturas M-de-N.
 - Redes de teste antigas (`blocks.log`) precisam ser recriadas (`make devnet-reset`).

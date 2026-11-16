@@ -38,6 +38,10 @@ pub enum TxKind {
     Slash {
         validator: Option<String>,
     },
+    /// Penalty for equivocation on the VOTE chain, burned from the institution's bond (ADR-0035).
+    SlashVotes {
+        validator: Option<String>,
+    },
     Faucet,
     SetValidatorKey {
         key: String,

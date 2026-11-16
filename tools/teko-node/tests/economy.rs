@@ -25,9 +25,9 @@ fn free_port_base() -> u16 {
     use std::sync::atomic::{AtomicU16, Ordering};
     static NEXT: AtomicU16 = AtomicU16::new(0);
     loop {
-        let off = NEXT.fetch_add(3, Ordering::SeqCst);
+        let off = NEXT.fetch_add(4, Ordering::SeqCst);
         let base = 36_000 + (std::process::id() % 2_000) as u16 * 10 + off;
-        if (0..3).all(|k| TcpListener::bind(("127.0.0.1", base + k)).is_ok()) {
+        if (0..4).all(|k| TcpListener::bind(("127.0.0.1", base + k)).is_ok()) {
             return base;
         }
     }
@@ -193,6 +193,116 @@ fn the_genesis_gives_the_founder_the_first_coins_so_the_network_can_start_with_n
     assert_eq!(teko_coin::stake_of(chain.ledger(), &owner_addr), 3_000);
     // minted = genesis allocation + the one block reward the founder earned
     assert_eq!(teko_coin::minted(chain.ledger()), 5_000 + 1_000);
+    teko_coin::audit(chain.ledger()).unwrap();
+    for n in net.nodes.into_iter().flatten() {
+        n.stop();
+    }
+}
+
+/// Sends one wire message to a node (a forged consensus message, as a malicious peer would).
+fn send_raw(addr: std::net::SocketAddr, m: &teko_node::wire::Msg) {
+    let mut s = std::net::TcpStream::connect(addr).unwrap();
+    s.set_read_timeout(Some(Duration::from_secs(5))).unwrap();
+    teko_node::wire::write_msg(&mut s, m).unwrap();
+    let _ = teko_node::wire::read_msg(&mut s);
+}
+
+#[test]
+fn an_institution_that_equivocates_on_the_vote_chain_loses_ten_percent_of_its_bond_in_the_economy()
+{
+    use prost::Message;
+    use teko_bft::{Vote, VoteKind};
+    use teko_node::wire::{self, BftEnvelope};
+
+    let (founder, w1) = (key(5), key(70));
+    let (founder_addr, w1_addr) = (
+        address_of(&public_key_bytes(&founder)),
+        address_of(&public_key_bytes(&w1)),
+    );
+    let dir = std::env::temp_dir().join(format!(
+        "teko-econ-bond-{}-{}",
+        std::process::id(),
+        free_port_base()
+    ));
+    let _ = std::fs::remove_dir_all(&dir);
+    init_network(&dir, NetworkKind::Devnet, 4, free_port_base(), false).unwrap();
+    let mut g = init_economy(&dir, Some(founder_addr), None, None, false).unwrap();
+    assert_eq!(
+        g.coin.vote_chain_id, "teko-devnet-1",
+        "the economy knows the vote chain"
+    );
+    g.coin.fee_per_byte = 0;
+    g.coin.unbonding_period = 1_000;
+    g.coin.founder_target = 1_000_000_000; // the founder phase lasts: node 0 alone decides the economy
+    g.allocations.push((w1_addr, 5_000)); // institution 1's owner has coins for the bond
+    std::fs::write(dir.join(ECONOMY_FILE), g.to_text()).unwrap();
+    let ec = load_economy(&dir).unwrap().unwrap();
+    let nodes: Vec<_> = (0..4).map(|i| Some(start_node(&dir, i, &ec))).collect();
+    let mut net = Net {
+        dir,
+        nodes,
+        genesis: ec.genesis,
+    };
+    let c = client(&net);
+    let chain_id = net.genesis.chain_id.clone();
+
+    // institution 1 (node key 1) is linked to its owner's wallet and puts a bond of 3000
+    let node1 = load_validator_key(&net.dir, 1).unwrap();
+    c.econ_submit(&[
+        tx(
+            &w1,
+            &chain_id,
+            0,
+            Op::SetValidatorKey {
+                key: public_key_bytes(&node1),
+            },
+        ),
+        tx(&w1, &chain_id, 1, Op::Stake { amount: 3_000 }),
+    ])
+    .unwrap();
+    wait("the bond is in place", 20, || {
+        c.econ_sync(&net.genesis)
+            .is_ok_and(|ch| teko_coin::stake_of(ch.ledger(), &w1_addr) == 3_000)
+    });
+
+    // the vote chain loses its quorum (2 of 4 up) so a height stays open on nodes 0 and 1
+    net.nodes[2].take().unwrap().stop();
+    net.nodes[3].take().unwrap().stop();
+    let es = vec![teko_bulletin::Entry::new(
+        teko_bulletin::EntryKind::BALLOT,
+        vec![1, 2, 3],
+    )];
+    c.submit(&es).unwrap();
+    std::thread::sleep(Duration::from_millis(1_500));
+
+    // institution 1 signs two conflicting prevotes for the same height and round
+    let vote_chain = load_network(&net.dir).unwrap().profile.chain_id;
+    let target = load_network(&net.dir).unwrap().peers[0];
+    for tag in [1u8, 2u8] {
+        let v = Vote::new(
+            &vote_chain,
+            &node1,
+            VoteKind::Prevote,
+            1,
+            0,
+            Some(&[tag; 32]),
+        );
+        let env = BftEnvelope {
+            proposal: Vec::new(),
+            vote: v.encode_to_vec(),
+        };
+        send_raw(target, &wire::msg(wire::VOTE_BFT, &env));
+    }
+
+    // node 0 detected it live, took it to the economy, and 10% of the bond was BURNED
+    wait("the bond is slashed", 30, || {
+        c.econ_sync(&net.genesis)
+            .is_ok_and(|ch| teko_coin::stake_of(ch.ledger(), &w1_addr) == 2_700)
+    });
+    let chain = c.econ_sync(&net.genesis).unwrap();
+    assert_eq!(teko_coin::burned(chain.ledger()), 300);
+    // the founder (not accused) lost nothing, and the books still balance
+    assert_eq!(teko_coin::stake_of(chain.ledger(), &founder_addr), 0);
     teko_coin::audit(chain.ledger()).unwrap();
     for n in net.nodes.into_iter().flatten() {
         n.stop();

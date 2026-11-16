@@ -10,6 +10,8 @@ use teko_crypto::{SigningKey, generate_signing_key, public_key_bytes};
 use teko_ledger::{Address, Ledger, LedgerError, Tx, TxError, address_of};
 
 const CHAIN: &str = "teko-devnet";
+/// The VOTE chain (another network): its institutions put a bond in the economy (ADR-0035).
+const VOTES: &str = "teko-devnet-1";
 const P: Address = [9; 32];
 
 fn cfg() -> CoinConfig {
@@ -22,6 +24,7 @@ fn cfg() -> CoinConfig {
         slash_bps: 1000,
         faucet_amount: 500,
         faucet_cooldown: 3,
+        vote_chain_id: VOTES.into(),
         ..Default::default()
     }
 }
@@ -669,4 +672,184 @@ fn the_set_after_the_founder_phase_respects_minimums_maximums_and_ordering() {
     let mut l2 = Ledger::new(CHAIN, vec![module()]).unwrap();
     genesis(&mut l2, c2, &[], false).unwrap();
     assert!(validator_set(&l2).is_empty());
+}
+
+// ---- ADR-0035: equivocation on the VOTE chain burns part of the institution's bond
+
+fn vote_evidence(sk: &SigningKey, chain: &str, height: u64, round: u32, tag: u8) -> Vec<u8> {
+    let a = Vote::new(
+        chain,
+        sk,
+        VoteKind::Prevote,
+        height,
+        round,
+        Some(&[tag; 32]),
+    );
+    let b = Vote::new(
+        chain,
+        sk,
+        VoteKind::Prevote,
+        height,
+        round,
+        Some(&[tag + 1; 32]),
+    );
+    Evidence {
+        a: Some(a),
+        b: Some(b),
+    }
+    .encode_to_vec()
+}
+
+#[test]
+fn equivocation_on_the_vote_chain_burns_ten_percent_of_the_bond_once() {
+    let (inst, reporter) = (key(60), key(61));
+    let mut l = new_ledger(cfg(), &[(addr(&inst), 2000), (addr(&reporter), 10)], true);
+    run(&mut l, &inst, 0, Op::Stake { amount: 1000 }).unwrap();
+    // the vote chain has its OWN heights: evidence for height 500 is fine here (no window)
+    let minted_before = minted(&l);
+    let ev = vote_evidence(&inst, VOTES, 500, 0, 1);
+    run(&mut l, &reporter, 0, Op::SlashVotes { evidence: ev }).unwrap();
+    assert_eq!(stake_of(&l, &addr(&inst)), 900, "10% of the bond is gone");
+    assert_eq!(
+        burned(&l),
+        100,
+        "burned: it leaves circulation, nobody receives it"
+    );
+    // nothing was created or given back: the only new coins are the slash block's own reward
+    assert_eq!(
+        minted(&l),
+        minted_before + 1000,
+        "burning does not free room under the cap"
+    );
+    audit(&l).unwrap();
+    // the same offence (height, round, kind) is never punished twice, whatever the pair of votes
+    let again = vote_evidence(&inst, VOTES, 500, 0, 9);
+    let t = tx(&reporter, &l, 0, Op::SlashVotes { evidence: again });
+    assert_eq!(
+        err_msg(blk(&mut l, &[t])),
+        "already slashed for this offence"
+    );
+    // another offence (another round) is a new penalty: 10% of what is left
+    run(
+        &mut l,
+        &reporter,
+        0,
+        Op::SlashVotes {
+            evidence: vote_evidence(&inst, VOTES, 500, 1, 1),
+        },
+    )
+    .unwrap();
+    assert_eq!(stake_of(&l, &addr(&inst)), 810);
+    audit(&l).unwrap();
+}
+
+#[test]
+fn vote_chain_evidence_must_be_for_the_vote_chain_and_the_two_penalties_do_not_mix() {
+    let (inst, reporter) = (key(62), key(63));
+    let mut l = new_ledger(cfg(), &[(addr(&inst), 2000), (addr(&reporter), 10)], true);
+    run(&mut l, &inst, 0, Op::Stake { amount: 1000 }).unwrap();
+    // votes signed for the ECONOMY chain id (or any other) are not vote-chain evidence
+    for chain in [CHAIN, "some-other-chain"] {
+        let t = tx(
+            &reporter,
+            &l,
+            0,
+            Op::SlashVotes {
+                evidence: vote_evidence(&inst, chain, 3, 0, 1),
+            },
+        );
+        assert_eq!(err_msg(blk(&mut l, &[t])), "invalid evidence");
+    }
+    // and vote-chain evidence is not accepted by the economy's own `Slash`
+    let t = tx(
+        &reporter,
+        &l,
+        0,
+        Op::Slash {
+            evidence: vote_evidence(&inst, VOTES, 1, 0, 1),
+        },
+    );
+    assert_eq!(err_msg(blk(&mut l, &[t])), "invalid evidence");
+    // two votes for the SAME block are not equivocation; garbage is refused
+    let a = Vote::new(VOTES, &inst, VoteKind::Prevote, 1, 0, Some(&[1; 32]));
+    let same = Evidence {
+        a: Some(a.clone()),
+        b: Some(a),
+    }
+    .encode_to_vec();
+    let t = tx(&reporter, &l, 0, Op::SlashVotes { evidence: same });
+    assert_eq!(err_msg(blk(&mut l, &[t])), "invalid evidence");
+    let t = tx(
+        &reporter,
+        &l,
+        0,
+        Op::SlashVotes {
+            evidence: vec![1, 2, 3],
+        },
+    );
+    assert!(err_msg(blk(&mut l, &[t])).contains("evidence"));
+    assert_eq!(burned(&l), 0);
+    assert_eq!(stake_of(&l, &addr(&inst)), 1000);
+}
+
+#[test]
+fn an_institution_is_punished_through_the_owner_its_key_is_linked_to() {
+    // the institution's node key (the one that signs votes) is linked to the owner's wallet
+    let (owner, node_key, reporter) = (key(64), key(65), key(66));
+    let mut l = new_ledger(cfg(), &[(addr(&owner), 2000), (addr(&reporter), 10)], true);
+    run(&mut l, &owner, 0, Op::Stake { amount: 1000 }).unwrap();
+    run(
+        &mut l,
+        &owner,
+        0,
+        Op::SetValidatorKey {
+            key: public_key_bytes(&node_key),
+        },
+    )
+    .unwrap();
+    run(
+        &mut l,
+        &reporter,
+        0,
+        Op::SlashVotes {
+            evidence: vote_evidence(&node_key, VOTES, 7, 0, 1),
+        },
+    )
+    .unwrap();
+    assert_eq!(
+        stake_of(&l, &addr(&owner)),
+        900,
+        "the OWNER bears the penalty"
+    );
+    audit(&l).unwrap();
+}
+
+#[test]
+fn vote_chain_penalties_are_off_when_the_network_has_no_vote_chain_configured() {
+    let (inst, reporter) = (key(67), key(68));
+    let mut c = cfg();
+    c.vote_chain_id = String::new();
+    let mut l = new_ledger(c, &[(addr(&inst), 2000), (addr(&reporter), 10)], true);
+    run(&mut l, &inst, 0, Op::Stake { amount: 1000 }).unwrap();
+    let t = tx(
+        &reporter,
+        &l,
+        0,
+        Op::SlashVotes {
+            evidence: vote_evidence(&inst, VOTES, 1, 0, 1),
+        },
+    );
+    assert_eq!(
+        err_msg(blk(&mut l, &[t])),
+        "vote-chain penalties are not enabled"
+    );
+    assert_eq!(burned(&l), 0);
+}
+
+#[test]
+fn the_vote_slash_payload_round_trips() {
+    let op = Op::SlashVotes {
+        evidence: vec![1, 2, 3, 4],
+    };
+    assert_eq!(Op::decode(&op.encode()), Ok(op));
 }

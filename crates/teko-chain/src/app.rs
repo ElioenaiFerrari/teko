@@ -22,6 +22,8 @@ pub struct VoteApp {
     seen: HashSet<[u8; 32]>,
     me: Vec<u8>,
     clock: Box<dyn Fn() -> u64 + Send>,
+    /// Equivocation evidence detected by the engine, waiting to be taken to the economy (ADR-0035).
+    evidence: Vec<teko_bft::Evidence>,
 }
 
 impl VoteApp {
@@ -38,7 +40,20 @@ impl VoteApp {
             seen,
             me: public_key_bytes(key),
             clock,
+            evidence: Vec::new(),
         }
+    }
+
+    /// Remembers equivocation evidence the engine produced (the node takes it to the economy).
+    pub fn note_evidence(&mut self, ev: teko_bft::Evidence) {
+        if self.evidence.len() < 64 {
+            self.evidence.push(ev);
+        }
+    }
+
+    /// The evidence collected since the last call.
+    pub fn take_evidence(&mut self) -> Vec<teko_bft::Evidence> {
+        std::mem::take(&mut self.evidence)
     }
 
     pub fn mempool_len(&self) -> usize {

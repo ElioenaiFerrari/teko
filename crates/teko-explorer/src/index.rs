@@ -99,6 +99,11 @@ fn kind_of(tx: &Tx) -> TxKind {
                     .ok()
                     .and_then(|e| e.validator().map(hex::encode)),
             },
+            Ok(teko_coin::Op::SlashVotes { evidence }) => TxKind::SlashVotes {
+                validator: teko_bft::Evidence::decode(evidence.as_slice())
+                    .ok()
+                    .and_then(|e| e.validator().map(hex::encode)),
+            },
             Ok(teko_coin::Op::Faucet) => TxKind::Faucet,
             Ok(teko_coin::Op::SetValidatorKey { key }) => TxKind::SetValidatorKey {
                 key: hex::encode(&key),

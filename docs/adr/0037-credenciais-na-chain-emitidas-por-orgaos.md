@@ -1,5 +1,7 @@
 # ADR-0037 — Credenciais na chain, emitidas por órgãos com janela de contestação e validade
 
+> **Emenda (ADR-0039):** o item 5 mudou. A chave de credencial **por tipo** agora é derivada da **carteira** (`m/7240'/1'/t'`), não da raiz de identidade: volta com a frase de 24 palavras. Segue sem ligação **pública** com o endereço, a identidade e o voto. Os atributos privados passam a ir à chain **cifrados ao titular**.
+
 **Status:** Aceito provisoriamente (2026-11-16, dono do produto) e **implementado (etapa A)** · Complementa o [ADR-0005](0005-credenciais-sd-jwt-vs-bbs.md) (que continua PENDENTE para a credencial de identidade) e segue o padrão do [ADR-0036](0036-bens-negociacao-direta-com-janela-de-veto.md).
 
 ## Contexto

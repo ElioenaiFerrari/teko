@@ -8,7 +8,8 @@ publish.workspace = true
 [dependencies]
 prost.workspace = true
 sha3.workspace = true
-p256.workspace = true
+p256 = { workspace = true, features = ["ecdh"] }
+chacha20poly1305 = { version = "0.10", default-features = false, features = ["alloc"] }
 bech32.workspace = true
 zeroize.workspace = true
 subtle.workspace = true

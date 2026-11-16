@@ -1,5 +1,7 @@
 # ADR-0023 — Carteira com frase de recuperação (BIP-39 + SLIP-10 P-256), separada da identidade
 
+> **Emenda (ADR-0039):** a frase passou a recuperar também as **credenciais** (chaves de credencial derivadas da carteira, atributos privados cifrados na chain). Continua **sem** recuperar a identidade e o registro de voto.
+
 **Status:** **Aceito** (2026-11-14, dono do produto): seed estilo carteira Bitcoin, **24 palavras**, **passphrase opcional**, confirmação por **3 posições sorteadas** no onboarding. **Implementado** (M5a). **Supera em parte o [ADR-0003](0003-recuperacao-seed-vs-reemissao.md)**: o "sem seed" continua valendo para a **identidade e o voto**; a **carteira** é uma exceção separada.
 
 ## Contexto

@@ -15,11 +15,12 @@ Permissões e cargos (CNH A, CNH B, candidato a cargo X…) viram **credenciais 
 ![Emissão de credencial na chain: o titular entrega a chave por tipo, o membro A propõe, o membro B completa o quórum, a credencial fica em contestação e depois ativa até a validade](../diagrams/credential-issuance.png)
 
 ## Passo a passo
-1. O titular abre **Credenciais** na Suite e gera a chave do tipo (ex.: `cnh-b`). O dispositivo mostra "CHAVE DE CREDENCIAL" e só exporta a chave pública, **sem ligação** com identidade, carteira e voto.
+1. O titular abre **Credenciais** na Suite e gera a chave do tipo (ex.: `cnh-b`). O dispositivo mostra "CHAVE DE CREDENCIAL" e só exporta a chave pública, derivada da **carteira** (volta com a frase, [ADR-0039](../adr/0039-recuperar-tudo-pela-carteira.md)) e **sem ligação pública** com o endereço, a identidade e o voto.
 2. O membro A abre o **Emissor** (`make issuer`), escolhe o tipo, cola a chave, informa os atributos (`nome=Ana;categoria=B`) e a validade. O dispositivo mostra tudo (tipo, titular, atributos, validade, janela) e, após o botão físico, assina `Propose`: é a **primeira aprovação**.
 3. Os demais membros **aprovam** (cada um com a própria transação). Ao chegar a **M**, a credencial fica **Pendente** por `contest` segundos.
 4. Na janela, o quórum pode **vetar** (motivo público). Passada a janela, a credencial está **Ativa**, até `valid_until` (ou vitalícia, conforme o tipo). Depois só o quórum pode **revogar** (motivo público).
-5. **Privado × público:** tipos privados (CNH) guardam na chain só um **compromisso salgado**; o Emissor entrega ao titular o pacote com atributos e sal. Tipos públicos (candidato) guardam os atributos em claro.
+5. **Privado × público:** tipos privados (CNH) guardam na chain um **compromisso salgado** e os atributos **cifrados ao titular** (só o dispositivo da carteira abre; é o que permite recuperar pela frase); o Emissor também entrega o pacote. Tipos públicos (candidato) guardam os atributos em claro.
+6. **Recuperar:** numa carteira restaurada, a Suite ➜ Credenciais ➜ *Recuperar tudo* reencontra as credenciais pelas chaves derivadas da frase e abre os atributos no dispositivo.
 
 ## O que é verificado e por quem
 - Os **nós** conferem: só membro propõe/aprova/veta/revoga; cada membro conta uma vez; janela e validade pelo horário do bloco; compromisso dos tipos públicos.
@@ -29,7 +30,7 @@ Permissões e cargos (CNH A, CNH B, candidato a cargo X…) viram **credenciais 
 ## O que pode dar errado
 - Membro ou quórum emitem algo **falso** ou vetam por abuso: o livro prova **quem** emitiu, não a verdade (oráculo). Falta caução do órgão.
 - Quem tem o dispositivo e o PIN de um membro age como o membro.
-- A chave de credencial é estável por tipo: duas credenciais do mesmo tipo do mesmo titular são ligáveis.
+- A chave de credencial é estável por tipo: duas credenciais do mesmo tipo do mesmo titular são ligáveis. Quem tiver a **frase** também tem as credenciais; e os atributos cifrados ficam na chain para sempre.
 - Sem troca de membros em execução (só na gênese).
 
 ## Onde está no código

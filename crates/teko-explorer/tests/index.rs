@@ -282,3 +282,45 @@ fn an_incompatible_saved_chain_is_explained_with_the_steps_to_recreate_it() {
     .to_string();
     assert!(!plain.contains("make devnet-founder"));
 }
+
+#[test]
+fn an_asset_registered_to_someone_shows_in_their_history_not_only_the_signers() {
+    use teko_assets::{ASSETS_MODULE, Approval, Intent, Op as AssetOp, RegisterOp};
+    let (node, wallet) = (key(1), key(2));
+    let registrar = key(40);
+    let mut g = genesis(&node, &addr(&wallet));
+    g.classes.push(teko_economy::ClassSpec {
+        name: "imovel".into(),
+        threshold: 1,
+        registrars: vec![public_key_bytes(&registrar)],
+        window_secs: 1_200,
+    });
+    let mut m = Maker::new(&g, &node);
+    m.make(&[]);
+    let (owner, relayer) = (key(41), key(42));
+    let meta = [7u8; 32];
+    let intent = Intent::register(b"imovel", b"casa-1", addr(&owner), &meta);
+    let approval = Approval::sign(&registrar, CHAIN, &intent);
+    let tx = Tx::new_signed(
+        &relayer,
+        CHAIN,
+        0,
+        ASSETS_MODULE,
+        AssetOp::Register(RegisterOp {
+            class: b"imovel".to_vec(),
+            asset: b"casa-1".to_vec(),
+            owner: addr(&owner).to_vec(),
+            metadata_hash: meta.to_vec(),
+            approvals: vec![approval],
+        })
+        .encode(),
+    );
+    m.make(&[tx]);
+    let mut ix = Index::new(g).unwrap();
+    ix.sync(&m.blocks).unwrap();
+    // the OWNER never signed anything, yet the registration is in their history
+    let acc = ix.account(&text(&owner)).unwrap();
+    assert!(acc.known);
+    assert_eq!(acc.recent_txs.len(), 1, "{:?}", acc.recent_txs);
+    assert_eq!(acc.assets.len(), 1);
+}

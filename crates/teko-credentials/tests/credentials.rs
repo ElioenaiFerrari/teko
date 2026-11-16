@@ -73,6 +73,7 @@ fn private_propose(valid_until: u64) -> ProposeOp {
         commitment: vec![7; 32],
         claims: vec![],
         valid_until,
+        sealed: vec![],
     }
 }
 
@@ -280,6 +281,7 @@ fn private_types_keep_only_a_commitment_and_public_types_bind_their_claims() {
         commitment: vec![0; 32],
         claims: claims.clone(),
         valid_until: t0 + 5_000,
+        sealed: vec![],
     };
     assert!(
         send(&mut w, &m0, Op::Propose(p.clone()), t0)

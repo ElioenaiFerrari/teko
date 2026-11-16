@@ -55,6 +55,10 @@ pub struct CredRec {
     /// PUBLIC reason of the veto or revocation.
     #[prost(string, tag = "12")]
     pub reason: String,
+    /// The private attributes (`salt ‖ claims`) SEALED to the holder's credential key (ADR-0039):
+    /// only the holder's device opens them, so a wallet restore recovers them from the chain.
+    #[prost(bytes = "vec", tag = "13")]
+    pub sealed: Vec<u8>,
 }
 
 pub(crate) const STATE_PROPOSED: u32 = 0;
@@ -107,6 +111,9 @@ pub struct ProposeOp {
     pub claims: Vec<u8>,
     #[prost(uint64, tag = "5")]
     pub valid_until: u64,
+    /// Private types only: the attributes sealed to the holder (ADR-0039); may be empty.
+    #[prost(bytes = "vec", tag = "6")]
+    pub sealed: Vec<u8>,
 }
 
 /// A member approves, vetoes or revokes the credential `id` (one member per transaction).

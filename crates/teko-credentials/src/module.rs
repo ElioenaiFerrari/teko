@@ -12,6 +12,8 @@ pub const CREDENTIALS_MODULE: u32 = 3;
 const MAX_TYPE: usize = 32;
 const MAX_MEMBERS: usize = 16;
 const MAX_CLAIMS: usize = 2_048;
+/// Ephemeral key + tag + salt + claims.
+const MAX_SEALED: usize = 33 + 16 + 16 + MAX_CLAIMS;
 const MAX_REASON: usize = 200;
 /// Default contest window of a type created without one (7 days).
 pub const DEFAULT_CONTEST_SECS: u64 = 7 * 86_400;
@@ -185,6 +187,12 @@ fn propose(ctx: &mut Ctx<'_, '_>, op: ProposeOp) -> Result<(), ModuleError> {
     } else if !op.claims.is_empty() {
         return Err(err("this type keeps its claims off the chain"));
     }
+    if t.public && !op.sealed.is_empty() {
+        return Err(err("a public credential has nothing to seal"));
+    }
+    if op.sealed.len() > MAX_SEALED {
+        return Err(err("sealed attributes too long"));
+    }
     if t.validity_secs == 0 {
         if op.valid_until != 0 {
             return Err(err("this type does not expire"));
@@ -213,6 +221,7 @@ fn propose(ctx: &mut Ctx<'_, '_>, op: ProposeOp) -> Result<(), ModuleError> {
         claims: op.claims,
         valid_until: op.valid_until,
         proposed_at: ctx.time,
+        sealed: op.sealed,
         approvals: vec![me],
         state: STATE_PROPOSED,
         ..Default::default()

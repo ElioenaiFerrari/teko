@@ -20,4 +20,6 @@ pub enum CryptoError {
     Expired,
     #[error("nonce mismatch")]
     NonceMismatch,
+    #[error("sealed data does not open")]
+    Unseal,
 }

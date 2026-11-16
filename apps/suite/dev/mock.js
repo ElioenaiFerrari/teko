@@ -91,6 +91,7 @@
     dev_mode: async () => true,
     civic_request: async () => { await prompt('issue_identity'); return { civic_id: ID, path: 'dev/requests/civic-request-1a2b3c4d.json', json: '{}' }; },
     civic_import: async () => { await prompt('load_credential'); dev.state = 'credentials_issued'; return 'dev/inbox/civic-1a2b3c4d.bundle'; },
+    recover_all: async () => { await prompt('credential_key'); await prompt('open_credential'); return { address: WADDR, balance: 4000 * 1000000, stake: 0, assets: 1, credentials: [{ ctype: 'cnh-b', id: 'ab'.repeat(32), status: 'active', claims: 'nome=Maria da Silva;categoria=B', valid_until: 0 }], unopened: 0 }; },
     civic_status: async () => ({ state: 'installed', chain: 'active', active_at: 0, valid_until: 0, now: 0 }),
     reveal_identity: async () => { for (let i = 0; i < 4; i++) await prompt('prove_attribute', 500); return [['name', 'Maria da Silva'], ['birth_date', '1990-05-17'], ['nationality', 'BR'], ['registry_id', 'TK-9A41C07E']]; },
     pairwise_id: async ({ service }) => { await prompt('pairwise_id'); return 'tekop1' + btoa(service).replace(/[^a-z0-9]/gi, '').toLowerCase().slice(0, 32); },

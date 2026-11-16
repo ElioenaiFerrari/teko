@@ -60,6 +60,8 @@ pub enum ButtonKind {
     CredentialKey = 25,
     /// "Issue / approve / veto / revoke credential?" prompt: the organ member's own transaction.
     SignCredentialOp = 26,
+    /// "Open the sealed attributes of a credential?" prompt (ADR-0039).
+    OpenCredential = 27,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, prost::Enumeration)]
@@ -215,6 +217,34 @@ pub struct SignAssetOffer {
 pub struct GetCredentialKey {
     #[prost(string, tag = "1")]
     pub ctype: String,
+}
+/// Opens, ON THE DEVICE, the attributes sealed to this wallet's credential key (ADR-0039): the
+/// chain holds them sealed; only this device can read them. Used to recover credentials after a
+/// wallet restore. The device shows what it opens and asks for the button.
+#[derive(Clone, PartialEq, prost::Message)]
+pub struct OpenCredentialBundle {
+    #[prost(string, tag = "1")]
+    pub ctype: String,
+    /// The holder's credential key the attributes were sealed to (must be this wallet's).
+    #[prost(bytes = "vec", tag = "2")]
+    pub subject: Vec<u8>,
+    #[prost(bytes = "vec", tag = "3")]
+    pub sealed: Vec<u8>,
+}
+/// The attributes and the salt, to rebuild the holder's bundle (the host checks them against the
+/// commitment on the chain).
+#[derive(Clone, PartialEq, prost::Message)]
+pub struct CredentialBundleOpened {
+    #[prost(bytes = "vec", tag = "1")]
+    pub claims: Vec<u8>,
+    #[prost(bytes = "vec", tag = "2")]
+    pub salt: Vec<u8>,
+}
+/// Asks for the credential keys of several types (ADR-0039), derived from the WALLET.
+#[derive(Clone, PartialEq, prost::Message)]
+pub struct GetCredentialKeys {
+    #[prost(string, repeated, tag = "1")]
+    pub ctypes: Vec<String>,
 }
 /// Asks the device to build, show and sign THIS wallet's own transaction in the credentials
 /// module (ADR-0037): an organ member PROPOSES, APPROVES, VETOES or REVOKES a credential. The
@@ -428,6 +458,10 @@ pub struct TransferSigned {
     pub signature: Vec<u8>,
     #[prost(bytes = "vec", tag = "2")]
     pub public_key: Vec<u8>,
+    /// Credential proposals only (ADR-0039): the attributes SEALED to the holder, which the device
+    /// made and put into the signed payload. The host needs it to rebuild the same transaction.
+    #[prost(bytes = "vec", tag = "3")]
+    pub sealed: Vec<u8>,
 }
 
 #[derive(Clone, PartialEq, prost::Message)]
@@ -586,6 +620,20 @@ pub struct VoterKey {
     #[prost(bytes = "vec", tag = "1")]
     pub voter_key: Vec<u8>,
 }
+/// The PUBLIC credential keys of several types at once (ADR-0039): one confirmation on the device.
+/// Used after a wallet restore, to find on the chain everything issued to this wallet's keys.
+#[derive(Clone, PartialEq, prost::Message)]
+pub struct CredentialKeys {
+    #[prost(message, repeated, tag = "1")]
+    pub keys: Vec<CredentialKeyEntry>,
+}
+#[derive(Clone, PartialEq, prost::Message)]
+pub struct CredentialKeyEntry {
+    #[prost(string, tag = "1")]
+    pub ctype: String,
+    #[prost(bytes = "vec", tag = "2")]
+    pub public_key: Vec<u8>,
+}
 /// PUBLIC credential key for one type.
 #[derive(Clone, PartialEq, prost::Message)]
 pub struct CredentialKey {
@@ -711,6 +759,8 @@ define_messages! {
         SignAssetAccept(SignAssetAccept) = 0x0020,
         SignCredentialOp(SignCredentialOp) = 0x0021,
         GetCredentialKey(GetCredentialKey) = 0x0022,
+        GetCredentialKeys(GetCredentialKeys) = 0x0023,
+        OpenCredentialBundle(OpenCredentialBundle) = 0x0024,
     }
 }
 
@@ -743,6 +793,8 @@ define_messages! {
         WalletBackupOk(WalletBackupOk) = 0x0118,
         TransferSigned(TransferSigned) = 0x0119,
         CredentialKey(CredentialKey) = 0x011A,
+        CredentialKeys(CredentialKeys) = 0x011B,
+        CredentialBundleOpened(CredentialBundleOpened) = 0x011C,
     }
 }
 

@@ -18,6 +18,7 @@ pub mod hex;
 mod ids;
 mod keys;
 pub mod ledger;
+pub mod seal;
 mod sign;
 pub mod tags;
 pub mod voter;

@@ -146,12 +146,27 @@ pub fn cred_propose_payload(
     claims: &[u8],
     valid_until: u64,
 ) -> Vec<u8> {
+    cred_propose_payload_sealed(ctype, subject, commitment, claims, valid_until, &[])
+}
+
+/// Like `cred_propose_payload`, with the attributes SEALED to the holder (ADR-0039): the issuing
+/// device seals `salt ‖ claims` to the holder's credential key and the ciphertext rides on the
+/// proposal, so the holder can recover the attributes from the chain after restoring the wallet.
+pub fn cred_propose_payload_sealed(
+    ctype: &[u8],
+    subject: &[u8],
+    commitment: &[u8; 32],
+    claims: &[u8],
+    valid_until: u64,
+    sealed: &[u8],
+) -> Vec<u8> {
     let mut p = Vec::from([CRED_OP_PROPOSE]);
     put_bytes(&mut p, 1, ctype);
     put_bytes(&mut p, 2, subject);
     put_bytes(&mut p, 3, commitment);
     put_bytes(&mut p, 4, claims);
     put_u64(&mut p, 5, valid_until);
+    put_bytes(&mut p, 6, sealed);
     p
 }
 

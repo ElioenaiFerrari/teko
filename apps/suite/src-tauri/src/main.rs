@@ -51,6 +51,7 @@ fn main() {
             commands::dev_mode,
             commands::credentials_view,
             commands::credential_key,
+            commands::recover_all,
             commands::civic_request,
             commands::civic_import,
             commands::civic_status,

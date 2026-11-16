@@ -270,7 +270,8 @@
     sign_stake: ['Confirme o stake no dispositivo', 'Confira a ação, o valor e a taxa que o dispositivo mostra. Quem trava stake pode ser penalizado se votar duas vezes.'],
     sign_asset_offer: ['Confirme a sua OFERTA no dispositivo', 'Confira o BEM, o comprador, o preço, a janela de veto e a versão que o dispositivo mostra. Esta é a SUA transação, assinada na sua carteira. Só confirme se for exatamente o negócio combinado.'],
     sign_asset_accept: ['Confirme o ACEITE no dispositivo', 'Confira o BEM, o vendedor, o preço e a janela de veto. O preço sai da sua carteira para um escrow e só volta se o órgão vetar. Só confirme se for exatamente o negócio combinado.'],
-    credential_key: ['Confirme a CHAVE DE CREDENCIAL no dispositivo', 'Só a chave pública deste tipo de credencial será mostrada ao órgão que vai emitir. Ela não se liga à sua identidade, carteira ou voto.'],
+    credential_key: ['Confirme a CHAVE DE CREDENCIAL no dispositivo', 'Só a chave pública deste tipo de credencial será mostrada ao órgão que vai emitir. Ela é derivada da sua carteira (volta com a frase de 24 palavras) e não se liga publicamente à sua identidade, ao seu endereço nem ao seu voto.'],
+    open_credential: ['Confirme: abrir os atributos da credencial', 'O dispositivo decifra, com a chave derivada da sua carteira, os atributos guardados na chain e mostra o que vai entregar à Suite.'],
     sign_credential_op: ['Confirme a operação do ÓRGÃO no dispositivo', 'Confira o tipo, o titular, os atributos, a validade e o motivo na tela do dispositivo.'],
     sign_transfer: ['Confirme o envio no dispositivo', 'Confira o ENDEREÇO de destino, o valor e a taxa que o dispositivo mostra. Só confirme se for exatamente o que você quer enviar.'],
     wallet_check: ['Verifique o backup no dispositivo', 'Digite a frase do seu papel no dispositivo. Ele só diz se confere ou não.'],
@@ -349,7 +350,7 @@
   }
 
   function resetSession() {
-    S.genuine = null; S.authAck = false; S.fw = null; S.civic = null; S.civicReq = null; S.identity = null;
+    S.genuine = null; S.authAck = false; S.fw = null; S.civic = null; S.civicReq = null; S.recovery = null; S.identity = null;
     S.pairwise = null; S.signed = null; S.file = null; S.verifyRes = null; S.prove.result = null;
     S.election = null; S.elecChecked = false; S.idTried = false; S.fwTried = false; S.picks = {}; S.ballots = {}; S.wipeArmed = false; S.lastKey = '';
   }
@@ -1291,6 +1292,10 @@
       await guarded(async () => { await call('credential_key', { ctype: b.dataset.ctype }); toast('Chave de credencial gerada no dispositivo. Entregue-a ao órgão.', 'ok'); });
       S.credsTried = false; S.lastKey = ''; render(); loadCreds();
     },
+    async recover() {
+      await guarded(async () => { S.recovery = await call('recover_all'); toast('Tudo o que pertence a esta carteira foi relido da chain.', 'ok'); });
+      S.credsTried = false; S.lastKey = ''; render(); loadCreds();
+    },
     async credrefresh() { S.credsTried = false; S.lastKey = ''; render(); loadCreds(); },
     async assetlien(b) {
       await guarded(async () => { await call('asset_lien', { class: b.dataset.class, asset: b.dataset.id, on: b.dataset.on === '1' }); toast(b.dataset.on === '1' ? 'Órgão simulado registrou a penhora.' : 'Órgão simulado liberou o gravame.', 'ok'); });
@@ -1624,8 +1629,13 @@
     return `${head0}
       <article class="card"><div class="card__head"><div class="card__ico card__ico--arara">${ico('badge')}</div><h2>Emitidas para mim</h2>
         <button class="btn btn--sm btn--ghost" data-act="credrefresh">Atualizar</button></div>${mine}</article>
+      <article class="card"><div class="card__head"><div class="card__ico card__ico--boto">${ico('shield')}</div><h2>Recuperar tudo desta carteira</h2></div>
+        <p class="muted">Restaurou a carteira num dispositivo novo? Saldo, bens, histórico e credenciais estão na chain e as chaves vêm da sua frase: aqui a Suite os relê, já verificados. O dispositivo abre os atributos privados (um botão por credencial). <strong>O ID cívico e o registro de voto não voltam pela frase</strong>: seguem a reemissão presencial.</p>
+        <div class="row"><button class="btn" data-act="recover">${ico('key')}Recuperar tudo</button></div>
+        ${S.recovery ? `<dl class="kv"><dt>Endereço</dt><dd class="mono">${esc(S.recovery.address)}</dd><dt>Saldo</dt><dd>${esc(money(S.recovery.balance))} TEKO</dd><dt>Stake</dt><dd>${esc(money(S.recovery.stake))} TEKO</dd><dt>Bens</dt><dd>${S.recovery.assets}</dd><dt>Credenciais</dt><dd>${S.recovery.credentials.length}${S.recovery.unopened ? ` (${S.recovery.unopened} sem atributos recuperáveis)` : ''}</dd></dl>` : ''}
+      </article>
       <article class="card"><div class="card__head"><div class="card__ico card__ico--onca">${ico('key')}</div><h2>Tipos de credencial da rede</h2></div>
-        <p class="muted">A chave de credencial é <strong>por tipo</strong> e não se liga à sua identidade, carteira ou voto. Rede <span class="mono">${esc(c.chain_id)}</span>.</p>${types}</article>`;
+        <p class="muted">A chave de credencial é <strong>por tipo</strong>, derivada da sua <strong>carteira</strong> (volta com a frase) e sem ligação pública com o seu endereço, a identidade ou o voto. Rede <span class="mono">${esc(c.chain_id)}</span>.</p>${types}</article>`;
   }
 
   const CLASS_LABEL = { veiculo: 'Veículo', imovel: 'Imóvel' };

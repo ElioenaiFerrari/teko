@@ -23,7 +23,8 @@
 
 - No onboarding o dispositivo gera a carteira, **mostra 24 palavras na tela dele** e confirma que você anotou pedindo **3 posições sorteadas**. Há uma **passphrase** opcional (esquecê-la = perder os fundos).
 - Perdeu o dispositivo? No novo, **Restaurar com minha frase**: você digita as 24 palavras **no dispositivo** e confere o endereço mostrado. O endereço é o mesmo de antes; o saldo é do livro, não do aparelho.
-- A frase **não** recupera a identidade, o ID Cívico, a credencial nem o registro de voto: esses seguem o processo presencial acima.
+- A frase recupera **dinheiro, bens, histórico e credenciais** (CNH, candidatura…): as chaves de credencial vêm da carteira e os atributos privados estão na chain, cifrados a elas ([ADR-0039](adr/0039-recuperar-tudo-pela-carteira.md)). Na Suite, tela **Credenciais → Recuperar tudo**.
+- A frase **não** recupera a identidade, o ID Cívico, a credencial cívica nem o registro de voto: esses seguem o processo presencial acima.
 - Nunca digite a frase em computador, celular ou site. A Suite não tem campo para ela.
 
 Veja também: [ADR-0003](adr/0003-recuperacao-seed-vs-reemissao.md), [ADR-0008](adr/0008-registro-de-commitment-sem-vinculo.md).

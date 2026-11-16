@@ -177,6 +177,7 @@ fn prompt_name(kind: ButtonKind) -> &'static str {
         ButtonKind::SignStake => "sign_stake",
         ButtonKind::CredentialKey => "credential_key",
         ButtonKind::SignCredentialOp => "sign_credential_op",
+        ButtonKind::OpenCredential => "open_credential",
         ButtonKind::Unspecified => "unknown",
     }
 }
@@ -2648,11 +2649,14 @@ pub async fn credentials_view(suite: State<'_, Suite>) -> Result<CredsView, UiEr
                 return Ok(view);
             }
         };
-        let keys = suite
-            .cred_keys
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .clone();
+        let mut keys = load_cred_keys();
+        keys.extend(
+            suite
+                .cred_keys
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .clone(),
+        );
         let ledger = world.ledger_ref();
         view.available = true;
         view.chain_id = world.genesis().chain_id.clone();
@@ -2668,10 +2672,11 @@ pub async fn credentials_view(suite: State<'_, Suite>) -> Result<CredsView, UiEr
                         ctype: ctype.clone(),
                         id: hex::encode(&id),
                         status: status_name(rec.status_at(view.now)),
-                        claims: t
-                            .public
-                            .then(|| String::from_utf8(rec.claims.clone()).ok())
-                            .flatten(),
+                        claims: if t.public {
+                            String::from_utf8(rec.claims.clone()).ok()
+                        } else {
+                            recovered_claims(&id)
+                        },
                         valid_until: rec.valid_until,
                         active_at: rec.active_at,
                         reason: rec.reason.clone(),
@@ -2692,6 +2697,33 @@ pub async fn credentials_view(suite: State<'_, Suite>) -> Result<CredsView, UiEr
     .map_err(|e| ui_err("Internal", e))?
 }
 
+/// Credential keys are PUBLIC, so the Suite remembers them on disk (`dev/cred-keys.json`): the
+/// device re-derives them from the wallet at any time, this only saves a confirmation.
+fn load_cred_keys() -> std::collections::BTreeMap<String, String> {
+    fs::read_to_string(resolve_dev_dir().join("cred-keys.json"))
+        .ok()
+        .and_then(|t| serde_json::from_str(&t).ok())
+        .unwrap_or_default()
+}
+
+fn save_cred_keys(keys: &std::collections::BTreeMap<String, String>) {
+    if let Ok(json) = serde_json::to_string_pretty(keys) {
+        let _ = fs::write(resolve_dev_dir().join("cred-keys.json"), json);
+    }
+}
+
+/// The holder file of a recovered private credential (`dev/recovered/<id>.json`).
+fn recovered_claims(id: &[u8]) -> Option<String> {
+    let t = fs::read_to_string(
+        resolve_dev_dir()
+            .join("recovered")
+            .join(format!("{}.json", hex::encode(id))),
+    )
+    .ok()?;
+    let v: serde_json::Value = serde_json::from_str(&t).ok()?;
+    v.get("claims")?.as_str().map(str::to_string)
+}
+
 /// The PUBLIC credential key of this holder for one type, confirmed on the device. The holder
 /// hands it to the issuing organ; it is unlinkable to the identity, wallet and voter keys.
 #[tauri::command]
@@ -2704,10 +2736,173 @@ pub async fn credential_key(
     let t2 = ctype.clone();
     let key = with_device(app, inner.clone(), move |c| c.credential_key(&t2)).await?;
     let key = hex::encode(&key);
-    inner
-        .cred_keys
-        .lock()
-        .unwrap_or_else(|e| e.into_inner())
-        .insert(ctype, key.clone());
+    let mut keys = inner.cred_keys.lock().unwrap_or_else(|e| e.into_inner());
+    keys.insert(ctype, key.clone());
+    save_cred_keys(&keys);
     Ok(key)
+}
+
+/// A private credential to open on the device: type, id, holder key, sealed blob, commitment.
+type ToOpen = (String, Vec<u8>, Vec<u8>, Vec<u8>, Vec<u8>);
+
+#[derive(Serialize)]
+pub struct RecoveredCred {
+    ctype: String,
+    id: String,
+    status: &'static str,
+    claims: Option<String>,
+    valid_until: u64,
+}
+
+#[derive(Serialize)]
+pub struct Recovery {
+    address: String,
+    balance: u64,
+    stake: u64,
+    assets: usize,
+    credentials: Vec<RecoveredCred>,
+    /// Private credentials whose attributes could not be opened (no sealed copy on the chain).
+    unopened: usize,
+}
+
+/// "Recover everything" after a wallet restore (ADR-0039): everything that belongs to the wallet is
+/// on the chain, so the Suite reads it back, verified. The credential keys come from the WALLET
+/// (one confirmation), the chain is searched for what was issued to them, and the attributes
+/// sealed to those keys are opened ON THE DEVICE (one confirmation each). The identity (civic ID)
+/// and the voter registration are NOT recovered here: they never come from the seed.
+#[tauri::command]
+pub async fn recover_all(app: AppHandle, suite: State<'_, Suite>) -> Result<Recovery, UiError> {
+    let inner = suite.inner().clone();
+    let net = resolve_dev_dir().join("net");
+    if !net.join(teko_node::ECONOMY_FILE).exists() {
+        return Err(ui_err("NoNetwork", "Sem rede: rode make devnet."));
+    }
+    let types: Vec<(String, bool)> = {
+        let world = teko_node::NodeWorld::open(&net)
+            .map_err(|e| ui_err("NoNetwork", format!("rede indisponível: {e}")))?;
+        teko_credentials::types(world.ledger_ref())
+            .into_iter()
+            .map(|(n, t)| (String::from_utf8_lossy(&n).to_string(), t.public))
+            .filter(|(n, _)| n != "civic")
+            .collect()
+    };
+    // 1) the wallet and its credential keys: the device derives them from the seed
+    let ctypes: Vec<String> = types.iter().map(|(n, _)| n.clone()).collect();
+    let (addr, keys) = with_device(app.clone(), inner.clone(), move |c| {
+        let addr = c.wallet_address()?;
+        let keys = if ctypes.is_empty() {
+            Vec::new()
+        } else {
+            c.credential_keys(&ctypes)?
+        };
+        Ok((addr, keys))
+    })
+    .await?;
+    {
+        let mut mem = inner.cred_keys.lock().unwrap_or_else(|e| e.into_inner());
+        for (t, k) in &keys {
+            mem.insert(t.clone(), hex::encode(k));
+        }
+        save_cred_keys(&mem);
+    }
+    // 2) the chain (verified): what belongs to the wallet, and what was issued to its keys
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |d| d.as_secs());
+    let me = teko_crypto::parse_wallet_address(&addr.address)
+        .map_err(|_| ui_err("Internal", "endereço da carteira"))?;
+    let mut rec = Recovery {
+        address: addr.address.clone(),
+        balance: 0,
+        stake: 0,
+        assets: 0,
+        credentials: Vec::new(),
+        unopened: 0,
+    };
+    // (type, id, subject, sealed, commitment) of the private ones still to open
+    let mut to_open: Vec<ToOpen> = Vec::new();
+    {
+        let world = teko_node::NodeWorld::open(&net)
+            .map_err(|e| ui_err("NoNetwork", format!("rede indisponível: {e}")))?;
+        let ledger = world.ledger_ref();
+        rec.balance = teko_coin::balance(ledger, &me);
+        rec.stake = teko_coin::stake_of(ledger, &me);
+        rec.assets = teko_assets::assets_of(ledger, &me).len();
+        for (ctype, key) in &keys {
+            let public = types.iter().any(|(n, p)| n == ctype && *p);
+            for (t, id) in teko_credentials::credentials_of(ledger, key) {
+                let Some(cr) = teko_credentials::credential(ledger, &t, &id) else {
+                    continue;
+                };
+                if t != ctype.as_bytes() {
+                    continue;
+                }
+                if !public && recovered_claims(&id).is_none() {
+                    if cr.sealed.is_empty() {
+                        rec.unopened += 1;
+                    } else {
+                        to_open.push((
+                            ctype.clone(),
+                            id.clone(),
+                            key.clone(),
+                            cr.sealed.clone(),
+                            cr.commitment.clone(),
+                        ));
+                    }
+                }
+                rec.credentials.push(RecoveredCred {
+                    ctype: ctype.clone(),
+                    id: hex::encode(&id),
+                    status: status_name(cr.status_at(now)),
+                    claims: if public {
+                        String::from_utf8(cr.claims.clone()).ok()
+                    } else {
+                        None
+                    },
+                    valid_until: cr.valid_until,
+                });
+            }
+        }
+    }
+    // 3) the private attributes: sealed to the wallet's keys, opened ON THE DEVICE
+    if !to_open.is_empty() {
+        let dir = resolve_dev_dir().join("recovered");
+        let opened = with_device(app, inner, move |c| {
+            let mut out = Vec::new();
+            for (ct, id, key, sealed, commitment) in to_open {
+                // a refusal on the device skips just this one (the user may decline)
+                if let Ok((claims, salt)) =
+                    c.open_credential_bundle(&ct, &key, &sealed, &commitment)
+                {
+                    out.push((ct, id, claims, salt));
+                }
+            }
+            Ok(out)
+        })
+        .await?;
+        fs::create_dir_all(&dir).map_err(|e| ui_err("Io", e))?;
+        for (ct, id, claims, salt) in opened {
+            let json = serde_json::json!({
+                "ctype": ct,
+                "id": hex::encode(&id),
+                "claims": String::from_utf8_lossy(&claims),
+                "salt": hex::encode(&salt),
+            });
+            let _ = fs::write(
+                dir.join(format!("{}.json", hex::encode(&id))),
+                json.to_string(),
+            );
+        }
+    }
+    for c in &mut rec.credentials {
+        if c.claims.is_none()
+            && let Ok(id) = hex::decode(&c.id)
+        {
+            c.claims = recovered_claims(&id);
+            if c.claims.is_none() {
+                rec.unopened += 1;
+            }
+        }
+    }
+    Ok(rec)
 }

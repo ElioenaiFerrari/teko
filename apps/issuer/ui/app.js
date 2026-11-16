@@ -40,7 +40,7 @@
   };
 
   const PROMPTS = {
-    credential_key: ['Confirme a CHAVE DE CREDENCIAL no dispositivo', 'Só a chave pública deste tipo será mostrada. Ela não se liga à sua identidade, carteira ou voto.'],
+    credential_key: ['Confirme a CHAVE DE CREDENCIAL no dispositivo', 'Só a chave pública deste tipo será mostrada. Ela é derivada da carteira do titular e não se liga publicamente ao endereço, à identidade nem ao voto.'],
     sign_credential_op: ['Confirme a operação do ÓRGÃO no dispositivo', 'Confira o tipo, o titular, os atributos, a validade e o motivo na tela do dispositivo. Só confirme se for exatamente o combinado.'],
     pin_entry: ['Digite o PIN no dispositivo', 'O PIN nunca passa por este computador.'],
     other: ['Confirme no dispositivo', 'Siga as instruções na tela do dispositivo.'],

@@ -254,6 +254,23 @@ impl Index {
                 self.known.insert(to);
                 self.by_account.entry(to).or_default().push(self.txs.len());
             }
+            // Whoever an asset operation NAMES also sees it in their history, not only the signer:
+            // the owner an asset is registered to, and the buyer an offer is made to (so a restored
+            // wallet finds what was done for it by others).
+            if let Some(op) = (tx.module == teko_assets::ASSETS_MODULE)
+                .then(|| teko_assets::Op::decode(&tx.payload))
+                .flatten()
+            {
+                let named = match op {
+                    teko_assets::Op::Register(m) => to_address(&m.owner),
+                    teko_assets::Op::Offer(m) => to_address(&m.buyer),
+                    _ => None,
+                };
+                if let Some(who) = named.filter(|w| *w != sender) {
+                    self.known.insert(who);
+                    self.by_account.entry(who).or_default().push(self.txs.len());
+                }
+            }
             let mut events = Vec::new();
             if let Some(r) = out.receipts.get(i) {
                 for ev in &r.events {

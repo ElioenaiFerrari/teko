@@ -3134,6 +3134,64 @@ fn the_credential_key_is_per_type_stable_and_unlinkable_to_identity_wallet_and_v
 }
 
 #[test]
+fn restoring_the_wallet_on_a_new_device_gives_back_the_same_credential_keys() {
+    let (_w, hal, mut dev, _) = ready();
+    let phrase = hal.shown_words();
+    assert_eq!(phrase.len(), 24);
+    let a = credential_key_of(&mut dev, "cnh-b");
+    let b = credential_key_of(&mut dev, "cnh-a");
+    // batch: one confirmation, the same keys
+    let before = hal.confirms_requested();
+    let Response::CredentialKeys(k) = dev.handle(Request::GetCredentialKeys(GetCredentialKeys {
+        ctypes: vec!["cnh-b".into(), "cnh-a".into()],
+    })) else {
+        panic!("batch failed")
+    };
+    assert_eq!(hal.confirms_requested(), before + 1);
+    assert_eq!(k.keys[0].public_key, a);
+    assert_eq!(k.keys[1].public_key, b);
+    // a brand-new device restored from the SAME words derives the SAME credential keys
+    let w = world();
+    let h2 = ScriptedHal::new();
+    let mut d2 = boot(&w, &h2, 8);
+    to_initialized(&mut d2, &w, &h2);
+    type_words(&h2, &phrase);
+    let r = d2.handle(Request::RestoreWallet(RestoreWallet {}));
+    assert!(matches!(r, Response::WalletReady(_)), "{r:?}");
+    assert_eq!(credential_key_of(&mut d2, "cnh-b"), a);
+    assert_eq!(credential_key_of(&mut d2, "cnh-a"), b);
+    // the civic credential is not a wallet-derived one; bad lists are refused
+    for bad in [
+        vec!["civic".to_string()],
+        vec![],
+        vec!["a\nb".to_string()],
+        vec!["x".to_string(); 33],
+    ] {
+        let r = dev.handle(Request::GetCredentialKeys(GetCredentialKeys {
+            ctypes: bad,
+        }));
+        assert_eq!(failure_code(&r), Some(ErrorCode::InvalidArgument), "{r:?}");
+    }
+    let r = dev.handle(Request::GetCredentialKey(GetCredentialKey {
+        ctype: "civic".into(),
+    }));
+    assert_eq!(failure_code(&r), Some(ErrorCode::InvalidArgument));
+}
+
+#[test]
+fn credential_keys_need_the_wallet() {
+    let (_w, _hal, mut dev) = fresh_initialized();
+    let r = dev.handle(Request::GetCredentialKey(GetCredentialKey {
+        ctype: "cnh-b".into(),
+    }));
+    assert_eq!(failure_code(&r), Some(ErrorCode::InvalidState));
+    let r = dev.handle(Request::GetCredentialKeys(GetCredentialKeys {
+        ctypes: vec!["cnh-b".into()],
+    }));
+    assert_eq!(failure_code(&r), Some(ErrorCode::InvalidState));
+}
+
+#[test]
 fn an_organ_member_issues_approves_vetoes_and_revokes_from_the_device_in_the_real_ledger() {
     use teko_credentials::{
         CREDENTIALS_MODULE, Op as COp, ProposeOp, Status, VoteOp, credential_id,
@@ -3216,6 +3274,9 @@ fn an_organ_member_issues_approves_vetoes_and_revokes_from_the_device_in_the_rea
     assert!(sc.lines.iter().any(|l| l.contains("1ª aprovação")));
     let commitment = cred_private_commitment(&salt, &claims);
     let id = credential_id(b"cnh-b", &holder, &commitment, &[], until);
+    // the DEVICE sealed the attributes to the holder's credential key and signed them in
+    assert!(!s.sealed.is_empty());
+    let sealed = s.sealed.clone();
     device_tx(
         &mut l,
         s,
@@ -3225,10 +3286,45 @@ fn an_organ_member_issues_approves_vetoes_and_revokes_from_the_device_in_the_rea
             commitment: commitment.to_vec(),
             claims: vec![],
             valid_until: until,
+            sealed: sealed.clone(),
         }),
         1,
     )
     .unwrap();
+    // the chain holds the sealed attributes; only this wallet's device opens them
+    let on_chain = teko_credentials::credential(&l, b"cnh-b", &id)
+        .unwrap()
+        .sealed;
+    assert_eq!(on_chain, sealed);
+    assert!(!on_chain.windows(8).any(|w| w == b"Ana Souz"));
+    hal.clear_screens();
+    let Response::CredentialBundleOpened(opened) =
+        dev.handle(Request::OpenCredentialBundle(OpenCredentialBundle {
+            ctype: "cnh-b".into(),
+            subject: holder.clone(),
+            sealed: on_chain.clone(),
+        }))
+    else {
+        panic!("open failed")
+    };
+    assert_eq!(opened.claims, claims);
+    assert_eq!(opened.salt, salt.to_vec());
+    assert!(hal.screens().iter().any(|s| s.title == "ABRIR CREDENCIAL"));
+    // another key, a tampered blob or the wrong type do not open
+    let mut bad = on_chain.clone();
+    bad[40] ^= 1;
+    for (ct, subj, blob) in [
+        ("cnh-b", holder.clone(), bad),
+        ("cnh-a", holder.clone(), on_chain.clone()),
+        ("cnh-b", vec![2; 33], on_chain.clone()),
+    ] {
+        let r = dev.handle(Request::OpenCredentialBundle(OpenCredentialBundle {
+            ctype: ct.into(),
+            subject: subj,
+            sealed: blob,
+        }));
+        assert!(matches!(r, Response::Failure(_)), "{ct}: {r:?}");
+    }
     assert_eq!(
         teko_credentials::status(&l, b"cnh-b", &id, now.get()),
         Some(Status::Proposed)
@@ -3269,6 +3365,7 @@ fn an_organ_member_issues_approves_vetoes_and_revokes_from_the_device_in_the_rea
             commitment: c2.to_vec(),
             claims: vec![],
             valid_until: until,
+            sealed: vec![],
         }),
         1,
     )
@@ -3403,6 +3500,7 @@ fn an_organ_member_issues_approves_vetoes_and_revokes_from_the_device_in_the_rea
             commitment: c3.to_vec(),
             claims: public_claims.clone(),
             valid_until: until2,
+            sealed: vec![],
         }),
         1,
     )

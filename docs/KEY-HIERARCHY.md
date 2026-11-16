@@ -47,6 +47,14 @@ entropia_w (32 B, RNG do dispositivo) ──BIP-39──▶ 24 palavras (só na 
 
 Persiste só a **chave mestra derivada** (64 B) e um indicador de passphrase. **Não há nenhuma derivação entre este ramo e `K_root`/`s`**: vender ou perder a frase não revela identidade nem voto. Teste: `the_wallet_key_is_unrelated_to_the_identity_and_voter_secrets`.
 
+### 3.2 Chaves de credencial (ADR-0039): um ramo **da carteira**
+
+```
+chave mestra ──m/7240'/1'/H(tipo)'──▶ sk_credencial[tipo] ──▶ titular da credencial desse tipo
+```
+
+Cada tipo de credencial (CNH, candidatura…) tem a sua chave, **derivada da carteira**: a mesma frase e passphrase refazem todas em qualquer dispositivo, e é assim que "recuperar a carteira" recupera as credenciais. O ramo é próprio (hardened) e **não se liga publicamente** aos endereços nem a `K_root` e `s`. Os atributos privados vão à chain **selados** (ECDH + ChaCha20-Poly1305) a essa chave. **Exceção:** o ID cívico (`civic`) pertence à chave de identidade, que **não** vem da seed.
+
 ## 4. Chave de identidade
 
 - Par `Curve`, assinatura identificável. A credencial cívica, emitida **na chain por um órgão** (quórum M-de-N, ADR-0038), vincula `pk_identity` ao cidadão; é o único tipo de credencial cujo titular é a chave de identidade (os demais usam uma chave por tipo, sem ligação: ADR-0037).

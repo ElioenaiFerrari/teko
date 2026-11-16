@@ -428,6 +428,10 @@ impl<H: Hal, R: Rng + CryptoRng> Device<H, R> {
                 nonce: m.nonce,
             }),
             Request::GetCredentialKey(m) => self.get_credential_key(&m.ctype),
+            Request::GetCredentialKeys(m) => self.get_credential_keys(&m.ctypes),
+            Request::OpenCredentialBundle(m) => {
+                self.open_credential_bundle(&m.ctype, &m.subject, &m.sealed)
+            }
             Request::SignCredentialOp(m) => self.sign_credential_op(&m),
             Request::SignStake(m) => {
                 self.sign_stake(&m.chain_id, m.action, m.amount, m.fee, m.nonce)
@@ -944,6 +948,7 @@ impl<H: Hal, R: Rng + CryptoRng> Device<H, R> {
         Ok(Response::TransferSigned(TransferSigned {
             signature,
             public_key: sender,
+            sealed: Vec::new(),
         }))
     }
 
@@ -1014,6 +1019,7 @@ impl<H: Hal, R: Rng + CryptoRng> Device<H, R> {
         Ok(Response::TransferSigned(TransferSigned {
             signature,
             public_key: sender,
+            sealed: Vec::new(),
         }))
     }
 
@@ -1119,28 +1125,131 @@ impl<H: Hal, R: Rng + CryptoRng> Device<H, R> {
         Ok(Response::TransferSigned(TransferSigned {
             signature,
             public_key: pk,
+            sealed: Vec::new(),
         }))
+    }
+
+    /// The credential key of one type, derived from the WALLET (ADR-0039): the same words (and
+    /// passphrase) give the same key on any device, so restoring the wallet restores what was issued
+    /// to it. The civic identity credential is NOT one of these: it belongs to the identity key.
+    fn credential_key_of(&self, ctype: &str) -> Result<SigningKey, Failure> {
+        if ctype == CIVIC_TYPE {
+            return Err(fail(
+                ErrorCode::InvalidArgument,
+                "o ID cívico usa a chave de identidade, não a da carteira",
+            ));
+        }
+        self.master()?
+            .credential_key(ctype)
+            .map_err(|_| fail(ErrorCode::Internal, "chave de credencial"))
     }
 
     /// Exports the PUBLIC credential key of one type (ADR-0037), after the physical confirmation.
     fn get_credential_key(&mut self, ctype: &str) -> Result<Response, Failure> {
         self.require_unlocked_initialized()?;
+        self.require_wallet()?;
         let ctype = clean_ctype(ctype)?;
+        let key = self.credential_key_of(&ctype)?;
         let mut lines = Vec::from([String::from("Tipo de credencial:")]);
         lines.extend(wrap(&ctype, 28));
         lines.push(String::from("Exportar a chave PÚBLICA"));
         lines.push(String::from("deste tipo (para o órgão"));
-        lines.push(String::from("que vai emitir)."));
+        lines.push(String::from("que vai emitir). Ela volta"));
+        lines.push(String::from("com a frase da carteira."));
         self.confirm(
             ButtonKind::CredentialKey,
             Screen::new("CHAVE DE CREDENCIAL", lines),
         )?;
-        let root = self.root()?;
-        let key = voter::derive_credential_key(&root, &ctype)
-            .map_err(|_| fail(ErrorCode::Internal, "chave de credencial"))?;
         Ok(Response::CredentialKey(teko_protocol::CredentialKey {
             public_key: public_key_bytes(&key),
         }))
+    }
+
+    /// The public credential keys of several types with ONE confirmation (after a wallet restore).
+    fn get_credential_keys(&mut self, ctypes: &[String]) -> Result<Response, Failure> {
+        self.require_unlocked_initialized()?;
+        self.require_wallet()?;
+        if ctypes.is_empty() || ctypes.len() > 32 {
+            return Err(fail(ErrorCode::InvalidArgument, "de 1 a 32 tipos"));
+        }
+        let mut entries = Vec::new();
+        for c in ctypes {
+            let c = clean_ctype(c)?;
+            let key = self.credential_key_of(&c)?;
+            entries.push((c, public_key_bytes(&key)));
+        }
+        let mut lines = Vec::from([format!("{} tipos de credencial:", entries.len())]);
+        for (c, _) in entries.iter().take(8) {
+            lines.extend(wrap(c, 28));
+        }
+        if entries.len() > 8 {
+            lines.push(String::from("…"));
+        }
+        lines.push(String::from("Exportar as chaves PÚBLICAS"));
+        lines.push(String::from("(recuperar o que foi emitido"));
+        lines.push(String::from("para esta carteira)."));
+        self.confirm(
+            ButtonKind::CredentialKey,
+            Screen::new("CHAVES DE CREDENCIAL", lines),
+        )?;
+        Ok(Response::CredentialKeys(teko_protocol::CredentialKeys {
+            keys: entries
+                .into_iter()
+                .map(|(ctype, public_key)| teko_protocol::CredentialKeyEntry { ctype, public_key })
+                .collect(),
+        }))
+    }
+
+    /// Opens the attributes sealed to this wallet's credential key (ADR-0039) and shows them. The
+    /// key never leaves the device; the host gets the attributes only after the physical button.
+    fn open_credential_bundle(
+        &mut self,
+        ctype: &str,
+        subject: &[u8],
+        sealed: &[u8],
+    ) -> Result<Response, Failure> {
+        self.require_unlocked_initialized()?;
+        self.require_wallet()?;
+        let ctype = clean_ctype(ctype)?;
+        let key = self.credential_key_of(&ctype)?;
+        if public_key_bytes(&key) != subject {
+            return Err(fail(
+                ErrorCode::InvalidArgument,
+                "esta credencial não é de uma chave desta carteira",
+            ));
+        }
+        let context = credential_seal_context(&ctype, subject);
+        let plain = teko_crypto::seal::open(&key, &context, sealed).map_err(|_| {
+            fail(
+                ErrorCode::BadSignature,
+                "não consegui abrir: não é para esta carteira",
+            )
+        })?;
+        let (salt, claims) = plain
+            .split_at_checked(16)
+            .ok_or_else(|| fail(ErrorCode::InvalidArgument, "conteúdo malformado"))?;
+        let text = core::str::from_utf8(claims)
+            .ok()
+            .filter(|_| parse_claims(claims).is_some())
+            .ok_or_else(|| fail(ErrorCode::InvalidArgument, "atributos malformados"))?;
+        let mut lines = Vec::from([String::from("Credencial do tipo:")]);
+        lines.extend(wrap(&ctype, 28));
+        lines.push(String::from("Atributos:"));
+        for part in text.split(';').filter(|p| !p.trim().is_empty()) {
+            lines.extend(wrap(part.trim(), 28));
+        }
+        lines.push(String::from("Mostrar à Suite (para"));
+        lines.push(String::from("recuperar a credencial)."));
+        self.confirm(
+            ButtonKind::OpenCredential,
+            Screen::new("ABRIR CREDENCIAL", lines),
+        )?;
+        Ok(Response::CredentialBundleOpened(
+            teko_protocol::CredentialBundleOpened {
+                claims: claims.to_vec(),
+                salt: salt.to_vec(),
+            },
+        ))
     }
 
     /// Builds, SHOWS and signs this wallet's OWN transaction in the credentials module
@@ -1152,7 +1261,7 @@ impl<H: Hal, R: Rng + CryptoRng> Device<H, R> {
     ) -> Result<Response, Failure> {
         use teko_crypto::ledger::{
             CRED_OP_APPROVE, CRED_OP_PROPOSE, CRED_OP_REVOKE, CRED_OP_VETO, MODULE_CREDENTIALS,
-            cred_id, cred_private_commitment, cred_propose_payload, cred_public_commitment,
+            cred_id, cred_private_commitment, cred_propose_payload_sealed, cred_public_commitment,
             cred_vote_payload, tx_signing_bytes,
         };
         self.require_unlocked_initialized()?;
@@ -1239,7 +1348,11 @@ impl<H: Hal, R: Rng + CryptoRng> Device<H, R> {
             for part in claims_text.split(';').filter(|p| !p.trim().is_empty()) {
                 lines.extend(wrap(part.trim(), 28));
             }
-            if !m.public {
+            if !m.public && ctype != CIVIC_TYPE {
+                lines.push(String::from("Os dados vão CIFRADOS ao"));
+                lines.push(String::from("titular (só ele abre) e"));
+                lines.push(String::from("o compromisso, à chain."));
+            } else if !m.public {
                 lines.push(String::from("Só o compromisso vai à"));
                 lines.push(String::from("chain; os dados ficam"));
                 lines.push(String::from("com o titular."));
@@ -1271,14 +1384,26 @@ impl<H: Hal, R: Rng + CryptoRng> Device<H, R> {
         push_amount(&mut lines, "Taxa:", m.fee);
         lines.push(format!("Rede: {chain}"));
         self.confirm(ButtonKind::SignCredentialOp, Screen::new(title, lines))?;
+        let mut sealed: Vec<u8> = Vec::new();
         let payload = if op == CRED_OP_PROPOSE {
             let claims_on_chain: &[u8] = if m.public { &m.claims } else { &[] };
-            cred_propose_payload(
+            // PRIVATE attributes go to the chain SEALED to the holder (ADR-0039): the holder's
+            // device re-derives its credential key from the wallet and opens them after a restore.
+            // The civic credential belongs to the identity key, which is not recoverable: no seal.
+            if !m.public && claims_shown && ctype != CIVIC_TYPE {
+                let mut plain = m.salt.clone();
+                plain.extend_from_slice(&m.claims);
+                let context = credential_seal_context(&ctype, &m.subject);
+                sealed = teko_crypto::seal::seal(&m.subject, &context, &plain, &mut self.rng)
+                    .map_err(|_| fail(ErrorCode::InvalidArgument, "chave do titular inválida"))?;
+            }
+            cred_propose_payload_sealed(
                 ctype.as_bytes(),
                 &m.subject,
                 &commitment,
                 claims_on_chain,
                 m.valid_until,
+                &sealed,
             )
         } else {
             let claims_on_chain: &[u8] = if m.public { &m.claims } else { &[] };
@@ -1296,6 +1421,7 @@ impl<H: Hal, R: Rng + CryptoRng> Device<H, R> {
         Ok(Response::TransferSigned(TransferSigned {
             signature,
             public_key: pk,
+            sealed,
         }))
     }
 
@@ -2297,6 +2423,14 @@ struct AssetTrade<'a> {
     window_secs: u64,
     fee: u64,
     nonce: u64,
+}
+
+/// What is authenticated (not hidden) with the sealed attributes of a credential (ADR-0039).
+fn credential_seal_context(ctype: &str, subject: &[u8]) -> Vec<u8> {
+    let mut c = Vec::from(ctype.as_bytes());
+    c.push(0);
+    c.extend_from_slice(subject);
+    c
 }
 
 /// A credential type name: short, no spoofing characters.

@@ -353,3 +353,15 @@ Legenda: **P** = `proptest` (muitos casos), **U** = unitário, **E** = ponta a p
 | Com o dispositivo real do emulador: pedido, emissão, prova contra a chain, registro anônimo e reemissão com o mesmo cidadão | client: `full_onboarding_and_daily_use`, `election_flow_president_for_all_governor_and_mayor_by_domicile`, `losing_the_device_means_reissue_the_old_credential_is_revoked_on_the_chain_and_the_citizen_stays_one` |
 | **Em nós reais:** o dispositivo propõe como membro, o membro simulado aprova, o pacote sai da chain, o dispositivo o instala e a prova só vale após a janela | devnet-sim: `the_civic_credential_is_issued_on_real_nodes_by_the_organ_quorum_and_installed_on_the_device` |
 
+## Recuperar tudo pela carteira (ADR-0039)
+
+| Garantia | Teste |
+|---|---|
+| Chaves de credencial por tipo, determinísticas, distintas dos endereços e da passphrase; restaurar dá as mesmas | wallet: `credential_keys_are_per_type_deterministic_and_unrelated_to_the_wallet_addresses` |
+| Só o destinatário abre; contexto autenticado; qualquer alteração é recusada; cada selo é novo; limites | crypto: `only_the_recipient_opens_it_with_the_same_context`, `any_change_to_the_sealed_bytes_is_refused`, `each_seal_is_fresh_and_oversized_or_invalid_input_is_refused`, `open_inverts_seal` (proptest) |
+| Restaurar a carteira num dispositivo novo dá as mesmas chaves de credencial (lote com uma confirmação); `civic` e listas inválidas recusados | device-core: `restoring_the_wallet_on_a_new_device_gives_back_the_same_credential_keys` |
+| Chaves de credencial exigem carteira | device-core: `credential_keys_need_the_wallet` |
+| O dispositivo sela ao titular, a chain guarda só o cifrado, o dispositivo abre; outra chave, tipo ou blob adulterado não abre | device-core: `an_organ_member_issues_approves_vetoes_and_revokes_from_the_device_in_the_real_ledger` |
+| Bem registrado para alguém aparece no histórico dele, não só no de quem assinou | explorer: `an_asset_registered_to_someone_shows_in_their_history_not_only_the_signers` |
+| **Em nós reais:** emitir, "perder" o dispositivo, restaurar pelas 24 palavras num novo, reencontrar a credencial pela chave derivada e abrir os atributos; os outros tipos não têm nada | devnet-sim: `restoring_the_wallet_on_a_new_device_recovers_the_credentials_from_the_chain_and_opens_them` |
+

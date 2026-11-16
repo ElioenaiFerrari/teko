@@ -40,21 +40,6 @@ pub fn derive_voter_key(
     Err(CryptoError::Derivation)
 }
 
-/// The key a holder gets for one credential TYPE (ADR-0037): deterministic from the identity root,
-/// unrelated across types, and unlinkable to the identity, wallet and voter keys.
-pub fn derive_credential_key(root: &[u8; 32], ctype: &str) -> Result<SigningKey, CryptoError> {
-    for counter in 0u8..=255 {
-        let candidate = Zeroizing::new(tagged_hash(
-            tags::CRED_KEY,
-            &[root.as_slice(), ctype.as_bytes(), &[counter]],
-        ));
-        if let Ok(k) = SigningKey::from_slice(candidate.as_slice()) {
-            return Ok(k);
-        }
-    }
-    Err(CryptoError::Derivation)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -3,7 +3,7 @@
 ← [Índice da documentação](../README.md)
 
 ## Resumo
-A carteira guarda o seu saldo e os seus bens. Como não existe autoridade que devolva dinheiro, ela tem uma **frase de recuperação de 24 palavras**, estilo carteira Bitcoin, criada e mostrada **só no dispositivo**. No onboarding o dispositivo confirma que você anotou pedindo **palavras de posições sorteadas** (estilo Trezor). A **identidade continua sem seed**: a frase não tem ligação com ela nem com o voto.
+A carteira guarda o seu saldo e os seus bens. Como não existe autoridade que devolva dinheiro, ela tem uma **frase de recuperação de 24 palavras**, estilo carteira Bitcoin, criada e mostrada **só no dispositivo**. No onboarding o dispositivo confirma que você anotou pedindo **palavras de posições sorteadas** (estilo Trezor). A frase recupera também as **credenciais** que o órgão emitiu para você (as chaves delas vêm da carteira e os atributos privados estão na chain, cifrados). A **identidade continua sem seed**: a frase não tem ligação com ela nem com o voto.
 
 ## Quem participa
 Você (com papel e caneta), o dispositivo (tela e botões) e a Suite, que só espera e recebe o endereço público.
@@ -22,6 +22,7 @@ Você (com papel e caneta), o dispositivo (tela e botões) e a Suite, que só es
 5. Só então a carteira é gravada, e a Suite recebe o **endereço público** (`tekow1…`). Sem a carteira pronta, o dispositivo recusa o ID Cívico e a emissão da credencial.
 6. **Restaurar** (dispositivo novo ou apagado): **Restaurar com minha frase**, digite as 24 palavras **no dispositivo**, informe a passphrase (se houver) e **confira o endereço** mostrado: uma frase errada gera outra carteira em silêncio, então o endereço é a prova.
 7. **Verificar backup** (tela Carteira): o dispositivo pede a frase inteira e só diz se confere.
+8. **Recuperar tudo** (Suite, tela Credenciais): depois de restaurar, a Suite relê da chain verificada o saldo, o stake, os bens e as credenciais; o dispositivo deriva as chaves de credencial da frase e abre os atributos privados (um botão por credencial) ([ADR-0039](../adr/0039-recuperar-tudo-pela-carteira.md)). O ID cívico e o registro de voto **não** voltam: reemissão presencial.
 
 ## Enviar moedas (M5b)
 

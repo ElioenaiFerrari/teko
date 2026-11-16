@@ -23,7 +23,7 @@ use bip39::{Language, Mnemonic};
 use bitcoin_hashes::{Hash, HashEngine, Hmac, HmacEngine, sha512};
 use p256::elliptic_curve::PrimeField;
 use p256::{FieldBytes, Scalar, ecdsa::SigningKey};
-use teko_crypto::{ledger_address, public_key_bytes, wallet_address};
+use teko_crypto::{ledger_address, public_key_bytes, tagged_hash, tags, wallet_address};
 use zeroize::{Zeroize, Zeroizing};
 
 pub const WORD_COUNT: usize = 24;
@@ -245,6 +245,17 @@ impl MasterKey {
         for part in [0u32, 0, 0, index] {
             k = k.child(part)?;
         }
+        SigningKey::from_slice(&k.bytes[..32]).map_err(|_| WalletError::Derivation)
+    }
+
+    /// The CREDENTIAL key of one credential type (ADR-0039): `m/7240'/1'/t'`, where `t` is 31 bits
+    /// of a domain-separated hash of the type name. A hardened branch of its own, so the public keys
+    /// are unrelated to each other and to the wallet addresses (`m/7240'/0'/0'/0'/i'`), yet the SAME
+    /// seed (and passphrase) re-derives them all: restoring the wallet restores the credential keys.
+    pub fn credential_key(&self, ctype: &str) -> Result<SigningKey, WalletError> {
+        let h = tagged_hash(tags::CRED_KEY, &[ctype.as_bytes()]);
+        let t = u32::from_be_bytes([h[0], h[1], h[2], h[3]]) & !HARDENED;
+        let k = self.child(PURPOSE)?.child(1)?.child(t)?;
         SigningKey::from_slice(&k.bytes[..32]).map_err(|_| WalletError::Derivation)
     }
 

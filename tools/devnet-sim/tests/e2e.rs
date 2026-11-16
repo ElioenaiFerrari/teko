@@ -337,6 +337,7 @@ fn simulated_organ_members_cosign_a_credential_proposed_by_the_issuer_wallet_on_
         commitment: vec![5; 32],
         claims: vec![],
         valid_until,
+        sealed: vec![],
     };
     let id = credential_id(
         &p.ctype,
@@ -643,4 +644,133 @@ fn the_civic_credential_is_issued_on_real_nodes_by_the_organ_quorum_and_installe
         n.stop();
     }
     let _ = std::fs::remove_dir_all(d);
+}
+
+#[test]
+fn restoring_the_wallet_on_a_new_device_recovers_the_credentials_from_the_chain_and_opens_them() {
+    use issuer_cli::{Issuer, scratch_dir};
+    use teko_assets::devnet::World;
+    use teko_client::{CredentialOpArgs, CredentialOpKind, DeviceClient};
+    use teko_device_core::testing::ScriptedHal;
+    use teko_node::init_economy_with_issuer;
+    use teko_transport::connect_tcp;
+
+    let _turn = TURN.lock().unwrap_or_else(|e| e.into_inner());
+    let issuer = Issuer::open(scratch_dir("recover-real"));
+    let trust0 = issuer.dev_setup().unwrap();
+    let factory = issuer.provision_device().unwrap();
+    let d = issuer.dir().to_path_buf();
+    let (m, b) = (
+        std::fs::read(d.join("firmware-v1.manifest")).unwrap(),
+        std::fs::read(d.join("firmware-v1.blob")).unwrap(),
+    );
+    // device A: the citizen's wallet (also a member of the organ, to issue to itself)
+    let hal_a = ScriptedHal::new();
+    hal_a.set_default_pin(Some("482913"));
+    hal_a.set_auto_words(true);
+    let addr_a = spawn_device(&hal_a, trust0.clone(), factory.clone());
+    let mut a = DeviceClient::new(connect_tcp(addr_a, Duration::from_secs(3)).unwrap());
+    a.install_firmware(&trust0, &m, &b, &mut |_, _| {}).unwrap();
+    a.setup_pin().unwrap();
+    let wallet = a.wallet_setup().unwrap();
+    let wallet_addr = teko_crypto::parse_wallet_address(&wallet.address).unwrap();
+    let words = hal_a.shown_words();
+    assert_eq!(words.len(), 24);
+
+    let net = d.join("net");
+    init_network(&net, NetworkKind::Devnet, 3, free_port_base(), false).unwrap();
+    let g = init_economy_with_issuer(
+        &net,
+        Some(wallet_addr),
+        Some(wallet_addr),
+        None,
+        Some(10_000),
+        false,
+    )
+    .unwrap();
+    std::fs::write(net.join(ECONOMY_FILE), g.to_text()).unwrap();
+    let ec = load_economy(&net).unwrap().unwrap();
+    let nodes: Vec<NodeHandle> = (0..3).map(|i| start_node(&net, i, &ec)).collect();
+
+    // the organ issues a PRIVATE credential to the citizen's wallet-derived credential key
+    let holder = a.credential_key("cnh-b").unwrap();
+    let claims = "nome=Ana Souza;categoria=B;registro=123456".to_string();
+    let salt = [4u8; 16];
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_secs();
+    let valid_until = now + 100_000_000;
+    let mut world = teko_node::NodeWorld::open(&net).unwrap();
+    let tx = a
+        .wallet_sign_credential_op(&CredentialOpArgs {
+            chain_id: world.chain_id(),
+            kind: CredentialOpKind::Propose,
+            ctype: "cnh-b",
+            subject: &holder,
+            claims: claims.as_bytes(),
+            public: false,
+            salt: Some(&salt),
+            commitment: None,
+            valid_until,
+            reason: "",
+            contest_secs: 1_200,
+            fee: 0,
+            nonce: world.nonce(&wallet_addr),
+        })
+        .unwrap();
+    world.submit(tx).unwrap();
+    drop(world);
+    devnet_sim::cosign(&net, Some("cnh-b")).unwrap();
+
+    // device A is LOST. Device B is brand new: only the 24 words are typed on it
+    let hal_b = ScriptedHal::new();
+    hal_b.set_default_pin(Some("482913"));
+    let addr_b = spawn_device(&hal_b, trust0.clone(), factory);
+    let mut bdev = DeviceClient::new(connect_tcp(addr_b, Duration::from_secs(3)).unwrap());
+    bdev.install_firmware(&trust0, &m, &b, &mut |_, _| {})
+        .unwrap();
+    bdev.setup_pin().unwrap();
+    for w in &words {
+        hal_b.push_word(Some(w));
+    }
+    assert_eq!(bdev.wallet_restore().unwrap().address, wallet.address);
+
+    // B derives the SAME credential keys from the wallet and finds the credential on the chain
+    let types: Vec<String> = vec!["cnh-a".into(), "cnh-b".into(), "candidato".into()];
+    let keys = bdev.credential_keys(&types).unwrap();
+    let key_b = keys.iter().find(|(t, _)| t == "cnh-b").unwrap().1.clone();
+    assert_eq!(
+        key_b, holder,
+        "the credential key comes back with the wallet"
+    );
+    let world = teko_node::NodeWorld::open(&net).unwrap();
+    let found = teko_credentials::credentials_of(world.ledger_ref(), &key_b);
+    assert_eq!(found.len(), 1);
+    let (t, id) = &found[0];
+    assert_eq!(t.as_slice(), b"cnh-b");
+    let rec = teko_credentials::credential(world.ledger_ref(), t, id).unwrap();
+    // the chain has the attributes only SEALED; the device of the wallet opens them
+    assert!(!rec.sealed.is_empty());
+    assert!(!rec.sealed.windows(8).any(|w| w == b"Ana Souz"));
+    let (opened, got_salt) = bdev
+        .open_credential_bundle("cnh-b", &key_b, &rec.sealed, &rec.commitment)
+        .unwrap();
+    assert_eq!(opened, claims.as_bytes());
+    assert_eq!(got_salt, salt);
+    // the other types hold nothing for this wallet
+    for (t, k) in &keys {
+        if t != "cnh-b" {
+            assert!(
+                teko_credentials::credentials_of(world.ledger_ref(), k).is_empty(),
+                "{t}"
+            );
+        }
+    }
+    // a wallet with ANOTHER passphrase is another wallet: its keys find nothing
+    drop(world);
+    for n in nodes {
+        n.stop();
+    }
+    let _ = std::fs::remove_dir_all(&d);
 }

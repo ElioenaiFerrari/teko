@@ -543,6 +543,72 @@ impl<T: Transport> DeviceClient<T> {
         Ok(k.public_key)
     }
 
+    /// Asks the device to OPEN attributes sealed to one of this wallet's credential keys (ADR-0039)
+    /// and returns the attributes and the salt, after the host checks them against `commitment`
+    /// (the one on the chain), so a device or a chain that lies is caught here.
+    pub fn open_credential_bundle(
+        &mut self,
+        ctype: &str,
+        subject: &[u8],
+        sealed: &[u8],
+        commitment: &[u8],
+    ) -> Result<(Vec<u8>, [u8; 16]), ClientError> {
+        let r = self.expect(
+            Request::OpenCredentialBundle(OpenCredentialBundle {
+                ctype: ctype.to_string(),
+                subject: subject.to_vec(),
+                sealed: sealed.to_vec(),
+            }),
+            |r| match r {
+                Response::CredentialBundleOpened(o) => Ok(o),
+                o => Err(o),
+            },
+        )?;
+        let salt: [u8; 16] = r
+            .salt
+            .as_slice()
+            .try_into()
+            .map_err(|_| ClientError::Verification("sal inválido".into()))?;
+        let got = teko_crypto::ledger::cred_private_commitment(&salt, &r.claims);
+        if got.as_slice() != commitment {
+            return Err(ClientError::Verification(
+                "os atributos abertos não conferem com o compromisso da chain".into(),
+            ));
+        }
+        Ok((r.claims, salt))
+    }
+
+    /// The credential keys of several types, derived from the WALLET, with one confirmation on the
+    /// device (ADR-0039). After a wallet restore the Suite searches the chain for what was issued to
+    /// them, and the credentials come back with the wallet.
+    pub fn credential_keys(
+        &mut self,
+        ctypes: &[String],
+    ) -> Result<Vec<(String, Vec<u8>)>, ClientError> {
+        let r = self.expect(
+            Request::GetCredentialKeys(GetCredentialKeys {
+                ctypes: ctypes.to_vec(),
+            }),
+            |r| match r {
+                Response::CredentialKeys(k) => Ok(k),
+                o => Err(o),
+            },
+        )?;
+        if r.keys.len() != ctypes.len()
+            || r.keys
+                .iter()
+                .any(|k| k.public_key.len() != 33 && k.public_key.len() != 65)
+        {
+            return Err(ClientError::Verification(
+                "chaves de credencial inválidas".into(),
+            ));
+        }
+        Ok(r.keys
+            .into_iter()
+            .map(|k| (k.ctype, k.public_key))
+            .collect())
+    }
+
     /// Asks the device to build, show and sign an organ member's OWN transaction in the
     /// credentials module (ADR-0037). The device recomputes the commitment and the credential id
     /// from the claims it shows; the client rebuilds the same transaction and checks the signature
@@ -596,6 +662,8 @@ impl<T: Transport> DeviceClient<T> {
                     commitment: commitment.to_vec(),
                     claims: on_chain_claims.to_vec(),
                     valid_until: a.valid_until,
+                    // what the DEVICE sealed to the holder: part of the signed payload
+                    sealed: signed.sealed.clone(),
                 })
             }
             kind => {

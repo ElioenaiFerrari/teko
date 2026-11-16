@@ -204,3 +204,22 @@ proptest! {
         prop_assert!(teko_crypto::parse_wallet_address(&String::from_utf8(bytes).unwrap()).is_err());
     }
 }
+
+#[test]
+fn credential_keys_are_per_type_deterministic_and_unrelated_to_the_wallet_addresses() {
+    let phrase = Phrase::from_entropy(&[7u8; 32]).unwrap();
+    let m = phrase.master_key("").unwrap();
+    let a = public_key_bytes(&m.credential_key("cnh-b").unwrap());
+    assert_eq!(a, public_key_bytes(&m.credential_key("cnh-b").unwrap()));
+    assert_ne!(a, public_key_bytes(&m.credential_key("cnh-a").unwrap()));
+    assert_ne!(a, m.public_key(0).unwrap());
+    // another passphrase is another wallet: it finds none of the credentials
+    let other = phrase.master_key("x").unwrap();
+    assert_ne!(a, public_key_bytes(&other.credential_key("cnh-b").unwrap()));
+    // restoring from the same words and passphrase gives the same keys
+    let again = Phrase::parse(phrase.words())
+        .unwrap()
+        .master_key("")
+        .unwrap();
+    assert_eq!(a, public_key_bytes(&again.credential_key("cnh-b").unwrap()));
+}

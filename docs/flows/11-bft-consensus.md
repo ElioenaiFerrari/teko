@@ -44,4 +44,4 @@ Um validador que assina **dois votos conflitantes** (mesma altura, rodada e tipo
 `crates/teko-bft/tests/sim.rs`.
 
 ## Limites honestos
-**Integrado ao livro de economia** (M6a): o `teko-node` roda o motor BFT do `teko-economy` ao lado do PoA dos votos (que continua M-de-N fixo até o M6b). O proponente de cada rodada é sorteado por hash, proporcional ao poder; a penalidade (`Slash`) existe na moeda e a evidência é contada pelo nó. Implementação própria, sem auditoria.
+**Integrado às duas cadeias** (ADR-0028 e ADR-0034): o `teko-node` roda o mesmo motor BFT para o livro de **economia** (poder por stake) e para o livro de **votos** (instituições de poder igual), cada uma numa `Lane` (`tools/teko-node/src/lane.rs`), **sem blocos vazios** e com o horário do bloco conferido contra o relógio de cada validador. O proponente de cada rodada é sorteado por hash, proporcional ao poder; a penalidade (`Slash`) existe na moeda e a evidência é contada pelo nó. Implementação própria, sem auditoria.

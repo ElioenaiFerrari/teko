@@ -1,34 +1,36 @@
-# Redes de teste (blockchain federada PoA)
+# Redes de teste (votos em BFT institucional, economia em BFT por stake)
 
-Status: **implementado como prova de conceito local** (Fase 2, etapa 6). Decisão registrada em [ADR-0014](adr/0014-quadro-de-avisos-e-blockchain.md) como **aceita provisoriamente**.
+Status: **implementado como prova de conceito local**. A rede de votos roda em **consenso BFT entre as instituições** (ADR-0034, que substitui o PoA M-de-N do ADR-0014 nesta rede); a economia roda em BFT ponderado por stake (ADR-0028). Os dois usam o mesmo motor (`teko-bft`) e o mesmo hospedeiro (`tools/teko-node/src/lane.rs`). **Nenhum bloco nasce sozinho:** a cadeia só cresce quando há entrada (voto) ou transação.
 
 ## Perfis
 
 | Rede | Para quê | Estado |
 |---|---|---|
-| `devnet` | Sua máquina: 3 validadores em loopback, bloco a cada ~2 s | ✅ `make devnet` |
-| `testnet` | Várias máquinas, dados fictícios, regras iguais às de produção (bloco a cada ~6 s) | ✅ perfil e `init`; rodar em várias máquinas exige editar `peers.txt` e habilitar escuta fora de loopback (não é o padrão) |
+| `devnet` | Sua máquina: 3 validadores em loopback (3 instituições **não toleram falha**; use 4 para tolerar 1) | ✅ `make devnet` |
+| `testnet` | Várias máquinas, dados fictícios, regras iguais às de produção | ✅ perfil e `init`; rodar em várias máquinas exige editar `peers.txt` e habilitar escuta fora de loopback (não é o padrão) |
 | `mainnet` | A eleição de verdade | 🔒 **TRAVADA**: `NetworkProfile::new(Mainnet)` e `network=mainnet` no arquivo são recusados |
 
 Cada rede tem um `chain_id` (`teko-devnet-1`, `teko-testnet-1`). Ele entra no **cabeçalho de cada bloco** e no **manifesto assinado da eleição** (`ElectionManifest.chain_id`). O dispositivo (`trust.txt: chain_id=`) recusa manifesto de outra rede, e a apuração (`Tallier::with_chain_id`) ignora e conta manifestos de outra rede.
 
-## Como funciona
+## Como funciona (rede de votos)
 
-- **Validadores = instituições independentes.** Cada bloco precisa de **M assinaturas distintas de N** (devnet: 2 de 3), incluindo a do proponente. Reaproveita `GovernancePolicy` e `count_distinct_valid`.
-- **Bloco** (`teko-chain`): `chain_id, height, prev_hash, timestamp, proposer, round, entries[], log_size, log_root, signatures`. As assinaturas cobrem tudo menos elas mesmas. `log_size/log_root` fixam o estado exato do log Merkle depois do bloco; uma réplica refaz o **mesmo** log a partir dos blocos.
-- **Proponente em rodízio:** validador `(height + round) % N`. Se ele está fora do ar, a cada `3 × intervalo` esperando o turno passa ao próximo (`round`++), então a rede continua com 2 de 3.
-- **Validador só assina o que verificou** (`Chain::sign` recusa bloco inválido) e **não assina dois blocos diferentes na mesma altura** (exceto de rodada maior, para não travar a rede).
-- **Equívoco** (dois blocos conflitantes na mesma altura, ambos com quórum) é **detectado**, contado e mostrado (`status`), não impedido.
-- **O cliente não confia em nenhum nó:** `NodeClient::sync_chain` baixa os blocos e re-verifica assinaturas, encadeamento e raiz Merkle. A Suite e o `election-admin` leem assim.
-- **Persistência:** `dev/net/node-<i>/blocks.log`; no boot cada bloco é reverificado.
+- **Validadores = instituições independentes, poder igual** (1 instituição = 1 voto, sem moeda nem stake). O conjunto é fixo no genesis (`network.txt`). Um bloco é **final** com o **certificado de commit**: mais de 2/3 das instituições deram precommit. Com 3 instituições o quórum é 3 (nenhuma falha tolerada); com 4, 3 (tolera 1).
+- **Bloco** (`teko-chain`): `chain_id, height (a partir de 1), prev_hash, timestamp, proposer, entries[], log_size, log_root`; a rede decide o bloco **mais** o certificado (`DecidedBlock`). `log_size/log_root` fixam o estado exato do log Merkle depois do bloco; uma réplica refaz o **mesmo** log a partir dos blocos.
+- **A cadeia só ordena.** Ela não julga cédulas: quem conta e rejeita (e conta as rejeitadas) é o `Tallier`, sobre o log. O validador confere só cadeia, altura, pai, proponente, tamanhos, horário e raiz Merkle.
+- **Proponente sorteado pelo motor** (ponderado pelo poder, aqui igual). Se ele está fora do ar ou censura, estoura o *timeout* e a **rodada seguinte** tem outro proponente. Sem quórum a rede **pausa**; nunca bifurca.
+- **Horário do bloco = o do proponente, conferido:** cada instituição só vota num bloco cujo horário difere do **próprio relógio** em até 60 s, e o horário é estritamente maior que o do bloco anterior (o replay do cliente confere só isso). Um relógio errado tem a proposta recusada.
+- **Equívoco** (dois votos assinados em conflito) é evidência; na rede de votos é **contado e mostrado** (`status`), pois não há moeda a queimar (punir uma instituição é decisão da governança).
+- **Sem blocos vazios:** a altura só começa quando há entrada no mempool (após um curto intervalo, `block_interval_ms`, para agrupar uma rajada) ou quando os pares já a começaram (o nó ocioso também vota e se atualiza).
+- **O cliente não confia em nenhum nó:** `NodeClient::sync_chain` baixa os blocos e re-verifica certificado, proponente, encadeamento e raiz Merkle. A Suite e o `election-admin` leem assim.
+- **Persistência:** `dev/net/node-<i>/votes.blocks` (blocos finais, reverificados no boot) e `votes.wal` (rodada e *lock* do BFT, gravados antes de cada voto sair, ADR-0030). Redes criadas antes do ADR-0034 (`blocks.log`) precisam ser recriadas: `make devnet-reset`.
 
 ## Economia sobre BFT (M6a, ADR-0028)
-Ao lado do PoA dos votos, cada nó roda o **livro de economia** (moeda, bens, stake) em consenso **BFT** ponderado por stake. Só o **validador fundador** (nó 0) vota no começo; os nós 1 e 2 **replicam**. As recompensas de bloco vão para a **carteira do fundador** (`make devnet FOUNDER=tekow1…`, o endereço da tela Carteira da Suite). Quando o stake total chega a N (1.000 TEKO na devnet local; `make devnet FOUNDER=… FOUNDER_TARGET=…` muda, em TEKO; ADR-0029), os validadores passam a ser os que têm stake. `make devnet-economy` mostra altura, fase e validadores e **verifica a cadeia**; `make devnet-founder FOUNDER=…` troca o fundador e zera a economia. Blocos vazios a cada 3 s (`TEKO_EMPTY_BLOCK_MS`) pagam as recompensas. Detalhes: [fluxo 12](flows/12-ledger-coin-and-assets.md).
+Ao lado da cadeia de votos, cada nó roda o **livro de economia** (moeda, bens, stake) em consenso **BFT** ponderado por stake. Só o **validador fundador** (nó 0) vota no começo; os nós 1 e 2 **replicam**. As recompensas de bloco vão para a **carteira do fundador** (`make devnet FOUNDER=tekow1…`, o endereço da tela Carteira da Suite). Quando o stake total chega a N (1.000 TEKO na devnet local; `make devnet FOUNDER=… FOUNDER_TARGET=…` muda, em TEKO; ADR-0029), os validadores passam a ser os que têm stake. `make devnet-economy` mostra altura, fase e validadores e **verifica a cadeia**; `make devnet-founder FOUNDER=…` troca o fundador e zera a economia. Blocos vazios a cada 3 s (`TEKO_EMPTY_BLOCK_MS`) pagam as recompensas. Detalhes: [fluxo 12](flows/12-ledger-coin-and-assets.md).
 
 ## Rodando
 
 ```
-make devnet            # sobe 3 validadores (cria dev/net na 1ª vez)
+make devnet            # sobe 3 validadores (cria dev/net na 1ª vez; nenhum bloco nasce até haver transação ou voto)
 make devnet-dkg       # (cédulas cifradas) cerimônia de chave entre os 3 validadores
 make election          # liga a eleição à rede (chain_id) e fixa o dispositivo nela
                        # → reinicie o emulador (ele lê o trust.txt na partida)
@@ -43,8 +45,8 @@ make devnet-stop | devnet-reset
 ```
 Sem rede rodando, tudo continua funcionando com o arquivo local (`dev/board.log`). Para forçar o arquivo: `TEKO_BOARD=file`. Em modo rede o quadro é **append-only**: `reset-board` não faz nada (use `make devnet-reset`).
 
-## O que PoA federada garante, e o que NÃO
+## O que o BFT institucional garante, e o que NÃO
 
-Garante: nenhum bloco entra sem M instituições; réplicas independentes reconstroem o mesmo log e conferem tudo; um operador isolado não consegue mostrar logs diferentes sem que dois blocos conflitantes com quórum apareçam (V19, em parte); um nó fora do ar não para a rede.
+Garante: **finalidade** (um bloco decidido não é desfeito); nenhum bloco sem mais de 2/3 das instituições; censura por um proponente deixa de bastar (a rodada seguinte tem outro); sem quórum a rede pausa em vez de bifurcar; réplicas independentes reconstroem o mesmo log e conferem tudo; um nó fora do ar não para a rede (com 4 instituições ou mais).
 
-**Não garante:** consenso bizantino completo (um proponente malicioso pode **atrasar ou censurar** no seu turno, e M validadores em conluio podem reescrever o futuro); finalidade provada; privacidade do voto (cédulas continuam públicas, decisão #14); proteção de rede (TCP simples em loopback, sem criptografia entre nós: a integridade vem das assinaturas dos blocos). Não há mineração nem tokens. **Sem auditoria.**
+**Não garante:** segurança com 1/3 ou mais das instituições em conluio (podem parar a rede; com 2/3 ou mais podem decidir o que quiserem); privacidade do voto além da cifra das cédulas ([ADR-0019](adr/0019-cedulas-cifradas-elgamal-de-limiar.md)); proteção de rede (TCP simples em loopback, sem criptografia entre nós: a integridade vem dos certificados); troca de instituições depois do genesis (outro ADR). Não há mineração nem tokens na rede de votos. Sem auditoria.

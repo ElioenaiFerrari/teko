@@ -80,8 +80,7 @@ fn boot(tag: &str, owner: &Address, tweak: impl Fn(&mut EconomyGenesis)) -> Net 
     g.coin.min_validator_stake = 100;
     tweak(&mut g);
     std::fs::write(dir.join(ECONOMY_FILE), g.to_text()).unwrap();
-    let mut ec = load_economy(&dir).unwrap().unwrap();
-    ec.empty_block_interval_ms = 120;
+    let ec = load_economy(&dir).unwrap().unwrap();
     let nodes = (0..3).map(|i| Some(start_node(&dir, i, &ec))).collect();
     Net {
         dir,
@@ -112,8 +111,66 @@ fn heights(c: &NodeClient) -> Vec<Option<u64>> {
         .collect()
 }
 
+/// Blocks only exist for transactions (ADR-0034), so a test that wants the chain to move has
+/// to make activity: a transaction from a throwaway key (it links a fresh key, a harmless
+/// state change that needs no balance) and wait until the first node has a higher block.
+fn bump(client: &NodeClient, chain_id: &str, times: u64) {
+    static SEED: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(900_000);
+    for _ in 0..times {
+        let before = client
+            .econ_status(client.addrs()[0])
+            .map_or(0, |s| s.height);
+        let sk = key(SEED.fetch_add(1, std::sync::atomic::Ordering::SeqCst));
+        let t = Tx::new_signed(
+            &sk,
+            chain_id,
+            0,
+            teko_coin::COIN_MODULE,
+            Op::SetValidatorKey {
+                key: public_key_bytes(&sk),
+            }
+            .encode(),
+        );
+        client.econ_submit(&[t]).unwrap();
+        wait("a block for the activity", 30, || {
+            client
+                .econ_status(client.addrs()[0])
+                .is_ok_and(|s| s.height > before)
+        });
+    }
+}
+
 fn tx(sk: &SigningKey, chain: &str, nonce: u64, op: Op) -> Tx {
     Tx::new_signed(sk, chain, nonce, teko_coin::COIN_MODULE, op.encode())
+}
+
+#[test]
+fn no_block_is_made_on_its_own_the_chain_only_grows_with_transactions() {
+    let owner = key(2);
+    let net = boot("idle", &address_of(&public_key_bytes(&owner)), |_| {});
+    let c = client(&net);
+    // nothing to do: three seconds later there is still no block, on any node
+    std::thread::sleep(Duration::from_secs(3));
+    assert!(
+        heights(&c).iter().all(|h| *h == Some(0)),
+        "{:?}",
+        heights(&c)
+    );
+    // one transaction makes exactly one block, on every node
+    bump(&c, &net.genesis.chain_id, 1);
+    wait("every node has the block", 20, || {
+        heights(&c).iter().all(|h| *h == Some(1))
+    });
+    // and then it stands still again
+    std::thread::sleep(Duration::from_secs(3));
+    assert!(
+        heights(&c).iter().all(|h| *h == Some(1)),
+        "{:?}",
+        heights(&c)
+    );
+    for n in net.nodes.into_iter().flatten() {
+        n.stop();
+    }
 }
 
 #[test]
@@ -121,6 +178,7 @@ fn the_founder_alone_produces_blocks_and_every_node_and_a_client_verify_the_same
     let owner = key(1);
     let net = boot("a", &address_of(&public_key_bytes(&owner)), |_| {});
     let c = client(&net);
+    bump(&c, &net.genesis.chain_id, 5);
     wait("all three nodes reach height 5", 40, || {
         heights(&c).iter().all(|h| h.is_some_and(|h| h >= 5))
     });
@@ -156,6 +214,7 @@ fn staking_ends_the_founder_phase_new_validators_join_and_a_restarted_node_catch
     let mut net = net;
     let c = client(&net);
     let chain_id = net.genesis.chain_id.clone();
+    bump(&c, &chain_id, 4);
     wait("some rewards", 40, || {
         heights(&c)[0].is_some_and(|h| h >= 4)
     });
@@ -203,6 +262,7 @@ fn staking_ends_the_founder_phase_new_validators_join_and_a_restarted_node_catch
 
     // the three validators keep deciding blocks together
     let h = c.econ_status(c.addrs()[0]).unwrap().height;
+    bump(&c, &chain_id, 4);
     wait("blocks keep coming with three validators", 60, || {
         heights(&c).iter().all(|x| x.is_some_and(|x| x >= h + 4))
     });
@@ -211,14 +271,13 @@ fn staking_ends_the_founder_phase_new_validators_join_and_a_restarted_node_catch
     let stopped = net.nodes[2].take().unwrap();
     stopped.stop();
     let target = c.econ_status(c.addrs()[0]).unwrap().height + 3;
+    bump(&c, &chain_id, 3);
     wait("the network moves with node 2 down", 60, || {
         c.econ_status(c.addrs()[0])
             .is_ok_and(|s| s.height >= target)
     });
     let ec = load_economy(&net.dir).unwrap().unwrap();
-    let mut ec2 = ec.clone();
-    ec2.empty_block_interval_ms = 120;
-    net.nodes[2] = Some(start_node(&net.dir, 2, &ec2));
+    net.nodes[2] = Some(start_node(&net.dir, 2, &ec));
     wait("node 2 catches up", 60, || {
         let a = c.econ_status(c.addrs()[0]).map(|s| s.height).unwrap_or(0);
         c.econ_status(c.addrs()[2])
@@ -294,6 +353,7 @@ fn reopening_the_world_downloads_only_the_new_blocks() {
     let owner = key(70);
     let net = boot("cache", &address_of(&public_key_bytes(&owner)), |_| {});
     let c = client(&net);
+    bump(&c, &net.genesis.chain_id, 3);
     wait("a few blocks", 30, || {
         heights(&c).iter().all(|h| h.is_some_and(|h| h >= 3))
     });
@@ -305,6 +365,7 @@ fn reopening_the_world_downloads_only_the_new_blocks() {
         first + 1,
         "the first open verifies everything"
     );
+    bump(&c, &net.genesis.chain_id, 2);
     wait("more blocks", 30, || {
         heights(&c).iter().all(|h| h.is_some_and(|h| h > h1))
     });

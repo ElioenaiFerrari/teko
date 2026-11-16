@@ -147,12 +147,12 @@
     },
     async votes() {
       const v = await api('votes');
-      if (!v.available) return '<h1>Livro de votos</h1><p class="muted">Ainda sem dados do livro de votos (PoA). Suba a rede com <code>make devnet</code>.</p>';
+      if (!v.available) return '<h1>Livro de votos</h1><p class="muted">Ainda sem dados do livro de votos. Suba a rede com <code>make devnet</code>.</p>';
       const rows = v.blocks.slice().reverse().slice(0, 50).map((b) =>
-        `<tr><td>${esc(b.height)}</td><td>${esc(when(b.timestamp))}</td><td>${esc(b.entries)}</td><td>${esc(Object.entries(b.by_kind).map(([k, n]) => `${k}: ${n}`).join(', ') || '—')}</td><td>${esc(b.signatures)} de ${esc(b.validators ?? v.validators)} (mín. ${esc(b.threshold)})</td><td>${esc(b.round)}</td><td class="mono">${esc(short(b.hash, 8))}</td></tr>`).join('');
-      return `<h1>Livro de votos (PoA ${esc(v.threshold)}-de-${esc(v.validators)})</h1>
-        <p class="muted">Cada bloco vale com ${esc(v.threshold)} assinaturas de ${esc(v.validators)} validadores. Mostra só cabeçalhos e contagens: as cédulas são cifradas e o quadro com provas de inclusão fica na Suite. Altura ${esc(v.height)} · ${esc(v.chain_id)}.</p>
-        ${rows ? `<div class="table-wrap"><table><thead><tr><th>Bloco</th><th>Quando</th><th>Entradas</th><th>Tipos</th><th>Assinaturas</th><th>Rodada</th><th>Hash</th></tr></thead><tbody>${rows}</tbody></table></div>` : '<p class="muted">Nenhum bloco de votos ainda.</p>'}`;
+        `<tr><td>${esc(b.height)}</td><td>${esc(when(b.timestamp))}</td><td>${esc(b.entries)}</td><td>${esc(Object.entries(b.by_kind).map(([k, n]) => `${k}: ${n}`).join(', ') || '—')}</td><td>${esc(b.precommits)} de ${esc(v.validators)} (mín. ${esc(b.quorum)})</td><td>${esc(b.round)}</td><td class="mono">${esc(short(b.hash, 8))}</td></tr>`).join('');
+      return `<h1>Livro de votos (BFT, ${esc(v.validators)} instituições)</h1>
+        <p class="muted">Cada bloco é final com o certificado de commit de pelo menos ${esc(v.quorum)} das ${esc(v.validators)} instituições (mais de 2/3). Mostra só cabeçalhos e contagens: as cédulas são cifradas e o quadro com provas de inclusão fica na Suite. Altura ${esc(v.height)} · ${esc(v.chain_id)}.</p>
+        ${rows ? `<div class="table-wrap"><table><thead><tr><th>Bloco</th><th>Quando</th><th>Entradas</th><th>Tipos</th><th>Certificado</th><th>Rodada</th><th>Hash</th></tr></thead><tbody>${rows}</tbody></table></div>` : '<p class="muted">Nenhum bloco de votos ainda.</p>'}`;
     },
     async events(arg, qs) {
       const topic = qs.get('topic');

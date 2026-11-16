@@ -6,6 +6,9 @@ use teko_ledger::{Tx, TxError};
 
 use crate::chain::{DecidedBlock, EconError, EconomyChain, MAX_BLOCK_TXS};
 
+/// Seconds a proposed block time may differ from the voter's own clock (ADR-0034).
+pub const MAX_CLOCK_DRIFT_SECS: u64 = 60;
+
 /// Largest mempool (bounds memory).
 const MAX_MEMPOOL: usize = 20_000;
 
@@ -100,7 +103,8 @@ impl EconApp {
 impl App for EconApp {
     fn build(&mut self, _height: u64) -> Vec<u8> {
         let take = self.mempool.len().min(MAX_BLOCK_TXS);
-        let ts = (self.clock)();
+        // the proposer's clock, never at or before the previous block
+        let ts = (self.clock)().max(self.chain.last_timestamp() + 1);
         self.chain.propose(&self.me, &self.mempool[..take], ts)
     }
 
@@ -110,6 +114,13 @@ impl App for EconApp {
     }
 
     fn validate_from(&self, height: u64, proposer: &[u8], payload: &[u8]) -> bool {
-        self.chain.height() + 1 == height && self.chain.check(proposer, payload).is_ok()
+        if self.chain.height() + 1 != height {
+            return false;
+        }
+        // besides the ledger rules, this validator only votes for a block time near ITS clock
+        match self.chain.check(proposer, payload) {
+            Ok(b) => (self.clock)().abs_diff(b.timestamp) <= MAX_CLOCK_DRIFT_SECS,
+            Err(_) => false,
+        }
     }
 }

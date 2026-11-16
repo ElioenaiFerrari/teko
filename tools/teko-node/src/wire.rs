@@ -5,7 +5,6 @@
 use std::io::{Read, Write};
 
 use prost::Message;
-use teko_attestation::SignerSignature;
 use teko_chain::BlockEntry;
 
 use crate::error::NodeError;
@@ -16,8 +15,8 @@ pub const SUBMIT: u32 = 1; // client -> node: SubmitEntries (node forwards to pe
 pub const FORWARD: u32 = 2; // node -> node: SubmitEntries (NOT re-forwarded)
 pub const STATUS: u32 = 3;
 pub const GET_BLOCKS: u32 = 4;
-pub const PROPOSAL: u32 = 5;
-pub const COMMIT: u32 = 6;
+pub const COMMIT: u32 = 6; // node -> node: a decided vote-chain block with its certificate (ADR-0034)
+pub const VOTE_BFT: u32 = 10; // node -> node: one vote-chain consensus message (proposal or vote)
 pub const DKG_START: u32 = 7; // coordinator -> node: begin the key ceremony (round 1)
 pub const DKG_PACKAGES: u32 = 8; // coordinator -> node: everyone's round-1 packages; node finishes
 pub const DKG_SHARE: u32 = 9; // node -> node: the secret share for the requester (loopback only)
@@ -33,7 +32,6 @@ pub const ECON_STATUS_REPLY: u32 = 105;
 pub const ACK: u32 = 100;
 pub const STATUS_REPLY: u32 = 101;
 pub const BLOCKS_REPLY: u32 = 102;
-pub const SIG_REPLY: u32 = 103;
 
 #[derive(Clone, PartialEq, Message)]
 pub struct Msg {
@@ -80,7 +78,7 @@ pub struct StatusReply {
     pub peers_total: u32,
     #[prost(uint32, tag = "9")]
     pub validator_index: u32,
-    /// Conflicting blocks for one height, both with a valid quorum (V19).
+    /// Equivocation evidence seen by this node (two conflicting signed votes by one institution).
     #[prost(uint32, tag = "10")]
     pub equivocations: u32,
 }
@@ -99,20 +97,6 @@ pub struct BlocksReply {
     pub blocks: Vec<Vec<u8>>,
     #[prost(uint64, tag = "2")]
     pub height: u64,
-}
-
-#[derive(Clone, PartialEq, Message)]
-pub struct BlockMsg {
-    #[prost(bytes = "vec", tag = "1")]
-    pub block: Vec<u8>,
-}
-
-#[derive(Clone, PartialEq, Message)]
-pub struct SigReply {
-    #[prost(message, optional, tag = "1")]
-    pub signature: Option<SignerSignature>,
-    #[prost(string, tag = "2")]
-    pub reason: String,
 }
 
 pub fn msg<M: Message>(kind: u32, body: &M) -> Msg {

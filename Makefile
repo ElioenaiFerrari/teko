@@ -25,7 +25,7 @@ suite: ## Abre a Teko Suite (janela desktop)
 NET ?= dev/net
 NODE = target/debug/teko-node
 
-devnet: ## Sobe a rede de TESTE local (votos PoA 2-de-3 + economia BFT). Primeira vez: make devnet FOUNDER=tekow1… (sua carteira)
+devnet: ## Sobe a rede de TESTE local (votos e economia em BFT; nenhum bloco nasce sozinho). Primeira vez: make devnet FOUNDER=tekow1… (sua carteira)
 	$(CARGO) build -q -p teko-node
 	@test -f $(NET)/network.txt || $(NODE) init --dir $(NET) --network devnet $(if $(FOUNDER),--founder $(FOUNDER)) $(if $(FOUNDER_TARGET),--founder-target $(FOUNDER_TARGET))
 	@$(NODE) stop --dir $(NET) >/dev/null 2>&1; \
@@ -36,7 +36,7 @@ devnet: ## Sobe a rede de TESTE local (votos PoA 2-de-3 + economia BFT). Primeir
 devnet-dkg: ## Cerimônia de chave da eleição entre os 3 validadores (cédulas cifradas). Rode depois de make devnet
 	@$(NODE) dkg --dir $(NET)
 
-devnet-stop: ## Para os 3 validadores (os blocos ficam em dev/net/node-*/blocks.log)
+devnet-stop: ## Para os 3 validadores (os blocos ficam em dev/net/node-*/votes.blocks e economy.blocks)
 	@$(NODE) stop --dir $(NET) 2>/dev/null || true
 	@# Rede apagada ou .pid perdido: mata nós órfãos pelo nome (senão eles seguem ocupando as portas)
 	@pkill -f 'teko-node run --dir $(NET)' 2>/dev/null && echo 'nós órfãos parados' || true

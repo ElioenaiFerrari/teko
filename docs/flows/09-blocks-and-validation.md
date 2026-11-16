@@ -3,26 +3,26 @@
 ← [Índice da documentação](../README.md)
 
 ## Resumo
-Um bloco agrupa entradas (manifesto, registros, cédulas, DKG, resultados) e é aceito só com **M-de-N assinaturas** de validadores. Qualquer réplica refaz a validação inteira antes de aplicar.
+Um bloco agrupa entradas (manifesto, registros, cédulas, DKG, resultados) e é final só com o **certificado de commit** (mais de 2/3 das instituições, BFT, ADR-0034). Qualquer réplica refaz a validação inteira antes de aplicar.
 
 ## Quem participa
 Proponente, validadores e réplicas (`Chain::apply`).
 
 ## Diagramas
 
-![Fluxo de validação de bloco: cadeia e altura, proponente, assinaturas M-de-N, entradas, raiz Merkle e aplicação; qualquer falha rejeita o bloco](../diagrams/block-validation.png)
+![Fluxo de validação de bloco: cadeia e altura, proponente, certificado de commit, entradas, raiz Merkle e aplicação; qualquer falha rejeita o bloco](../diagrams/block-validation.png)
 
 ## Passo a passo
-Um bloco carrega `chain_id`, `height`, `prev_hash`, `proposer`, `round`, `entries`, `log_size`, `log_root` e `signatures`.
+Um bloco carrega `chain_id`, `height` (a partir de 1), `prev_hash`, `timestamp`, `proposer`, `entries`, `log_size` e `log_root`; a rede decide o bloco e o **certificado de commit** (precommits de mais de 2/3 das instituições, com a rodada).
 1. Confere cadeia, altura e `prev_hash`.
-2. Confere se o proponente é o da vez.
-3. Confere M assinaturas distintas e válidas (incluindo a do proponente).
+2. Confere se o proponente é o que o certificado nomeia (sorteado pelo motor para aquela altura e rodada) e se o horário só avança.
+3. Confere o certificado: precommits distintos, válidos, de instituições do genesis, para este bloco, altura e rodada, somando mais de 2/3.
 4. Valida cada entrada pelas regras do seu tipo.
 5. Recalcula tamanho e raiz Merkle do log.
 6. Aplica e avança a altura.
 
 ## O que é verificado e por quem
-Todas as réplicas e todo cliente que sincroniza. Duas assinaturas do mesmo proponente para blocos diferentes na mesma altura são **equívoco** e detectadas.
+Todas as réplicas e todo cliente que sincroniza. Dois votos assinados em conflito pela mesma instituição são **equívoco** (evidência contada e mostrada no status).
 
 ## O que pode dar errado
 Bloco forjado, fork, proponente fora de turno, entrada inválida: o bloco é rejeitado com erro tipado.

@@ -19,5 +19,7 @@ Começar pelo **log Merkle** (`teko-bulletin`, Rust) com provas de inclusão e c
 ## Perguntas
 Quem opera o quadro? Como evitar censura/queda na janela de votação? Quantos *witnesses*/espelhos independentes?
 
+> **Atualização (ADR-0034, 2026-11-15):** a rede de **votos** deixou de ser PoA M-de-N e passou a **BFT institucional** (instituições de poder igual, certificado de commit, finalidade, sem blocos vazios). O log Merkle atrás de `BulletinBoard`, o `chain_id` e o perfil `mainnet` travado continuam como abaixo; o texto a seguir descreve o PoA original.
+
 ## Decisão provisória (etapa 6)
 Rede **federada PoA**: validadores = instituições do M-de-N, M de N assinaturas por bloco, proponente em rodízio com troca de turno, perfis `devnet`/`testnet` e `mainnet` travada, `chain_id` no manifesto assinado e no bloco. Cédulas ainda públicas. EVM permissionada e cadeia própria (Substrate/Cosmos) ficam como alternativas futuras: o `BulletinBoard` e o `chain_id` isolam a escolha. Respostas parciais às perguntas acima: operam o quadro os validadores (não um operador único); queda de um validador não para a rede (view change); witnesses = os próprios validadores e qualquer réplica que verifique.

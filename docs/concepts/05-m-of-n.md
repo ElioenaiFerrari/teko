@@ -4,10 +4,9 @@
 **M-de-N** (também "limiar" ou *threshold*) é a regra: existem **N** chaves autorizadas, e uma ação só vale com **M** assinaturas válidas e **de chaves diferentes**. Exemplo 2-de-3: três instituições independentes, e duas bastam. Analogia: um cofre com três chaves, que abre com duas.
 
 ## Por que o Teko usa
-Para que **ninguém sozinho** possa fazer algo grave. O Teko usa M-de-N em três lugares:
+Para que **ninguém sozinho** possa fazer algo grave. O Teko usa M-de-N em dois lugares (o livro de votos já não usa: ele decide por BFT, ADR-0034):
 1. **Firmware** do dispositivo: só roda se assinado por M de N instituições independentes. Não existe caminho de código com chave única; downgrade é recusado.
-2. **Blocos do livro de votos (PoA):** um bloco é válido se M dos N validadores o assinaram.
-3. **Bens:** uma classe de bens (por exemplo `imovel`) é governada por um órgão M-de-N, que registra a classe e pode aplicar gravames.
+2. **Bens:** uma classe de bens (por exemplo `imovel`) é governada por um órgão M-de-N, que registra a classe e pode aplicar gravames.
 
 Não confunda com o **limiar criptográfico** da votação (capítulo 9), onde M de N guardiões juntam **partes de uma mesma chave** para decifrar. Lá ninguém tem a chave inteira; aqui cada um assina separadamente e o verificador conta.
 
@@ -48,7 +47,6 @@ fn main() {
 
 ## Onde está no Teko
 - Firmware: `crates/teko-attestation` (manifesto M-de-N, anti-downgrade); `make verify-fw` confere de forma independente da Suite.
-- Blocos PoA: `crates/teko-chain` (perfis devnet/testnet; a mainnet é travada).
 - Bens: `crates/teko-assets` (órgão M-de-N da classe).
 - Testes: firmware sem M-de-N é recusado; downgrade é recusado (TEST-MATRIX).
 

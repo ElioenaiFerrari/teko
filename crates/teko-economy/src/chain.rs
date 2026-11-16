@@ -26,6 +26,8 @@ pub enum EconError {
     StateRoot,
     Commit,
     EmptyValidatorSet,
+    /// The block's time does not move forward (it must be strictly after the previous block's).
+    BadTime,
 }
 
 /// What the validators agree on (its encoding is the BFT payload).
@@ -92,6 +94,10 @@ pub struct EconomyChain {
     ledger: Ledger,
     tip: Vec<u8>,
     blocks: Vec<DecidedBlock>,
+    /// Time of the last final block (0 before the first). A block's time is the PROPOSER's;
+    /// replay only requires that it moves forward, how close it is to the real clock is checked
+    /// live by each validator (`EconApp::validate_from`, ADR-0034).
+    last_timestamp: u64,
 }
 
 impl EconomyChain {
@@ -103,6 +109,7 @@ impl EconomyChain {
             ledger,
             tip,
             blocks: Vec::new(),
+            last_timestamp: 0,
         })
     }
 
@@ -184,6 +191,9 @@ impl EconomyChain {
         if self.validator_set()?.power_of(&b.proposer).is_none() {
             return Err(EconError::NotAValidator);
         }
+        if !self.blocks.is_empty() && b.timestamp <= self.last_timestamp {
+            return Err(EconError::BadTime);
+        }
         if b.txs.len() > MAX_BLOCK_TXS {
             return Err(EconError::BadTx("too many transactions".into()));
         }
@@ -262,8 +272,14 @@ impl EconomyChain {
             return Err(EconError::StateRoot);
         }
         self.tip = block_id(&d.payload);
+        self.last_timestamp = checked.timestamp;
         self.blocks.push(d);
         Ok(out)
+    }
+
+    /// Time of the last final block (0 before the first).
+    pub fn last_timestamp(&self) -> u64 {
+        self.last_timestamp
     }
 
     /// Owner address of a consensus key (where its rewards go).

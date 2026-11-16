@@ -9,7 +9,7 @@ Só havia comandos de terminal para ver a chain. O dono do produto quer uma ferr
 - **Servidor web local + API JSON somente leitura** (`GET /api/v1/…`), com página HTML/CSS/JS pura servida pelo mesmo binário (`teko-explorer`, `make explorer`). Escuta só em loopback; fora dele exige `--public` e um proxy com HTTPS.
 - **O explorador não confia nos nós.** A biblioteca `teko-explorer` (`Index`, sem I/O) baixa os blocos e verifica certificado, proponente, execução e raiz do estado com o mesmo código dos nós (`EconomyChain::apply_decided_outcome`, que passou a devolver recibos e eventos). Bloco inválido é recusado e o índice mantém a cadeia que já verificou.
 - **Valores** em ypy (inteiro) e em TEKO exato ([ADR-0029](0029-unidade-teko-e-ypy.md)).
-- **Livro de votos (PoA):** só cabeçalhos, contagens por tipo e assinaturas M-de-N; o conteúdo das entradas não é exposto.
+- **Livro de votos (BFT, ADR-0034):** só cabeçalhos, contagens por tipo e o certificado de commit (precommits e quórum); o conteúdo das entradas não é exposto.
 - **Segurança da página:** CSP sem inline, `X-Content-Type-Options`, `X-Frame-Options`, `no-referrer`; todo texto da API é escapado; a API não tem segredo nem escreve nada (405 para outros métodos).
 - **Dependências novas:** `tiny_http` (servidor síncrono pequeno, como o resto dos nós), `serde` e `serde_json`.
 

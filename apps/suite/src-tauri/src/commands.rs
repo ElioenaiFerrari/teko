@@ -2257,17 +2257,25 @@ pub async fn network_status() -> Result<NetworkReply, UiError> {
                             .iter()
                             .rev()
                             .take(20)
-                            .map(|b| BlockView {
-                                height: b.height,
-                                entries: b.entries.len(),
-                                signatures: b.signatures.len(),
-                                round: b.round,
-                                timestamp: b.timestamp,
-                                proposer: validators
-                                    .iter()
-                                    .position(|k| *k == b.proposer)
-                                    .unwrap_or(0),
-                                hash: hex::encode(&b.header_hash()),
+                            .filter_map(|d| {
+                                let b = d.block().ok()?;
+                                let (precommits, round) = d
+                                    .commit
+                                    .as_ref()
+                                    .map_or((0, 0), |c| (c.precommits.len(), c.round));
+                                Some(BlockView {
+                                    height: b.height,
+                                    entries: b.entries.len(),
+                                    // BFT: precommits in the commit certificate (ADR-0034)
+                                    signatures: precommits,
+                                    round,
+                                    timestamp: b.timestamp,
+                                    proposer: validators
+                                        .iter()
+                                        .position(|k| *k == b.proposer)
+                                        .unwrap_or(0),
+                                    hash: hex::encode(&b.id()),
+                                })
                             })
                             .collect()
                     })

@@ -1,5 +1,6 @@
-//! Three validators on loopback: blocks, convergence, failure of one node,
-//! catch-up after a restart, and equivocation detection.
+//! Institutions on loopback deciding the vote chain by BFT (ADR-0034): finality, convergence,
+//! censorship bypassed, a pause (never a fork) without a quorum, catch-up after a restart, a
+//! forged certificate refused, and no block made on its own.
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 
 use std::net::{SocketAddr, TcpListener};
@@ -9,22 +10,23 @@ use std::time::{Duration, Instant};
 use rand::SeedableRng;
 
 use prost::Message;
+use teko_bft::{Commit, Vote, VoteKind, block_id};
 use teko_bulletin::{BulletinBoard, Entry, EntryKind};
-use teko_chain::{Chain, NetworkKind};
-use teko_node::wire::{self, BlockMsg};
+use teko_chain::{Chain, DecidedBlock, NetworkKind};
+use teko_node::wire;
 use teko_node::{
     Node, NodeClient, NodeConfig, NodeHandle, init_network, load_network, load_validator_key,
     node_dir,
 };
 
 fn free_port_base() -> u16 {
-    // Tests run in parallel: hand out disjoint blocks of 3 ports, skipping any in use.
+    // Tests run in parallel: hand out disjoint blocks of 4 ports, skipping any in use.
     use std::sync::atomic::{AtomicU16, Ordering};
     static NEXT: AtomicU16 = AtomicU16::new(0);
     loop {
-        let off = NEXT.fetch_add(3, Ordering::SeqCst);
+        let off = NEXT.fetch_add(4, Ordering::SeqCst);
         let base = 30_000 + (std::process::id() % 2_000) as u16 * 10 + off;
-        if (0..3).all(|k| TcpListener::bind(("127.0.0.1", base + k)).is_ok()) {
+        if (0..4).all(|k| TcpListener::bind(("127.0.0.1", base + k)).is_ok()) {
             return base;
         }
     }
@@ -66,9 +68,13 @@ fn start_node(dir: &std::path::Path, i: usize) -> NodeHandle {
 }
 
 fn boot(tag: &str) -> Net {
+    boot_n(tag, 3)
+}
+
+fn boot_n(tag: &str, n: usize) -> Net {
     let d = dir(tag);
-    init_network(&d, NetworkKind::Devnet, 3, free_port_base(), false).unwrap();
-    let nodes = (0..3).map(|i| Some(start_node(&d, i))).collect();
+    init_network(&d, NetworkKind::Devnet, n, free_port_base(), false).unwrap();
+    let nodes = (0..n).map(|i| Some(start_node(&d, i))).collect();
     Net { dir: d, nodes }
 }
 
@@ -102,8 +108,15 @@ fn included(chain: &Chain, es: &[Entry]) -> bool {
         .all(|e| (0..chain.board().len()).any(|i| chain.board().entry(i) == Some(e)))
 }
 
+/// Precommits of a block's commit certificate and the round it was decided in.
+fn certificate(d: &DecidedBlock) -> (usize, u32) {
+    d.commit
+        .as_ref()
+        .map_or((0, 0), |c| (c.precommits.len(), c.round))
+}
+
 #[test]
-fn three_nodes_produce_blocks_and_every_replica_verifies_to_the_same_log() {
+fn three_nodes_decide_blocks_and_every_replica_verifies_to_the_same_log() {
     let net = boot("conv");
     let (c, profile) = client(&net);
     let es = entries(1, 5);
@@ -124,7 +137,8 @@ fn three_nodes_produce_blocks_and_every_replica_verifies_to_the_same_log() {
             let one = NodeClient::new(vec![load_network(&net.dir).unwrap().peers[i]]);
             let chain = one.sync_chain(&profile).unwrap();
             assert!(included(&chain, &es));
-            assert!(chain.blocks().iter().all(|b| b.signatures.len() >= 2));
+            // 3 institutions of equal power: a block is final with all 3 precommits (> 2/3)
+            assert!(chain.blocks().iter().all(|b| certificate(b).0 == 3));
             (chain.height(), chain.board().root())
         })
         .collect();
@@ -138,24 +152,28 @@ fn three_nodes_produce_blocks_and_every_replica_verifies_to_the_same_log() {
 }
 
 #[test]
-fn the_network_keeps_working_with_one_validator_down_including_its_turn() {
-    let mut net = boot("down");
-    let (c, profile) = client(&net);
-    net.nodes[2].take().unwrap().stop();
-    // Several rounds so that node 2's turn (height % 3 == 2) comes up and must be skipped.
-    for round in 0..4u8 {
-        let es = entries(10 + round, 2);
-        c.submit(&es).unwrap();
-        let want = es.clone();
-        wait("entries committed with 2 of 3", 30, || {
-            c.sync_chain(&profile).is_ok_and(|ch| included(&ch, &want))
-        });
-    }
-    let chain = c.sync_chain(&profile).unwrap();
-    assert!(chain.height() >= 4);
+fn no_block_is_made_on_its_own_the_chain_only_grows_with_entries() {
+    let net = boot("idle");
+    let (c, _) = client(&net);
+    std::thread::sleep(Duration::from_secs(3));
     assert!(
-        chain.blocks().iter().any(|b| b.round > 0),
-        "a view change handed the turn to the next validator"
+        c.statuses()
+            .iter()
+            .all(|(_, s)| s.as_ref().is_some_and(|s| s.height == 0)),
+        "an idle network made a block"
+    );
+    c.submit(&entries(5, 1)).unwrap();
+    wait("one block everywhere", 20, || {
+        c.statuses()
+            .iter()
+            .all(|(_, s)| s.as_ref().is_some_and(|s| s.height == 1))
+    });
+    std::thread::sleep(Duration::from_secs(3));
+    assert!(
+        c.statuses()
+            .iter()
+            .all(|(_, s)| s.as_ref().is_some_and(|s| s.height == 1)),
+        "a block appeared with nothing to include"
     );
     for h in net.nodes.into_iter().flatten() {
         h.stop();
@@ -163,8 +181,62 @@ fn the_network_keeps_working_with_one_validator_down_including_its_turn() {
 }
 
 #[test]
+fn with_four_institutions_one_can_be_down_even_when_it_is_the_proposer() {
+    let mut net = boot_n("down", 4);
+    let (c, profile) = client(&net);
+    net.nodes[3].take().unwrap().stop();
+    // Keep going until a height whose proposer is the silent institution was decided by the
+    // NEXT round (a silent or censoring proposer loses its turn instead of stopping the chain).
+    let mut round = 0u8;
+    let mut skipped = false;
+    while !skipped && round < 40 {
+        let es = entries(10 + round, 2);
+        c.submit(&es).unwrap();
+        wait("entries committed with 3 of 4", 40, || {
+            c.sync_chain(&profile).is_ok_and(|ch| included(&ch, &es))
+        });
+        let chain = c.sync_chain(&profile).unwrap();
+        skipped = chain.blocks().iter().any(|b| certificate(b).1 > 0);
+        round += 1;
+    }
+    assert!(skipped, "the silent proposer's turn was never handed over");
+    for h in net.nodes.into_iter().flatten() {
+        h.stop();
+    }
+}
+
+#[test]
+fn without_a_quorum_the_chain_pauses_it_never_forks_and_resumes_when_the_quorum_returns() {
+    // 3 institutions tolerate no failure: with one down there is no quorum (> 2/3)
+    let mut net = boot("pause");
+    let (c, profile) = client(&net);
+    net.nodes[2].take().unwrap().stop();
+    let es = entries(40, 2);
+    c.submit(&es).unwrap();
+    std::thread::sleep(Duration::from_secs(4));
+    let statuses: Vec<_> = c.statuses().into_iter().filter_map(|(_, s)| s).collect();
+    assert_eq!(statuses.len(), 2);
+    assert!(
+        statuses.iter().all(|s| s.height == 0 && s.mempool == 2),
+        "a block was decided without a quorum: {statuses:?}"
+    );
+    // the quorum returns: the pending entries are decided, everywhere, on one chain
+    net.nodes[2] = Some(start_node(&net.dir, 2));
+    wait("decided once the third institution is back", 40, || {
+        c.statuses()
+            .iter()
+            .all(|(_, s)| s.as_ref().is_some_and(|s| s.height == 1 && s.log_size == 2))
+    });
+    let chain = c.sync_chain(&profile).unwrap();
+    assert!(included(&chain, &es));
+    for h in net.nodes.into_iter().flatten() {
+        h.stop();
+    }
+}
+
+#[test]
 fn a_restarted_node_replays_its_log_and_catches_up() {
-    let mut net = boot("restart");
+    let mut net = boot_n("restart", 4);
     let (c, profile) = client(&net);
     c.submit(&entries(20, 3)).unwrap();
     wait("first commit", 20, || {
@@ -187,43 +259,58 @@ fn a_restarted_node_replays_its_log_and_catches_up() {
 }
 
 #[test]
-fn conflicting_blocks_with_a_quorum_are_detected_as_equivocation() {
-    let net = boot("equiv");
+fn a_block_without_a_quorum_certificate_is_not_accepted_by_a_node() {
+    let net = boot_n("forged", 4);
     let (c, profile) = client(&net);
     c.submit(&entries(30, 2)).unwrap();
-    wait("block 0 everywhere", 20, || {
+    wait("block 1 everywhere", 20, || {
         c.statuses()
             .iter()
             .all(|(_, s)| s.as_ref().is_some_and(|s| s.height >= 1))
     });
-    // Validators 0 and 1 (maliciously) also sign a DIFFERENT block 0.
-    let fresh = Chain::new(profile.clone());
-    let mut evil = fresh.propose(&entries(99, 2), 5, 0);
-    for i in [0usize, 1] {
-        let key = load_validator_key(&net.dir, i).unwrap();
-        evil.signatures.push(fresh.sign(&key, &evil).unwrap());
-    }
-    let addr: SocketAddr = load_network(&net.dir).unwrap().peers[2];
-    let r = teko_node_call(
-        addr,
-        wire::msg(
-            wire::COMMIT,
-            &BlockMsg {
-                block: evil.encode_to_vec(),
-            },
-        ),
-    );
-    assert!(r);
+    // Two institutions (maliciously) certify a DIFFERENT next block: 2 of 4 is not a quorum.
+    let chain = c.sync_chain(&profile).unwrap();
+    let set = chain.validator_set().unwrap();
+    let who = set.proposer(2, 0).key.clone();
+    let proposer_index = (0..4)
+        .find(|i| teko_crypto::public_key_bytes(&load_validator_key(&net.dir, *i).unwrap()) == who)
+        .unwrap();
+    let payload = chain.propose(&who, &entries(99, 2), 4_000_000_000);
+    let id = block_id(&payload);
+    let precommits = [proposer_index, (proposer_index + 1) % 4]
+        .iter()
+        .map(|i| {
+            Vote::new(
+                &profile.chain_id,
+                &load_validator_key(&net.dir, *i).unwrap(),
+                VoteKind::Precommit,
+                2,
+                0,
+                Some(&id),
+            )
+        })
+        .collect();
+    let forged = DecidedBlock {
+        payload,
+        commit: Some(Commit {
+            height: 2,
+            round: 0,
+            block_id: id,
+            precommits,
+        }),
+    };
+    let addr: SocketAddr = load_network(&net.dir).unwrap().peers[(proposer_index + 2) % 4];
+    assert!(teko_node_call(addr, wire::msg(wire::COMMIT, &forged)));
+    std::thread::sleep(Duration::from_millis(500));
     let s = c.status(addr).unwrap();
-    assert_eq!(
-        s.equivocations, 1,
-        "both blocks have a valid quorum: proof of equivocation"
-    );
+    assert_eq!(s.height, 1, "the node applied a block without a quorum");
     assert!(
-        c.sync_chain(&profile).unwrap().blocks()[0]
-            .entries
+        c.sync_chain(&profile)
+            .unwrap()
+            .blocks()
             .iter()
-            .all(|e| e.payload[0] == 30),
+            .filter_map(|d| d.block().ok())
+            .all(|b| b.entries.iter().all(|e| e.payload[0] == 30)),
         "the committed block did not change"
     );
     for h in net.nodes.into_iter().flatten() {

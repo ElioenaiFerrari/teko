@@ -3,7 +3,7 @@ use std::time::Duration;
 
 use prost::Message;
 use teko_bulletin::Entry;
-use teko_chain::{Block, BlockEntry, Chain, NetworkProfile};
+use teko_chain::{BlockEntry, Chain, DecidedBlock, NetworkProfile};
 
 use crate::error::NodeError;
 use crate::wire::{
@@ -53,7 +53,7 @@ pub struct EconStatus {
 }
 
 /// Talks to any node of a network. It trusts NONE of them: `sync_chain` re-verifies
-/// every block (M-of-N signatures, hash chain, Merkle state) before returning.
+/// every block (commit certificate, hash chain, Merkle state) before returning.
 pub struct NodeClient {
     addrs: Vec<SocketAddr>,
 }
@@ -161,7 +161,7 @@ impl NodeClient {
             let req = wire::msg(
                 wire::GET_BLOCKS,
                 &GetBlocks {
-                    from: chain.height(),
+                    from: chain.height() + 1,
                     max: 200,
                 },
             );
@@ -174,9 +174,9 @@ impl NodeClient {
                 return Ok(());
             }
             for raw in reply.blocks {
-                let b = Block::decode(raw.as_slice())
+                let d = DecidedBlock::decode(raw.as_slice())
                     .map_err(|_| NodeError::Protocol("malformed block".into()))?;
-                chain.apply(b)?;
+                chain.apply(d)?; // certificate, proposer, content and Merkle state
             }
         }
     }

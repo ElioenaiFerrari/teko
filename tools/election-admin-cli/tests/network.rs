@@ -1,5 +1,5 @@
 //! The election on the federated test network: publish, register, vote and tally
-//! through blocks signed by 2 of 3 validators, with the replica verified here.
+//! through blocks decided by BFT among the institutions, with the replica verified here.
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 
 use std::net::TcpListener;
@@ -23,7 +23,7 @@ fn ports() -> u16 {
     loop {
         let l = TcpListener::bind("127.0.0.1:0").unwrap();
         let p = l.local_addr().unwrap().port();
-        if p < 60_000 && (1..3).all(|k| TcpListener::bind(("127.0.0.1", p + k)).is_ok()) {
+        if p < 60_000 && (1..4).all(|k| TcpListener::bind(("127.0.0.1", p + k)).is_ok()) {
             return p;
         }
     }
@@ -193,15 +193,15 @@ fn start_with_trust(dir: &std::path::Path, i: usize) -> NodeHandle {
 }
 
 #[test]
-fn encrypted_ballots_stay_hidden_until_the_close_then_two_of_three_validators_reveal_the_exact_totals()
+fn encrypted_ballots_stay_hidden_until_the_close_then_the_validators_reveal_the_exact_totals_with_one_down()
  {
     let issuer = Issuer::open(scratch_dir("enc"));
     issuer.dev_setup().unwrap();
     let dir = issuer.dir().to_path_buf();
-    init_network(&dir.join("net"), NetworkKind::Devnet, 3, ports(), false).unwrap();
+    init_network(&dir.join("net"), NetworkKind::Devnet, 4, ports(), false).unwrap();
 
     // 1) The validators make the election key together (nobody holds it whole).
-    let boot: Vec<_> = (0..3).map(|i| start(&dir, i)).collect();
+    let boot: Vec<_> = (0..4).map(|i| start(&dir, i)).collect();
     let net = load_network(&dir.join("net")).unwrap();
     let rec = teko_node::run_ceremony(
         &teko_node::NodeClient::new(net.peers.clone()),
@@ -222,7 +222,7 @@ fn encrypted_ballots_stay_hidden_until_the_close_then_two_of_three_validators_re
         .as_secs();
     issuer.dev_election(now).unwrap();
     let mut nodes: Vec<Option<NodeHandle>> =
-        (0..3).map(|i| Some(start_with_trust(&dir, i))).collect();
+        (0..4).map(|i| Some(start_with_trust(&dir, i))).collect();
     let admin = Admin::open(&dir).unwrap();
     assert!(admin.network().is_some());
     let m = manifest(&admin);
@@ -265,7 +265,7 @@ fn encrypted_ballots_stay_hidden_until_the_close_then_two_of_three_validators_re
     );
     assert_eq!(t.bad_results, 0);
 
-    // 4) One validator goes down; the contests close; the other two decrypt.
+    // 4) One institution goes down (3 of 4 still decide blocks); the contests close; the others decrypt (2 shares suffice).
     nodes[2].take().unwrap().stop();
     let closes = m
         .contest("presidente")
@@ -275,7 +275,7 @@ fn encrypted_ballots_stay_hidden_until_the_close_then_two_of_three_validators_re
         .unwrap()
         .voting_closes;
     assert_eq!(admin.close_due(closes + 1).unwrap(), 6);
-    wait("totals revealed by 2 of 3 validators", 90, || {
+    wait("totals revealed with one institution down", 90, || {
         admin.tally().is_ok_and(|t| {
             planted
                 .keys()
@@ -292,7 +292,10 @@ fn encrypted_ballots_stay_hidden_until_the_close_then_two_of_three_validators_re
                 .distribution
         );
     }
-    assert_eq!(t.bad_results, 0);
+    // With 4 institutions and a threshold of 2, the 3 that are up all publish their share; the
+    // one that arrives after the totals are already revealed is refused as redundant (at most one
+    // per contest). Nothing else may be refused.
+    assert!(t.bad_results <= 6, "{} refused results", t.bad_results);
     assert_eq!(t.ignored_governance, 0);
     for n in nodes.into_iter().flatten() {
         n.stop();

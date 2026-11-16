@@ -8,8 +8,10 @@ pub enum ChainError {
     Profile(&'static str),
     #[error("block rejected: {0}")]
     Block(&'static str),
-    #[error("not enough valid validator signatures ({got} of {need})")]
-    Signatures { got: usize, need: usize },
+    #[error("the commit certificate is missing or invalid")]
+    Commit,
+    #[error("the block time does not move forward (it must be after the previous block's)")]
+    BadTime,
     #[error("log error: {0}")]
     Log(String),
 }

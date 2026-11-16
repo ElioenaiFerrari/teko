@@ -21,14 +21,14 @@ def crate_layers():
     return d
 
 def block_production():
-    d = D("block-production", 1100, 0, "Produzir um bloco", "Rodízio de proponente; se ele falhar, a rodada avança", "REDE")
-    A = [("s", "Suite", "cliente", "link", 110), ("p", "Proponente da vez", "round-robin", "focal", 380), ("b", "Validador B", "teko-node", "boto", 680), ("c", "Validador C", "teko-node", "boto", 960)]
-    M = [("s", "p", "cédula (mempool)", "default", False), ("p", "b", "bloco proposto", "default", False),
-         ("p", "c", "bloco proposto", "default", False), ("b", "p", "assinatura", "ok", True), ("c", "p", "assinatura", "ok", True),
-         ("p", "b", "bloco com M assinaturas", "boto", False)]
-    N = [(4, "p", "Com M-de-N assinaturas o bloco é válido", 300), (5, "c", "Proponente sumiu? round+1 e o próximo propõe", 340)]
+    d = D("block-production", 1100, 0, "Decidir um bloco de votos", "BFT entre as instituições: só nasce bloco se houver entrada; proponente sorteado, rodada avança se ele falhar", "REDE")
+    A = [("s", "Suite", "cliente", "link", 110), ("p", "Proponente da rodada", "sorteado", "focal", 380), ("b", "Instituição B", "teko-node", "boto", 680), ("c", "Instituição C", "teko-node", "boto", 960)]
+    M = [("s", "p", "cédula (mempool)", "default", False), ("p", "b", "proposta do bloco", "default", False),
+         ("p", "c", "proposta do bloco", "default", False), ("b", "p", "prevote e precommit", "ok", True), ("c", "p", "prevote e precommit", "ok", True),
+         ("p", "b", "bloco + certificado (> 2/3)", "boto", False)]
+    N = [(4, "p", "Mais de 2/3 dos precommits: o bloco é final", 300), (5, "c", "Proponente sumiu ou censurou? rodada+1, o próximo propõe", 380)]
     d.sequence(A, M, notas=N, passo=34)
-    d.legend([(MUTED, "pedido", False), (GREEN, "assinatura", False), (BOTO, "bloco final", False), (MUTED, "retorno", True)])
+    d.legend([(MUTED, "pedido", False), (GREEN, "voto assinado", False), (BOTO, "bloco final", False), (MUTED, "retorno", True)])
     return d
 
 def block_validation():
@@ -39,9 +39,9 @@ def block_validation():
     for (x1, x2) in [(820, 780), (560, 520), (300, 260)]:
         d.arrow([(x1, 338), (x2, 338)], "default")
     d.node(40, 140, 220, 76, "Bloco recebido", "Block", "input")
-    d.node(300, 140, 220, 76, "1. Cadeia e altura", "chain_id · height · prev_hash", "plain")
-    d.node(560, 140, 220, 76, "2. Proponente", "da vez, conforme a rodada", "plain")
-    d.node(820, 140, 200, 76, "3. Assinaturas", "M-de-N distintas e válidas", "focal")
+    d.node(300, 140, 220, 76, "1. Cadeia e altura", "chain_id · altura · pai · horário", "plain")
+    d.node(560, 140, 220, 76, "2. Proponente", "o que o certificado nomeia", "plain")
+    d.node(820, 140, 200, 76, "3. Certificado", "> 2/3 das instituições", "focal")
     d.node(820, 300, 200, 76, "4. Entradas", "regras de cada tipo", "plain")
     d.node(560, 300, 220, 76, "5. Merkle", "log_size e log_root", "plain")
     d.node(300, 300, 220, 76, "6. Aplica", "Chain::apply", "ok")
@@ -54,8 +54,8 @@ def sync():
     d = D("sync", 1000, 0, "Sincronizar sem confiar", "O cliente refaz a verificação de cada bloco: nó mentiroso não engana", "REDE")
     A = [("c", "Cliente", "NodeClient", "ok", 130), ("a", "Nó A", "honesto", "boto", 500), ("b", "Nó B", "adulterado", "bad", 870)]
     M = [("c", "a", "pede blocos desde a altura h", "default", False), ("a", "c", "blocos", "ok", True),
-         ("c", "b", "pede os mesmos blocos", "default", False), ("b", "c", "blocos com assinatura falsa", "bad", True)]
-    N = [(1, "c", "Chain::apply confere M-de-N: cadeia de A aceita", 330), (3, "c", "Mesma checagem: cadeia de B rejeitada", 300)]
+         ("c", "b", "pede os mesmos blocos", "default", False), ("b", "c", "blocos com certificado falso", "bad", True)]
+    N = [(1, "c", "Chain::apply confere o certificado: cadeia de A aceita", 330), (3, "c", "Mesma checagem: cadeia de B rejeitada", 300)]
     d.sequence(A, M, notas=N, passo=36)
     d.legend([(MUTED, "pedido", False), (GREEN, "aceito", True), (RED, "rejeitado", True)])
     return d

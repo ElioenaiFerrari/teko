@@ -91,18 +91,18 @@ def two_thirds_quorum():
     return d
 
 
-def poa_vs_bft():
-    d = D("poa-vs-bft", 1100, 570, "Dois consensos no Teko", "PoA (votos, hoje) e BFT estilo Tendermint (economia)", "CONSENSO")
-    d.region(30, 110, 480, 340, "PoA M-de-N · livro de votos", "optional")
+def consensus_lanes():
+    d = D("consensus-lanes", 1100, 570, "Duas cadeias, o mesmo motor BFT", "Votos: instituições de poder igual · Economia: poder por stake (ADR-0034)", "CONSENSO")
+    d.region(30, 110, 480, 340, "BFT institucional · livro de votos", "optional")
     d.region(590, 110, 480, 340, "BFT por stake · livro de economia", "optional")
-    for x, nomes, kinds in ((60, [("Lista fixa de validadores", "definida na rede (N chaves)", "plain"), ("Rodízio de proponente", "altura mod N", "plain"), ("M-de-N assinaturas", "bloco válido com M de N", "focal")], None),
-                            (620, [("Validadores por stake", "poder ∝ moedas travadas", "plain"), ("Proposta · prevote · precommit", "rodadas com timeouts", "plain"), ("Certificado > 2/3 do poder", "commit final e verificável", "ok")], None)):
-        for i, (n, s, k) in enumerate(nomes):
+    for x, nomes in ((60, [("Instituições do genesis", "1 instituição = 1 voto, sem moeda", "plain"), ("Proposta · prevote · precommit", "rodadas com timeouts", "plain"), ("Certificado > 2/3 das instituições", "bloco final e verificável", "ok")]),
+                     (620, [("Validadores por stake", "poder ∝ moedas travadas", "plain"), ("Proposta · prevote · precommit", "rodadas com timeouts", "plain"), ("Certificado > 2/3 do poder", "commit final e verificável", "ok")])):
+        for i, (n, s_, k) in enumerate(nomes):
             y = 145 + i * 100
-            d.node(x, y, 420, 64, n, s, k)
+            d.node(x, y, 420, 64, n, s_, k)
             if i < 2:
                 d.arrow([(x + 210, y + 64), (x + 210, y + 100)], "default")
-    d.text(30, 486, "PoA: simples e rápido, mas a lista de validadores é fixa. BFT: o conjunto muda com o stake e tolera < 1/3 falho.", 11, MUTED)
+    d.text(30, 486, "Mesmo motor (teko-bft): finalidade, pausa sem quórum (nunca bifurca) e tolera < 1/3 falho. Nenhum bloco nasce sem transação.", 11, MUTED)
     d.legend([(MUTED, "etapas", False)])
     return d
 

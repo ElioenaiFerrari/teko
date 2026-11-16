@@ -1,24 +1,26 @@
-# 6. Consenso: PoA e BFT
+# 6. Consenso: o motor BFT e suas duas cadeias
 
 ## O que é
 **Consenso** é como vários computadores, que não confiam uns nos outros, **concordam sobre a mesma sequência de blocos**, mesmo com falhas ou traidores. Sem isso, cada um teria um livro diferente.
 
 ## Qual algoritmo o Teko usa
-Dois, um para cada livro:
+O **mesmo motor BFT** (`teko-bft`) para os dois livros, com regras de poder diferentes (ADR-0034):
 
-| | Livro de **votos** (hoje) | Livro de **economia** |
+| | Livro de **votos** | Livro de **economia** |
 |---|---|---|
-| Algoritmo | **PoA** (*proof of authority*) M-de-N | **BFT estilo Tendermint**, ponderado por stake |
-| Quem valida | lista fixa de N validadores | quem tem moedas travadas (*stake*) |
-| Bloco é final quando | M de N assinaram | mais de 2/3 do poder votou (certificado de commit) |
-| Tolera | falha de até N−M validadores | até 1/3 do poder falho ou malicioso |
+| Algoritmo | **BFT estilo Tendermint** | **BFT estilo Tendermint** |
+| Quem valida | as **instituições** do genesis, poder igual (1 voto cada), sem moeda | quem tem moedas travadas (*stake*) |
+| Bloco é final quando | mais de 2/3 das instituições deram precommit (certificado de commit) | mais de 2/3 do poder deu precommit |
+| Tolera | menos de 1/3 das instituições falhas (3 instituições: nenhuma; 4: uma) | menos de 1/3 do poder falho ou malicioso |
 
-A migração do livro de votos para o BFT é o **M6b**, planejado.
+Por que **não** dar poder por stake aos votos: quem ordena as cédulas não pode ser quem tem mais moeda; a legitimidade vem de instituições independentes e responsabilizáveis; e votos e moeda devem ficar desacoplados. Por que **não** *Proof of History*: ela prova ordem e passagem de tempo, mas não dá acordo bizantino e concentra o trabalho num líder, o contrário de validadores iguais.
 
-![Os dois consensos do Teko: PoA M-de-N com lista fixa e BFT por stake com certificado maior que 2/3](../diagrams/poa-vs-bft.png)
+**Nenhum bloco nasce sozinho:** uma altura só começa quando há entrada (voto) ou transação esperando, ou quando os pares já a começaram. O horário do bloco é o do proponente, que cada validador confere contra o próprio relógio (60 s).
 
-## PoA em uma frase
-Um validador da vez (rodízio por altura) propõe o bloco; ele só vale com M assinaturas de N. É simples e rápido, mas a lista de validadores é fixa. Ver [capítulo 5](05-m-of-n.md).
+![As duas cadeias do Teko: o mesmo motor BFT, com instituições de poder igual nos votos e poder por stake na economia](../diagrams/consensus-lanes.png)
+
+## PoA, o que havia antes
+Um validador da vez (rodízio por altura) propunha o bloco; ele só valia com M assinaturas de N. Era simples e rápido, mas não tinha finalidade nem resistia a um proponente que censura. Por isso foi substituído (ADR-0034).
 
 ## BFT (Tendermint) passo a passo
 BFT = *Byzantine Fault Tolerance*: tolerância a falhas "bizantinas", em que o defeituoso pode mentir e agir de má-fé. Em cada **altura** (número do bloco) há **rodadas**:
@@ -101,7 +103,7 @@ fn main() {
 ## Onde está no Teko
 - `crates/teko-bft`: motor sans-I/O (`Engine`, `is_quorum`, `proposer`, `Commit`, `Evidence`, `locked`/`start_height_locked`).
 - `crates/teko-economy` + `tools/teko-node/src/economy.rs`: economia sobre BFT, WAL, envio automático do `Slash`.
-- `crates/teko-chain`: PoA M-de-N dos votos.
+- `crates/teko-chain`: a cadeia de votos (bloco com certificado, réplica verificada, `VoteApp`); `tools/teko-node/src/lane.rs`: o hospedeiro BFT genérico das duas cadeias.
 - Fluxos: [Consenso BFT](../flows/11-bft-consensus.md), [Rede e sincronização](../flows/10-network-and-sync.md). ADRs 0028 e 0030.
 
 ## Cuidados

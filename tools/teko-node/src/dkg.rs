@@ -230,10 +230,27 @@ pub fn run_ceremony(
         group_key: point_to_bytes(&y).to_vec(),
     };
     record.verify().map_err(|e| bad(&format!("{e:?}")))?;
-    client.submit(&[Entry::new(
-        EntryKind::DKG,
-        prost::Message::encode_to_vec(&record),
-    )])?;
+    let entry = Entry::new(EntryKind::DKG, prost::Message::encode_to_vec(&record));
+    client.submit(std::slice::from_ref(&entry))?;
+    // The record is only real once the network DECIDED it (BFT, ADR-0034): an entry still in a
+    // mempool is lost if the nodes restart. Wait until a verified replica carries it.
+    let profile = crate::setup::load_network(dir)?.profile;
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(60);
+    loop {
+        let included = client.sync_chain(&profile).is_ok_and(|chain| {
+            (0..teko_bulletin::BulletinBoard::len(chain.board()))
+                .any(|i| teko_bulletin::BulletinBoard::entry(chain.board(), i) == Some(&entry))
+        });
+        if included {
+            break;
+        }
+        if std::time::Instant::now() > deadline {
+            return Err(bad(
+                "the network did not decide the key ceremony record in time",
+            ));
+        }
+        std::thread::sleep(std::time::Duration::from_millis(150));
+    }
     fs::write(
         dir.join("tally-key.pub"),
         format!("{}\n", hex::encode(&point_to_bytes(&y))),

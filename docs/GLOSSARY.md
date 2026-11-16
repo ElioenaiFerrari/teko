@@ -48,7 +48,7 @@ Consulta rápida. Para **entender** cada conceito, com diagrama e código Rust, 
 | **TEKO / ypy** | A moeda e sua menor unidade; 1 TEKO = 1.000.000 ypy. | [4](concepts/04-wallet.md) |
 | **Limiar / threshold** | M de N para agir. Para assinaturas separadas (M-de-N) ou para juntar partes de uma chave (votação). | [5](concepts/05-m-of-n.md), [9](concepts/09-voting-crypto.md) |
 | **Consenso** | Como nós que não confiam uns nos outros concordam sobre os mesmos blocos. | [6](concepts/06-consensus.md) |
-| **PoA** | *Proof of authority*: validadores de uma lista fixa em rodízio; bloco vale com M de N assinaturas (livro de votos). | [6](concepts/06-consensus.md) |
+| **PoA** | *Proof of authority*: validadores de uma lista fixa em rodízio; bloco vale com M de N assinaturas. Foi o consenso do livro de votos até o ADR-0034, que o trocou por BFT institucional. | [6](concepts/06-consensus.md) |
 | **BFT** | *Byzantine Fault Tolerance*: tolera validadores que mentem, até 1/3 do poder (livro de economia). | [6](concepts/06-consensus.md) |
 | **Tendermint** | Estilo de BFT com proposta, prevote, precommit e commit por rodadas. | [6](concepts/06-consensus.md) |
 | **Quórum** | Mais de 2/3 do poder de voto; garante que dois blocos não são decididos. | [6](concepts/06-consensus.md) |

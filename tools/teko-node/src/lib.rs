@@ -1,8 +1,10 @@
-//! Teko validator node and verified client (federated PoA, ADR-0014).
+//! Teko validator node and verified client (ADR-0014, ADR-0034).
 //!
-//! Nodes keep a `teko_chain::Chain`, gossip entries, take turns proposing blocks
-//! and collect M-of-N validator signatures. Clients NEVER trust a node: they
-//! download the blocks and re-verify every signature (`NodeClient::sync_chain`).
+//! A node runs two BFT lanes side by side (`lane`): the VOTE chain (bulletin entries ordered by
+//! the institutions, equal power) and, when configured, the ECONOMY chain. Nodes gossip, take
+//! turns proposing and decide blocks with commit certificates; no block is ever made on a timer.
+//! Clients NEVER trust a node: they download the blocks and re-verify every certificate
+//! (`NodeClient::sync_chain`).
 //!
 //! Loopback only by default: the devnet runs on your machine. DEV/PROTOTYPE: the
 //! wire is plain TCP without encryption or peer authentication beyond the block
@@ -13,8 +15,10 @@ mod client;
 mod dkg;
 mod economy;
 mod error;
+mod lane;
 mod node;
 mod setup;
+mod votes;
 pub mod wire;
 mod world;
 

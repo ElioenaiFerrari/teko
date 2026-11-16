@@ -429,3 +429,46 @@ fn stake_becomes_bounded_voting_power() {
     assert!(p.iter().sum::<u64>() <= 10_001);
     assert_eq!(quantize(&[]), Vec::<u64>::new());
 }
+
+#[test]
+fn block_time_is_the_proposers_it_only_moves_forward_and_must_be_near_the_voters_clock() {
+    use teko_bft::App;
+    let (node, wallet) = (key(40), key(41));
+    let g = genesis(&node, &addr(&wallet), 1_000_000);
+    let mut c = Cluster::new(&g, vec![node.clone()]);
+    c.until(4);
+    let chain = c.chain(0);
+    let me = public_key_bytes(&node);
+
+    // every block's time is strictly after the previous one
+    let times: Vec<u64> = chain
+        .blocks()
+        .iter()
+        .map(|d| d.block().unwrap().timestamp)
+        .collect();
+    assert!(times.windows(2).all(|w| w[0] < w[1]), "{times:?}");
+
+    // a block at or before the previous block's time is refused; one second later is fine
+    let last = chain.last_timestamp();
+    assert_eq!(last, *times.last().unwrap());
+    assert_eq!(
+        chain.check(&me, &chain.propose(&me, &[], last)),
+        Err(EconError::BadTime)
+    );
+    assert_eq!(
+        chain.check(&me, &chain.propose(&me, &[], last - 5)),
+        Err(EconError::BadTime)
+    );
+    assert!(chain.check(&me, &chain.propose(&me, &[], last + 1)).is_ok());
+
+    // a validator votes only for a time near ITS clock (60 s)
+    let clock_now = 1_700_000_100u64;
+    let fresh = EconomyChain::new(g.clone()).unwrap();
+    let app = EconApp::new(fresh, &node, Box::new(move || clock_now));
+    let near = app.chain.propose(&me, &[], clock_now + 59);
+    let far = app.chain.propose(&me, &[], clock_now + 3_600);
+    let past = app.chain.propose(&me, &[], clock_now - 3_600);
+    assert!(app.validate_from(1, &me, &near));
+    assert!(!app.validate_from(1, &me, &far));
+    assert!(!app.validate_from(1, &me, &past));
+}

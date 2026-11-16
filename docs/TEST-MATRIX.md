@@ -121,21 +121,33 @@ Legenda: **P** = `proptest` (muitos casos), **U** = unitário, **E** = ponta a p
 | No prazo a governança (simulada, 2 de 3) fecha o pleito; antes não fecha nada; é idempotente; cédula anexada depois é recusada pela apuração pública e o fechamento não é contado como governança ignorada | admin: `at_the_deadline_governance_closes_the_contest_and_the_log_locks_the_vote` |
 | O dispositivo recusa votar/registrar após `voting_closes`, sem pedir confirmação | device-core: `the_device_itself_refuses_to_vote_after_the_last_allowed_moment` |
 
-## Fase 2, etapa 6: rede federada PoA
+## Fase 2, etapa 6: rede de votos em BFT institucional (ADR-0034)
 
 | Garantia | Teste |
 |---|---|
-| Blocos encadeiam e a réplica reconstrói exatamente o mesmo log Merkle, verificando tudo | chain: `blocks_chain_and_rebuild_exactly_the_same_merkle_log` |
-| Bloco exige M validadores distintos, incluindo o proponente; duplicata e estranho não contam; nada é commitado se falhar | chain: `a_block_needs_m_distinct_validators_including_the_proposer` |
-| Qualquer campo adulterado (chain_id, altura, prev_hash, proponente, entradas, raiz, tamanho, timestamp, tipo) é recusado | chain: `every_tampered_field_is_refused` |
-| Validador nunca assina bloco inválido nem sendo de fora; bloco de outra rede é inútil; mainnet travada; perfil validado | chain: `a_validator_never_signs...`, `a_block_from_another_network_is_useless_here`, profile: `mainnet_is_locked_everywhere`, `text_roundtrip_and_validation` |
-| 3 nós convergem à mesma altura e raiz; cada réplica verifica sozinha; duplicatas descartadas na rede toda | node: `three_nodes_produce_blocks_and_every_replica_verifies_to_the_same_log` |
-| Com 1 validador fora do ar a rede continua (inclusive no turno dele, via troca de turno) | node: `the_network_keeps_working_with_one_validator_down_including_its_turn` |
+| Blocos encadeiam e a réplica reconstrói exatamente o mesmo log Merkle, verificando tudo | chain: `blocks_chain_and_a_second_replica_rebuilds_exactly_the_same_merkle_log` |
+| Finalidade exige mais de 2/3 das instituições (4: 3 decidem, 2 não; 3: só as 3) e nada é commitado sem isso | chain: `finality_needs_more_than_two_thirds_of_the_institutions` |
+| Certificado ausente, de outro bloco, com voto repetido, de estranho ou de outra rede é recusado | chain: `a_certificate_is_not_transferable_forged_or_made_by_outsiders` |
+| Só o proponente que o certificado nomeia pode ter proposto o bloco | chain: `only_the_proposer_the_certificate_names_can_have_proposed_the_block` |
+| Qualquer campo adulterado (chain_id, altura, pai, proponente, entradas, raiz, tamanho, tipo, bytes extras) é recusado mesmo com certificado válido | chain: `every_tampered_field_is_refused` |
+| O horário só avança, e o validador só vota perto do próprio relógio (60 s) | chain: `block_time_only_moves_forward_and_a_validator_only_votes_near_its_clock` |
+| Mempool sem repetição; o que o bloco leva sai dele; nunca há bloco vazio | chain: `the_mempool_dedupes_and_what_a_block_carries_leaves_it`, `a_block_is_never_empty_and_the_first_one_ties_to_the_chain_id` |
+| 3 nós decidem o mesmo bloco com certificado completo; cada réplica verifica sozinha; duplicatas descartadas na rede toda | node: `three_nodes_decide_blocks_and_every_replica_verifies_to_the_same_log` |
+| **Nenhum bloco nasce sozinho**: a rede ociosa fica na altura 0, uma entrada gera um bloco e depois ela para de novo | node: `no_block_is_made_on_its_own_the_chain_only_grows_with_entries` |
+| Com 4 instituições uma pode cair, mesmo no turno de proponente (a rodada seguinte assume) | node: `with_four_institutions_one_can_be_down_even_when_it_is_the_proposer` |
+| **Sem quórum a cadeia pausa (nunca bifurca)** e retoma quando o quórum volta | node: `without_a_quorum_the_chain_pauses_it_never_forks_and_resumes_when_the_quorum_returns` |
 | Nó reiniciado reverifica seu log e recupera o atraso | node: `a_restarted_node_replays_its_log_and_catches_up` |
-| Bloco conflitante com quórum na mesma altura é detectado como equívoco e não altera a cadeia | node: `conflicting_blocks_with_a_quorum_are_detected_as_equivocation` |
-| Nó só escuta em loopback e só com a chave do seu índice | node: `a_node_refuses_to_listen_outside_loopback_and_a_wrong_key` |
-| Dispositivo ligado a uma rede recusa eleição de outra; apuração ligada ignora manifesto de outra | device-core: `a_device_bound_to_a_network_refuses_elections_of_any_other_network`; election: `a_tallier_bound_to_a_network_ignores_manifests_of_another` |
-| **Eleição inteira na rede:** publicar, registrar, votar e simular via blocos; apuração reconstruída da réplica verificada; ao parar os nós volta ao arquivo | admin: `an_election_runs_on_the_network_and_the_tally_is_rebuilt_from_verified_blocks` |
+| Bloco com certificado sem quórum (2 de 4) é recusado por um nó e a cadeia não muda | node: `a_block_without_a_quorum_certificate_is_not_accepted_by_a_node` |
+| Mainnet travada; perfil validado | profile: `mainnet_is_locked_everywhere`, `text_roundtrip_and_validation` |
+| WAL (rodada e lock) sobrevive a reinício | node: `the_wal_remembers_the_round_and_the_lock_across_a_restart` |
+| Eleição inteira na rede; cédulas cifradas ficam escondidas até o fechamento e os totais saem com 1 instituição fora | admin-cli: `network.rs` |
+
+## Economia sem blocos vazios (ADR-0034)
+
+| Garantia | Teste |
+|---|---|
+| O horário do bloco só avança, e a instituição só vota num horário perto do relógio dela (60 s); relógio 10 anos adiantado não move o horário | economy: `block_time_is_the_proposers_it_only_moves_forward_and_must_be_near_the_voters_clock` |
+| A rede de economia ociosa fica na altura 0, uma transação gera um bloco em todos os nós, e depois para | node: `no_block_is_made_on_its_own_the_chain_only_grows_with_transactions` |
 
 ## Fase 2, etapa 7: reemissão, revogação e build de produção
 

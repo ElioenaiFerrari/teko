@@ -23,7 +23,7 @@ crates/teko-coin/          (Fase 2, M3) moeda de teto fixo: halving, taxa por by
 crates/teko-assets/        (Fase 2, M4) bens: classes com órgão M-de-N, dono+comprador+órgão, gravames, Swap atômico (ADR-0022)
 crates/teko-wallet/        (Fase 2, M5a) carteira: BIP-39 24 palavras (só na tela do dispositivo), SLIP-10 P-256, endereço tekow1…; independente da identidade (ADR-0023)
 crates/teko-economy/       (Fase 2, M6a) economia sobre BFT: blocos com certificado, validadores por stake, fase de fundador (ADR-0028)
-crates/teko-chain/         (Fase 2) rede federada PoA: perfis devnet/testnet (mainnet TRAVADA), blocos M-de-N, réplica verificada
+crates/teko-chain/         (Fase 2) rede de votos em **BFT institucional** (ADR-0034): perfis devnet/testnet (mainnet TRAVADA), blocos com certificado de commit, réplica verificada
 crates/teko-explorer/      (Fase 2) índice verificado da cadeia de economia: blocos, txs, contas, validadores, busca (ADR-0031)
 tools/devnet-sim/           (Fase 2) simuladores SÓ de dev: equivocação do validador de teste (`make devnet-equivocate`)
 tools/explorer-server/     (Fase 2) explorador: web local + API JSON somente leitura (`make explorer`)
@@ -89,7 +89,7 @@ make devnet-equivocate                 # SIMULA a equivocação do validador de 
 make tally-time                        # apura o quadro (release) e mostra o tempo; TEKO_VERIFY_THREADS=1 = sequencial
 make explorer                          # explorador da chain em http://127.0.0.1:8545 (precisa de make devnet)
 make devnet-economy                    # economia BFT: altura, fase de fundador, validadores
-make devnet                            # blockchain de TESTE local: 3 validadores PoA (docs/NETWORKS.md)
+make devnet                            # blockchain de TESTE local: 3 validadores em BFT, sem blocos vazios (docs/NETWORKS.md)
 make                                   # lista todos os atalhos (check, repro, release-check, verify-fw...)
 # demo sem teclado (NUNCA em produção): cargo run -p device-emulator --features test-buttons -- --auto-pin 482913
 ```

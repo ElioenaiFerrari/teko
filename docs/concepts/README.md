@@ -14,7 +14,7 @@ Cada capítulo segue o mesmo molde: **o que é** (com analogia), **por que o Tek
 | [2. Chaves e assinaturas](02-signatures.md) | Chave privada/pública, ECDSA P-256, assinar e verificar |
 | [3. Endereços e HRP (bech32m)](03-addresses-bech32m.md) | Prefixo legível, checksum, `teko`/`tekow`/`tekop` |
 | [4. Carteira: frase, derivação e TEKO/ypy](04-wallet.md) | BIP-39, SLIP-10, caminho `m/7240'/…`, casas decimais |
-| [5. M-de-N](05-m-of-n.md) | Limiar de assinaturas: firmware, blocos PoA, bens |
+| [5. M-de-N](05-m-of-n.md) | Limiar de assinaturas: firmware, bens, governança |
 | [6. Consenso: PoA e BFT](06-consensus.md) | Qual algoritmo usamos, quórum > 2/3, rodadas, lock, slash |
 | [7. Livro-razão, blocos e Merkle](07-ledger.md) | Transação, nonce, taxa, raiz de estado, quadro |
 | [8. Moeda: halving, stake e fundador](08-coin.md) | Recompensa, teto, poder de voto |
@@ -22,7 +22,7 @@ Cada capítulo segue o mesmo molde: **o que é** (com analogia), **por que o Tek
 | [10. Segurança do dispositivo](10-device-security.md) | PIN, `zeroize`, atestação, separação identidade ↔ voto |
 
 ## Resposta curta às perguntas mais comuns
-- **Que consenso usamos?** Dois: **PoA M-de-N** no livro de votos (hoje) e **BFT estilo Tendermint ponderado por stake** no livro de economia. [Capítulo 6](06-consensus.md).
+- **Que consenso usamos?** O mesmo motor **BFT estilo Tendermint** nas duas cadeias: no livro de votos com **instituições de poder igual** (1 instituição = 1 voto) e no livro de economia **ponderado por stake**. [Capítulo 6](06-consensus.md).
 - **Que criptografia?** SHA3-256 (hash), ECDSA sobre P-256 (assinatura), ElGamal exponencial de limiar em P-256 (cédula), RSA cego RFC 9474 (registro anônimo), bech32m (endereços). Tudo é "sem auditoria" nesta fase.
 - **Que assinatura?** ECDSA P-256 com hash com tag (capítulo 2); M-de-N para o que exige várias instituições (capítulo 5).
 

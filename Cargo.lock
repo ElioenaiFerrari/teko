@@ -4173,6 +4173,7 @@ dependencies = [
  "prost",
  "rand",
  "teko-attestation",
+ "teko-bft",
  "teko-bulletin",
  "teko-crypto",
  "teko-election",

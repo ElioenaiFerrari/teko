@@ -285,16 +285,21 @@ fn run(args: Vec<String>) -> Result<(), String> {
                 .sync_chain(&net.profile)
                 .map_err(e)?;
             println!(
-                "{} blocos verificados (assinaturas, encadeamento e raiz Merkle):",
+                "{} blocos verificados (certificado de commit, encadeamento e raiz Merkle):",
                 chain.height()
             );
-            for b in chain.blocks() {
+            for d in chain.blocks() {
+                let Ok(b) = d.block() else { continue };
+                let (precommits, round) = d
+                    .commit
+                    .as_ref()
+                    .map_or((0, 0), |c| (c.precommits.len(), c.round));
                 println!(
-                    "  #{} · {} entradas · {} assinaturas · rodada {}",
+                    "  #{} · {} entradas · {} precommits · rodada {}",
                     b.height,
                     b.entries.len(),
-                    b.signatures.len(),
-                    b.round
+                    precommits,
+                    round
                 );
             }
         }

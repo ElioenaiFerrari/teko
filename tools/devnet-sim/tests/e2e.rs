@@ -50,6 +50,39 @@ fn start_node(dir: &std::path::Path, i: usize, ec: &EconomyConfig) -> NodeHandle
     .unwrap()
 }
 
+fn key(seed: u64) -> SigningKey {
+    generate_signing_key(&mut rand::rngs::StdRng::seed_from_u64(seed))
+}
+
+/// Blocks only exist for transactions (ADR-0034), so a test that wants the chain to move has
+/// to make activity: a transaction from a throwaway key (it links a fresh key, a harmless
+/// state change that needs no balance) and wait until the first node has a higher block.
+fn bump(client: &NodeClient, chain_id: &str, times: u64) {
+    static SEED: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(900_000);
+    for _ in 0..times {
+        let before = client
+            .econ_status(client.addrs()[0])
+            .map_or(0, |s| s.height);
+        let sk = key(SEED.fetch_add(1, std::sync::atomic::Ordering::SeqCst));
+        let t = Tx::new_signed(
+            &sk,
+            chain_id,
+            0,
+            teko_coin::COIN_MODULE,
+            Op::SetValidatorKey {
+                key: public_key_bytes(&sk),
+            }
+            .encode(),
+        );
+        client.econ_submit(&[t]).unwrap();
+        wait("a block for the activity", 30, || {
+            client
+                .econ_status(client.addrs()[0])
+                .is_ok_and(|s| s.height > before)
+        });
+    }
+}
+
 fn wait(what: &str, secs: u64, mut f: impl FnMut() -> bool) {
     let t = Instant::now();
     while t.elapsed() < Duration::from_secs(secs) {
@@ -78,11 +111,12 @@ fn the_simulated_equivocation_burns_a_tenth_of_the_owners_stake_each_time() {
     g.coin.halving_interval = 100_000;
     g.coin.slash_bps = 1000; // 10%
     std::fs::write(dir.join(ECONOMY_FILE), g.to_text()).unwrap();
-    let mut ec = load_economy(&dir).unwrap().unwrap();
-    ec.empty_block_interval_ms = 120;
+    let ec = load_economy(&dir).unwrap().unwrap();
     let nodes: Vec<NodeHandle> = (0..3).map(|i| start_node(&dir, i, &ec)).collect();
     let client = NodeClient::new(load_network(&dir).unwrap().peers);
 
+    // rewards only come with blocks, and blocks only with transactions (ADR-0034)
+    bump(&client, &ec.genesis.chain_id, 4);
     // the owner bonds 2.000 of the rewards as stake
     wait("rewards in the owner's wallet", 30, || {
         client

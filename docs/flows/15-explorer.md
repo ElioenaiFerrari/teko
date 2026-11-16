@@ -22,7 +22,7 @@ Os nós da rede (`teko-node`), o `NodeClient` que baixa blocos, o índice verifi
 
 ## O que é verificado e por quem
 - **Pelo explorador:** certificado de cada bloco, proponente, execução e raiz do estado (o mesmo `EconomyChain::apply_decided_outcome` que os nós usam). Saldos, oferta e fase de fundador mostrados vêm do estado que **ele** reconstruiu.
-- **Livro de votos (PoA):** `NodeClient::sync_chain` verifica assinaturas M-de-N, encadeamento e o log Merkle; a página mostra só cabeçalhos e contagens por tipo de entrada.
+- **Livro de votos (BFT):** `NodeClient::sync_chain` verifica o certificado de commit, o proponente, o encadeamento e o log Merkle; a página mostra só cabeçalhos e contagens por tipo de entrada.
 - **Metadados de bens:** a chain guarda só o hash. Em **devnet local** o explorador lê o armazém (`<dir>/assets-metadata`) e mostra o registro com o selo "verificado contra a chain" quando o hash confere; fora da devnet (ou sem o armazém) mostra apenas o hash, para não expor dados do dono ([ADR-0032](../adr/0032-classes-de-bens-e-metadados-amarrados.md)).
 - **Pelo navegador:** nada; todo texto vindo da API é escapado antes de virar HTML, e a CSP não permite script ou estilo inline.
 
@@ -48,5 +48,5 @@ Os nós da rede (`teko-node`), o `NodeClient` que baixa blocos, o índice verifi
 - O índice vive **em memória** e é reconstruído a partir da cadeia: ótimo para a devnet, não para milhões de blocos.
 - A página consulta a cada poucos segundos (sem WebSocket). Não há autenticação nem HTTPS: em produção, só atrás de um proxy reverso (`--public` é obrigatório fora de loopback).
 - **Controles de desenvolvimento (estilo Ganache) ainda não existem**: faucet para outro endereço, reiniciar a rede e ritmo dos blocos dependem de uma decisão de produto (ADR-0031). Planejado.
-- O quadro de votação com provas de inclusão Merkle continua na Suite; o explorador mostra só o livro PoA.
+- O quadro de votação com provas de inclusão Merkle continua na Suite; o explorador mostra só o livro de votos (cabeçalhos e certificado).
 - Sem auditoria.

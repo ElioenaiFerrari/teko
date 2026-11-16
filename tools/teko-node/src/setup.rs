@@ -193,14 +193,7 @@ pub fn load_economy(dir: &Path) -> Result<Option<crate::EconomyConfig>, NodeErro
         return Ok(None);
     };
     let genesis = teko_economy::EconomyGenesis::parse(&text).map_err(NodeError::Economy)?;
-    let interval = std::env::var("TEKO_EMPTY_BLOCK_MS")
-        .ok()
-        .and_then(|v| v.parse().ok())
-        .unwrap_or(3_000);
-    Ok(Some(crate::EconomyConfig {
-        genesis,
-        empty_block_interval_ms: interval,
-    }))
+    Ok(Some(crate::EconomyConfig { genesis }))
 }
 
 /// The TEST registrar keys of the órgão of `class` (next to the network).

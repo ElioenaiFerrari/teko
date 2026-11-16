@@ -55,6 +55,35 @@ fn start_node(dir: &std::path::Path, i: usize, ec: &EconomyConfig) -> NodeHandle
     .unwrap()
 }
 
+/// Blocks only exist for transactions (ADR-0034), so a test that wants the chain to move has
+/// to make activity: a transaction from a throwaway key (it links a fresh key, a harmless
+/// state change that needs no balance) and wait until the first node has a higher block.
+fn bump(client: &NodeClient, chain_id: &str, times: u64) {
+    static SEED: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(900_000);
+    for _ in 0..times {
+        let before = client
+            .econ_status(client.addrs()[0])
+            .map_or(0, |s| s.height);
+        let sk = key(SEED.fetch_add(1, std::sync::atomic::Ordering::SeqCst));
+        let t = Tx::new_signed(
+            &sk,
+            chain_id,
+            0,
+            teko_coin::COIN_MODULE,
+            Op::SetValidatorKey {
+                key: public_key_bytes(&sk),
+            }
+            .encode(),
+        );
+        client.econ_submit(&[t]).unwrap();
+        wait("a block for the activity", 30, || {
+            client
+                .econ_status(client.addrs()[0])
+                .is_ok_and(|s| s.height > before)
+        });
+    }
+}
+
 fn wait(what: &str, secs: u64, mut f: impl FnMut() -> bool) {
     let t = Instant::now();
     while t.elapsed() < Duration::from_secs(secs) {
@@ -89,14 +118,14 @@ fn the_explorer_verifies_the_chain_of_three_real_nodes_and_decodes_a_transfer() 
     g.coin.initial_reward = 1_000;
     g.coin.halving_interval = 100_000;
     std::fs::write(dir.join(ECONOMY_FILE), g.to_text()).unwrap();
-    let mut ec = load_economy(&dir).unwrap().unwrap();
-    ec.empty_block_interval_ms = 120;
+    let ec = load_economy(&dir).unwrap().unwrap();
     let nodes: Vec<NodeHandle> = (0..3).map(|i| start_node(&dir, i, &ec)).collect();
     let client = NodeClient::new(load_network(&dir).unwrap().peers);
 
     let shared = Shared::new(Index::new(ec.genesis.clone()).unwrap(), "devnet")
         .with_store(teko_assets::MetadataStore::new(dir.join("assets-metadata")))
         .with_votes(load_network(&dir).unwrap().profile);
+    bump(&client, &ec.genesis.chain_id, 4);
     wait("a few blocks verified by the explorer", 30, || {
         sync_once(&shared, &client);
         shared.index().height() >= 4
@@ -187,7 +216,7 @@ fn the_explorer_verifies_the_chain_of_three_real_nodes_and_decodes_a_transfer() 
     let votes = get(&shared, "/api/v1/votes");
     assert_eq!(votes["available"], true);
     assert_eq!(votes["validators"], 3);
-    assert_eq!(votes["threshold"], 2);
+    assert_eq!(votes["quorum"], 3); // more than 2/3 of 3 institutions
     shared.index().audit().unwrap();
 
     for n in nodes {

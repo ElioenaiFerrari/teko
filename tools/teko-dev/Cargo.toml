@@ -1,0 +1,23 @@
+[package]
+name = "teko-dev"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+description = "Development-only helper: an arrow-key menu over the make targets, aware of the test network. Never part of a release."
+
+[lib]
+name = "teko_dev"
+path = "src/lib.rs"
+
+[[bin]]
+name = "teko-dev"
+path = "src/main.rs"
+
+[dependencies]
+teko-node.workspace = true
+ratatui = "0.30"
+libc = "0.2"
+
+[lints]
+workspace = true

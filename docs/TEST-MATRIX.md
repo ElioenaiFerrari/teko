@@ -389,3 +389,6 @@ Legenda: **P** = `proptest` (muitos casos), **U** = unitário, **E** = ponta a p
 | Toda entrada tem bloco certificado e prova verificável pelo dispositivo | chain: `every_entry_has_a_certified_block_and_a_proof_that_a_device_can_check_alone` |
 | Veredito por cédula (contada, duplicada, assinatura, fora de fase) | election: `a_watched_ballot_gets_its_own_verdict...`, `a_ballot_outside_the_voting_window...` |
 | `trust.txt` com as instituições da chain de votos, tudo ou nada | attestation: `the_vote_chain_institutions_are_all_or_nothing` |
+| O simulador de blocos produz exatamente a quantidade pedida nas duas chains e recusa 0 e mais de 1000 | devnet-sim: `the_block_simulator_makes_the_asked_number_of_blocks_on_both_chains` |
+| As entradas de teste do simulador (tipo 200) nunca mudam uma contagem | election-admin: `the_block_simulators_filler_entries_never_change_a_count` |
+| Todo alvo do Makefile está no menu do `teko-dev` (ou deliberadamente fora); linha de comando só com variáveis preenchidas; valores ruins recusados; menu por estado da devnet; cabeçalho | teko-dev: `every_makefile_target_is_in_the_menu...`, `a_command_line_has_the_target...`, `bad_values_are_refused...`, `the_menu_follows_the_state_of_the_network`, `the_header_says...`, `probing_a_folder_without_a_network...` |

@@ -26,7 +26,8 @@ crates/teko-wallet/        (Fase 2, M5a) carteira: BIP-39 24 palavras (só na te
 crates/teko-economy/       (Fase 2, M6a) economia sobre BFT: blocos com certificado, validadores por stake, fase de fundador (ADR-0028)
 crates/teko-chain/         (Fase 2) rede de votos em **BFT institucional** (ADR-0034): perfis devnet/testnet (mainnet TRAVADA), blocos com certificado de commit, réplica verificada
 crates/teko-explorer/      (Fase 2) índice verificado da cadeia de economia: blocos, txs, contas, validadores, busca (ADR-0031)
-tools/devnet-sim/           (Fase 2) simuladores SÓ de dev: equivocação do validador de teste (`make devnet-equivocate`)
+tools/devnet-sim/           (Fase 2) simuladores SÓ de dev: equivocação do validador de teste (`make devnet-equivocate`), blocos sob demanda (`make devnet-blocks-sim`)
+tools/teko-dev/            (Fase 2) menu de desenvolvimento com setas (ratatui) sobre o Makefile: `make dev`; só dev, nunca em release
 tools/explorer-server/     (Fase 2) explorador: web local + API JSON somente leitura (`make explorer`)
 tools/teko-node/           (Fase 2) validador (gossip, rodízio, troca de turno) + cliente que não confia em nós
 crates/teko-bulletin/      (Fase 2) log Merkle append-only, provas, head assinado, leitor tolerante
@@ -93,6 +94,8 @@ make runoff CONTEST=governador-sp      # abre o 2º turno
 make issuer                            # app Emissor: órgãos emitem credenciais na chain (ADR-0037)
 make devnet-cosign                     # SIMULA membros de teste dos órgãos aprovando credenciais; só dev
 make devnet-veto CLASS=imovel ASSET=<id>  # SIMULA o órgão vetando uma negociação de bem pendente (ADR-0036); só dev
+make dev                               # menu com setas: sobe/derruba a devnet, simula blocos, roda os outros atalhos (tools/teko-dev)
+make devnet-blocks-sim KIND=economy COUNT=5  # SIMULA N blocos (economy|votes); só dev
 make devnet-equivocate                 # SIMULA a equivocação do validador de teste (penalidade/Slash); só dev
 make tally-time                        # apura o quadro (release) e mostra o tempo; TEKO_VERIFY_THREADS=1 = sequencial
 make explorer                          # explorador da chain em http://127.0.0.1:8545 (precisa de make devnet)

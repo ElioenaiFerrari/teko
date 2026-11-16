@@ -186,6 +186,106 @@ pub fn equivocate(dir: &Path, index: usize, wait: Duration) -> Result<Report, St
     })
 }
 
+/// Which chain `blocks` makes blocks on.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum BlocksKind {
+    Economy,
+    Votes,
+}
+
+/// The board entry kind used ONLY by the block simulator: the tally ignores it (`log_kind` has no
+/// mapping for it), so it never changes a count, but it does grow the board (`make reset-board`).
+pub const FILLER_KIND: u8 = 200;
+
+/// DEV ONLY: makes `count` blocks on the running test network, one at a time, waiting for each
+/// (blocks only exist for activity, ADR-0034). Economy: a harmless transaction from a throwaway key
+/// (it only links a fresh validator key, needs no balance). Votes: one entry of the reserved filler
+/// kind. Refuses a locked network like the other simulators.
+pub fn blocks(dir: &Path, kind: BlocksKind, count: u32) -> Result<String, String> {
+    if count == 0 || count > 1000 {
+        return Err("a quantidade tem de ser de 1 a 1000".into());
+    }
+    let net = load_network(dir).map_err(|e| e.to_string())?;
+    if net.profile.kind.name() == "mainnet" {
+        return Err("a mainnet está travada: simulações só em devnet e testnet".into());
+    }
+    let client = NodeClient::new(net.peers);
+    let height = |c: &NodeClient| -> Result<u64, String> {
+        let a = *c.addrs().first().ok_or("a rede não tem nós")?;
+        match kind {
+            BlocksKind::Economy => c.econ_status(a).map(|s| s.height),
+            BlocksKind::Votes => c.status(a).map(|s| s.height),
+        }
+        .map_err(|e| format!("nenhum nó respondeu ({e}): a devnet está de pé?"))
+    };
+    let chain_id = match kind {
+        BlocksKind::Economy => {
+            load_economy(dir)
+                .map_err(|e| e.to_string())?
+                .ok_or("esta rede não tem economia (rode `make devnet` com FOUNDER=…)")?
+                .genesis
+                .chain_id
+        }
+        BlocksKind::Votes => String::new(),
+    };
+    let start = height(&client)?;
+    let mut rng = rand::rand_core::UnwrapErr(rand::rngs::SysRng);
+    for n in 0..count {
+        let before = height(&client)?;
+        match kind {
+            BlocksKind::Economy => {
+                let sk = generate_signing_key(&mut rng);
+                let tx = Tx::new_signed(
+                    &sk,
+                    &chain_id,
+                    0,
+                    COIN_MODULE,
+                    Op::SetValidatorKey {
+                        key: public_key_bytes(&sk),
+                    }
+                    .encode(),
+                );
+                client
+                    .econ_submit(&[tx])
+                    .map_err(|e| format!("a rede recusou a transação: {e}"))?;
+            }
+            BlocksKind::Votes => {
+                let mut payload = format!("teko-dev filler {n} ").into_bytes();
+                payload.extend_from_slice(&unix_secs().to_be_bytes());
+                payload.extend_from_slice(&generate_signing_key(&mut rng).to_bytes());
+                client
+                    .submit(&[teko_bulletin::Entry::new(
+                        teko_bulletin::EntryKind(FILLER_KIND),
+                        payload,
+                    )])
+                    .map_err(|e| format!("a rede recusou a entrada: {e}"))?;
+            }
+        }
+        let t = Instant::now();
+        loop {
+            if height(&client)? > before {
+                break;
+            }
+            if t.elapsed() > Duration::from_secs(30) {
+                return Err(format!(
+                    "o bloco {} não saiu em 30 s (a rede tem quórum?)",
+                    n + 1
+                ));
+            }
+            thread::sleep(Duration::from_millis(200));
+        }
+    }
+    let end = height(&client)?;
+    Ok(format!(
+        "{count} bloco(s) de {}: altura {start} -> {end}",
+        match kind {
+            BlocksKind::Economy => "economia",
+            BlocksKind::Votes =>
+                "votos (entradas de teste que a apuração ignora; `make reset-board` limpa)",
+        }
+    ))
+}
+
 /// Simulates the registrar quorum (órgão) of `class` VETOING the pending trade of `asset` inside its
 /// veto window (ADR-0036), with a public `reason`. The simulated órgão keys are the TEST keys of the
 /// network folder; the buyer's price returns from the escrow and the asset stays with its owner.

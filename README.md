@@ -25,7 +25,8 @@ O computador (Suite) **nunca** vê chaves nem PIN. O dispositivo cifra e assina 
 | `teko-registration` | registro anônimo por assinatura cega (RFC 9474) |
 | `teko-ballot-crypto` | ElGamal de limiar P-256, provas 0/1 e soma, DKG de Feldman |
 | `teko-explorer` | índice do explorador: reexecuta e verifica a cadeia de economia e responde blocos, transações, contas, validadores, bens e busca (sem I/O) |
-| `devnet-sim` | simuladores só para a rede de teste local; hoje, a equivocação de um validador para ver a penalidade (`make devnet-equivocate`); nunca em validador ou release |
+| `devnet-sim` | simuladores só para a rede de teste local: equivocação de um validador (`make devnet-equivocate`), aprovação de credenciais, veto de bens e **blocos sob demanda** (`make devnet-blocks-sim KIND=economy\|votes COUNT=5`); nunca em validador ou release |
+| `teko-dev` | **menu de desenvolvimento no terminal** (`make dev`): navegue com as setas, veja se a devnet está de pé e rode os comandos certos para cada estado (subir/derrubar, simular blocos, eleição, credenciais, qualidade); casca sobre o Makefile, só dev, fora de qualquer release |
 | `explorer-server` | explorador da chain: página web local + API JSON somente leitura sobre uma cadeia verificada (`make explorer`) |
 | `teko-economy` | economia sobre consenso BFT: blocos com certificado de commit, conjunto de validadores por stake com fase de fundador, verificação por clientes |
 | `teko-bulletin` | quadro de avisos: log Merkle append-only, provas e head assinado |
@@ -49,6 +50,7 @@ O computador (Suite) **nunca** vê chaves nem PIN. O dispositivo cifra e assina 
 Pré-requisitos: Rust (o `rust-toolchain.toml` fixa a versão) e, para a Suite, as dependências do Tauri v2. `make` lista todos os atalhos.
 
 ```bash
+make dev            # opcional: menu com setas que roda tudo abaixo (e mostra o estado da devnet)
 make clean-dev      # opcional: apaga o estado local de testes
 make check          # opcional: formato + clippy + testes + docs
 make setup          # 1x: chaves de teste, firmware assinado e "fábrica" (pasta dev/)

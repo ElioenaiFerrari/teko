@@ -361,3 +361,29 @@ fn feeding_in_steps_reports_progress_and_ends_at_the_same_state() {
     assert_eq!(feed_step_with(&mut t, &board, 7, 4), board.len());
     let _ = fs::remove_dir_all(admin.dir());
 }
+
+#[test]
+fn the_block_simulators_filler_entries_never_change_a_count() {
+    let admin = setup("filler");
+    let before = admin.tally().unwrap();
+    // what `devnet-sim blocks --kind votes` puts on the board (reserved kind 200)
+    {
+        let mut board = FileBoard::open(admin.board_path()).unwrap();
+        for i in 0..5u8 {
+            board
+                .append(teko_bulletin::Entry::new(
+                    teko_bulletin::EntryKind(200),
+                    vec![i; 24],
+                ))
+                .unwrap();
+        }
+    }
+    let after = admin.tally().unwrap();
+    for c in &before.contests {
+        let a = after.contest(&c.contest_id).unwrap();
+        assert_eq!(
+            (a.accepted, a.rejected.total()),
+            (c.accepted, c.rejected.total())
+        );
+    }
+}

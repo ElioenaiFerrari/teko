@@ -774,3 +774,44 @@ fn restoring_the_wallet_on_a_new_device_recovers_the_credentials_from_the_chain_
     }
     let _ = std::fs::remove_dir_all(&d);
 }
+
+#[test]
+fn the_block_simulator_makes_the_asked_number_of_blocks_on_both_chains() {
+    use devnet_sim::{BlocksKind, blocks};
+    let _turn = TURN.lock().unwrap_or_else(|e| e.into_inner());
+    let dir: PathBuf = std::env::temp_dir().join(format!(
+        "teko-devnet-blocks-{}-{}",
+        std::process::id(),
+        free_port_base()
+    ));
+    let _ = std::fs::remove_dir_all(&dir);
+    init_network(&dir, NetworkKind::Devnet, 3, free_port_base(), false).unwrap();
+    let owner = address_of(&public_key_bytes(&key(61)));
+    let mut g = init_economy(&dir, Some(owner), None, None, false).unwrap();
+    g.coin.fee_per_byte = 0;
+    std::fs::write(dir.join(ECONOMY_FILE), g.to_text()).unwrap();
+    let ec = load_economy(&dir).unwrap().unwrap();
+    let nodes: Vec<NodeHandle> = (0..3).map(|i| start_node(&dir, i, &ec)).collect();
+    let client = NodeClient::new(load_network(&dir).unwrap().peers);
+    let a = client.addrs()[0];
+
+    let e0 = client.econ_status(a).unwrap().height;
+    let msg = blocks(&dir, BlocksKind::Economy, 3).unwrap();
+    assert!(msg.contains("3 bloco"), "{msg}");
+    assert!(client.econ_status(a).unwrap().height >= e0 + 3);
+
+    let v0 = client.status(a).unwrap();
+    let msg = blocks(&dir, BlocksKind::Votes, 2).unwrap();
+    assert!(msg.contains("2 bloco"), "{msg}");
+    let v1 = client.status(a).unwrap();
+    assert!(v1.height >= v0.height + 2);
+    assert!(
+        v1.log_size >= v0.log_size + 2,
+        "the filler entries are on the board"
+    );
+
+    assert!(blocks(&dir, BlocksKind::Economy, 0).is_err());
+    assert!(blocks(&dir, BlocksKind::Economy, 1001).is_err());
+    drop(nodes);
+    let _ = std::fs::remove_dir_all(&dir);
+}

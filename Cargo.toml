@@ -26,6 +26,7 @@ members = [
   "tools/teko-node",
   "tools/explorer-server",
   "tools/devnet-sim",
+  "tools/teko-dev",
   "apps/suite/src-tauri",
   "apps/issuer/src-tauri",
 ]

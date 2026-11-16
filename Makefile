@@ -1,6 +1,6 @@
 # Teko — atalhos. Rode `make` (ou `make help`) para ver tudo.
 .DEFAULT_GOAL := help
-.PHONY: candidates claim runoff issuer devnet-cosign help setup emulator suite reset demo issuer-help preview fmt lint test check build clean-dev verify-fw release-check repro fund docs-check diagrams coin-demo assets-demo devnet close devnet-dkg devnet-economy explorer devnet-equivocate devnet-veto tally-time devnet-founder devnet-stop devnet-status devnet-reset devnet-blocks testnet-help election publish simulate simulate-live tally reset-board
+.PHONY: candidates claim runoff issuer devnet-cosign help setup emulator suite reset demo issuer-help preview fmt lint test check build clean-dev verify-fw release-check repro fund docs-check diagrams coin-demo assets-demo devnet close devnet-dkg devnet-economy explorer devnet-equivocate devnet-veto tally-time devnet-founder devnet-stop devnet-status devnet-reset devnet-blocks devnet-blocks-sim dev testnet-help election publish simulate simulate-live tally reset-board
 
 CARGO ?= cargo
 PIN   ?= 482913
@@ -81,6 +81,14 @@ devnet-status: ## Altura, entradas, mempool e pares de cada validador
 
 devnet-blocks: ## Lista os blocos, verificados aqui (assinaturas, encadeamento e raiz Merkle)
 	@$(NODE) blocks --dir $(NET)
+
+KIND  ?= economy
+COUNT ?= 5
+devnet-blocks-sim: ## SIMULAÇÃO (só dev): faz a devnet produzir blocos (só existem com atividade). Uso: make devnet-blocks-sim [KIND=economy|votes] [COUNT=5]
+	@$(CARGO) run -q -p devnet-sim -- blocks --dir $(NET) --kind $(KIND) --count $(COUNT)
+
+dev: ## Menu de desenvolvimento (setas): sobe/derruba a devnet, simula blocos e roda os outros comandos (tools/teko-dev)
+	@$(CARGO) run -q -p teko-dev
 
 devnet-reset: ## Apaga a cadeia de teste (só os blocos; mantém as chaves). Pare antes: make devnet-stop
 	@$(NODE) reset --dir $(NET)

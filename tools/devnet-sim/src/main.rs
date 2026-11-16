@@ -21,10 +21,49 @@ USO:
     Os membros SIMULADOS do órgão `candidato` emitem as candidaturas de exemplo da eleição (ADR-0040);
     depois rode `make election` para montar a eleição com elas.
 
+  devnet-sim blocks --kind economy|votes --count N [--dir dev/net]
+    Faz a rede de teste produzir N blocos (só existem blocos com atividade, ADR-0034). Economia: uma
+    transação inofensiva de uma chave descartável. Votos: uma entrada de tipo reservado de teste que a
+    apuração ignora (o quadro cresce; `make reset-board` limpa).
+
   devnet-sim cosign [--type cnh-b] [--dir dev/net]
     Os membros SIMULADOS dos órgãos de credenciais (ADR-0037) aprovam as credenciais que esperam
     aprovação, até completar o quórum. Sua carteira é um dos membros: a sua aprovação vem do app Emissor.
 ";
+
+fn run_blocks(args: &[String]) -> Result<(), String> {
+    let mut dir = PathBuf::from("dev/net");
+    let mut kind: Option<devnet_sim::BlocksKind> = None;
+    let mut count: Option<u32> = None;
+    let mut i = 1;
+    while i < args.len() {
+        let v = args
+            .get(i + 1)
+            .ok_or("faltou o valor de uma opção")?
+            .clone();
+        match args.get(i).map(String::as_str) {
+            Some("--dir") => dir = PathBuf::from(v),
+            Some("--kind") => {
+                kind = Some(match v.as_str() {
+                    "economy" => devnet_sim::BlocksKind::Economy,
+                    "votes" => devnet_sim::BlocksKind::Votes,
+                    _ => return Err("--kind é economy ou votes".into()),
+                })
+            }
+            Some("--count") => {
+                count = Some(v.parse().map_err(|_| "--count precisa ser um número")?)
+            }
+            _ => return Err("opção desconhecida (veja --help)".into()),
+        }
+        i += 2;
+    }
+    let (Some(kind), Some(count)) = (kind, count) else {
+        return Err("uso: devnet-sim blocks --kind economy|votes --count N".into());
+    };
+    println!("SIMULAÇÃO (rede de teste): gerando {count} bloco(s)…");
+    println!("{}", devnet_sim::blocks(&dir, kind, count)?);
+    Ok(())
+}
 
 fn run_cosign(args: &[String]) -> Result<(), String> {
     let mut dir = PathBuf::from("dev/net");
@@ -82,6 +121,9 @@ fn run() -> Result<(), String> {
     let args: Vec<String> = std::env::args().skip(1).collect();
     if args.first().map(String::as_str) == Some("veto") {
         return run_veto(&args);
+    }
+    if args.first().map(String::as_str) == Some("blocks") {
+        return run_blocks(&args);
     }
     if args.first().map(String::as_str) == Some("cosign") {
         return run_cosign(&args);

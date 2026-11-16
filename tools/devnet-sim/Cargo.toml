@@ -16,6 +16,7 @@ path = "src/main.rs"
 
 [dependencies]
 teko-node.workspace = true
+teko-bulletin.workspace = true
 teko-bft.workspace = true
 teko-assets.workspace = true
 teko-credentials.workspace = true

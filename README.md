@@ -38,10 +38,11 @@ O computador (Suite) **nunca** vê chaves nem PIN. O dispositivo cifra e assina 
 | `teko-transport` | trait de transporte e implementação local |
 | `teko-client` | cliente da Suite: onboarding, assinatura, eleição |
 | `device-emulator` | "tela e botões" do dispositivo, em processo separado |
-| `issuer-cli` | autoridade simulada: credenciais, reemissão e revogação |
+| `issuer-cli` | autoridade simulada de **teste**: chaves, firmware, eleição de exemplo, registro anônimo e fechamento (a emissão do ID cívico é do app Emissor, ADR-0038) |
 | `election-admin-cli` | órgãos eleitorais: publicar, simular votos (rotulados), apurar |
 | `teko-node` | validador (gossip, rodízio, DKG) e cliente que não confia em nós |
-| `teko-suite` (`apps/suite`) | app Tauri v2 |
+| `teko-suite` (`apps/suite`) | app Tauri v2 do cidadão: pede e instala a credencial, carteira, bens, votos |
+| `teko-issuer` (`apps/issuer`) | **Teko Emissor**: app Tauri v2 em que órgãos emitem credenciais na chain, inclusive o ID cívico, assinando no próprio dispositivo |
 
 ## Início rápido (do zero)
 
@@ -55,12 +56,14 @@ make setup          # 1x: chaves de teste, firmware assinado e "fábrica" (pasta
 # 1) O dispositivo e a Suite PRIMEIRO: a carteira do fundador (a sua) nasce no dispositivo.
 make emulator       # terminal 1: tela e botões do dispositivo (PIN aqui)
 make suite          # terminal 2: onboarding (PIN, carteira com frase de 24 palavras, ID Cívico); copie o endereço tekow1… da aba Carteira
+                    # (a credencial cívica vem depois: o órgão a emite no Emissor e você a instala na Suite)
 
 # 2) Só então a rede, com a SUA carteira como fundadora (ela recebe as recompensas)
 make devnet FOUNDER=tekow1… [ALLOC=1000] [NODES=4]   # rede de TESTE com 4 instituições por padrão (NODES=3 sobe 3, que não toleram falha; vale na criação da rede): votos e economia em BFT (a cadeia só cresce com voto ou transação); a sua carteira recebe as primeiras moedas (ALLOC TEKO, padrão 1.000) já na gênese, para poder agir sem nenhum bloco antes
 make devnet-dkg     # cerimônia de chave entre os validadores (cédulas cifradas)
 make election       # cria a eleição de exemplo (7 pleitos) e a liga à rede
-                    # → reinicie o emulador (terminal 1): ele lê o trust.txt só na partida
+                    # → reinicie o emulador (terminal 1): ele lê o trust.txt só na partida (a rede também grava ali o órgão do ID cívico)
+make issuer         # emite o ID cívico: na Suite, "Pedir a credencial ao órgão"; no Emissor, aba ID cívico; make devnet-cosign; "Entregar o pacote"; na Suite, "Instalar o pacote"
 make publish        # publica a eleição no quadro
 make simulate N=200 # opcional: eleitores SINTÉTICOS (sempre rotulados)
 make devnet-status  # estado da rede     |  make devnet-blocks  # blocos
@@ -82,6 +85,7 @@ Demo sem teclado (**nunca** em produção): `cargo run -p device-emulator --feat
 ## Estado atual
 - **Fase 1** (dispositivo, Suite, emissor): completa.
 - **Fase 2** (votação): eleição com vários pleitos e jurisdições, registro anônimo, **cédulas cifradas** até o fechamento, rede de votos em **BFT institucional** (finalidade; sem blocos vazios; ADR-0034), reemissão sem seed (identidade), resultados em gráficos e **carteira com frase de recuperação de 24 palavras** (criada e confirmada no dispositivo, estilo Trezor; ADR-0023).
+- **Credenciais na chain (ADR-0037/0038):** CNH, candidatura etc. e o **ID cívico** são emitidos por **órgãos** (quórum M-de-N, cada membro assina no próprio dispositivo) no app **Teko Emissor**, com janela de contestação e validade; a Suite só pede, instala e lê.
 - **Economia sobre BFT (M6a):** a moeda, os bens e o stake rodam em consenso BFT nos nós (`make devnet-economy`), com **fase de fundador** sem pré-mineração (as recompensas vão para a carteira do dono) e validadores por stake depois (ADR-0028); a Suite verifica a cadeia dos nós.
 - **Antes disso** (programa do livro-razão): consenso BFT (`teko-bft`) e núcleo do livro (`teko-ledger`) **moeda** (`teko-coin`) e **bens** (`teko-assets`) prontos como biblioteca; a **carteira** já tem endereço, frase de recuperação (M5a) e **envia moedas assinando no dispositivo** (M5b, contra a devnet local de teste); o dispositivo também **assina o seu consentimento na venda de bens** (M5c) a Suite abre numa tela **Início** (resumo) e tem as telas **Validadores** (stake assinado no dispositivo) e **Bens** (venda e compra, com órgão e contraparte **simulados**, só em desenvolvimento); negociação entre pessoas reais e os votos sobre o BFT (M6) ainda só **planejados**.
 - **Fora de escopo**: hardware real, validade jurídica (ICP-Brasil), prova ZK de elegibilidade, explorador público (só placeholder).

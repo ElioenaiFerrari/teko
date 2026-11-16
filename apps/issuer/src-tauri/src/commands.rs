@@ -427,8 +427,6 @@ pub async fn issue(
     issuer: State<'_, Issuer>,
     form: IssueForm,
 ) -> Result<IssueReply, UiError> {
-    let issuer = issuer.inner().clone();
-    let claims = clean_claims(&form.claims)?;
     let holder = hex::decode(form.holder_key.trim())
         .ok()
         .filter(|k| k.len() == 33 || k.len() == 65)
@@ -438,9 +436,37 @@ pub async fn issue(
                 "chave do titular inválida (hex, 33 ou 65 bytes)",
             )
         })?;
-    if form.valid_days == 0 || form.valid_days > 36_500 {
+    issue_inner(
+        app,
+        issuer.inner().clone(),
+        form.ctype,
+        holder,
+        form.claims,
+        form.valid_days,
+    )
+    .await
+}
+
+/// Proposes a credential: the member's device shows everything, signs, and the transaction goes
+/// to the chain. For a PRIVATE type the claims and the salt go to the holder, not to the chain.
+async fn issue_inner(
+    app: AppHandle,
+    issuer: Issuer,
+    ctype_name: String,
+    holder: Vec<u8>,
+    claims: String,
+    valid_days: u64,
+) -> Result<IssueReply, UiError> {
+    let claims = clean_claims(&claims)?;
+    if valid_days == 0 || valid_days > 36_500 {
         return Err(ui_err("InvalidArgument", "validade em dias (1 a 36500)"));
     }
+    let form = IssueForm {
+        ctype: ctype_name,
+        holder_key: hex::encode(&holder),
+        claims: claims.clone(),
+        valid_days,
+    };
     let mut world = open_world()?;
     let t = teko_credentials::type_info(World::ledger(&world), form.ctype.as_bytes())
         .ok_or_else(|| ui_err("InvalidArgument", "tipo de credencial desconhecido"))?;
@@ -606,4 +632,257 @@ pub async fn vote(
         Ok(String::from("ok"))
     })
     .await
+}
+
+// ───────────────────────── civic identity credential (ADR-0038) ─────────────────────────
+
+fn trust_policy() -> Result<teko_attestation::TrustPolicy, UiError> {
+    let text = fs::read_to_string(resolve_dev_dir().join("trust.txt")).map_err(|_| {
+        ui_err(
+            "NoTrust",
+            "Não encontrei dev/trust.txt. Rode: cargo run -p issuer-cli -- dev-setup",
+        )
+    })?;
+    teko_attestation::TrustPolicy::parse(&text).map_err(|e| ui_err("NoTrust", e))
+}
+
+#[derive(Deserialize)]
+struct RequestFile {
+    civic_id: String,
+    nonce: String,
+    request: String,
+}
+
+fn read_request(
+    name: &str,
+) -> Result<(RequestFile, teko_protocol::IdentityRequest, Vec<u8>), UiError> {
+    // a file NAME inside dev/requests: never a path
+    if name.is_empty() || name.contains('/') || name.contains('\\') || name.contains("..") {
+        return Err(ui_err("InvalidArgument", "nome de arquivo inválido"));
+    }
+    let text = fs::read_to_string(resolve_dev_dir().join("requests").join(name))
+        .map_err(|_| ui_err("InvalidArgument", "pedido não encontrado"))?;
+    let f: RequestFile =
+        serde_json::from_str(&text).map_err(|_| ui_err("InvalidArgument", "pedido malformado"))?;
+    let nonce =
+        hex::decode(&f.nonce).map_err(|_| ui_err("InvalidArgument", "pedido malformado"))?;
+    let bytes =
+        hex::decode(&f.request).map_err(|_| ui_err("InvalidArgument", "pedido malformado"))?;
+    let req = <teko_protocol::IdentityRequest as prost::Message>::decode(bytes.as_slice())
+        .map_err(|_| ui_err("InvalidArgument", "pedido malformado"))?;
+    Ok((f, req, nonce))
+}
+
+#[derive(Serialize)]
+pub struct CivicRequestView {
+    file: String,
+    civic_id: String,
+    /// The device proved it holds the identity key and is genuine.
+    verified: bool,
+    error: String,
+}
+
+/// The citizens' requests waiting in `dev/requests`, each checked: the proof of possession of the
+/// identity key and the batch attestation of a genuine device.
+#[tauri::command]
+pub async fn civic_requests() -> Result<Vec<CivicRequestView>, UiError> {
+    tauri::async_runtime::spawn_blocking(|| {
+        let trust = trust_policy()?;
+        let mut out = Vec::new();
+        let mut names: Vec<String> = fs::read_dir(resolve_dev_dir().join("requests"))
+            .into_iter()
+            .flatten()
+            .filter_map(Result::ok)
+            .filter_map(|e| e.file_name().into_string().ok())
+            .filter(|n| n.starts_with("civic-request-") && n.ends_with(".json"))
+            .collect();
+        names.sort();
+        for file in names {
+            out.push(match read_request(&file) {
+                Ok((f, req, nonce)) => {
+                    match teko_client::verify_identity_request(&trust, &nonce, &req) {
+                        Ok(()) => CivicRequestView {
+                            file,
+                            civic_id: f.civic_id,
+                            verified: true,
+                            error: String::new(),
+                        },
+                        Err(e) => CivicRequestView {
+                            file,
+                            civic_id: f.civic_id,
+                            verified: false,
+                            error: e.to_string(),
+                        },
+                    }
+                }
+                Err(e) => CivicRequestView {
+                    file,
+                    civic_id: String::new(),
+                    verified: false,
+                    error: e.message,
+                },
+            });
+        }
+        Ok(out)
+    })
+    .await
+    .map_err(|e| ui_err("Internal", e))?
+}
+
+#[derive(Deserialize)]
+pub struct CivicForm {
+    request_file: String,
+    name: String,
+    birth_date: String,
+    nationality: String,
+    state: String,
+    municipality: String,
+    /// Set = a REISSUE: the same person keeps the same registry id.
+    registry_id: Option<String>,
+    valid_days: u64,
+}
+
+/// The organ issues the civic credential to the identity key of a verified request: the claims are
+/// built from what the organ verified in person, and the member's device signs the proposal.
+#[tauri::command]
+pub async fn civic_issue(
+    app: AppHandle,
+    issuer: State<'_, Issuer>,
+    form: CivicForm,
+) -> Result<IssueReply, UiError> {
+    let trust = trust_policy()?;
+    let (_, req, nonce) = read_request(&form.request_file)?;
+    teko_client::verify_identity_request(&trust, &nonce, &req)
+        .map_err(|e| ui_err("InvalidRequest", format!("pedido recusado: {e}")))?;
+    let registry_id = match form
+        .registry_id
+        .as_deref()
+        .map(str::trim)
+        .filter(|r| !r.is_empty())
+    {
+        Some(r) => r.to_string(),
+        None => {
+            let mut r = [0u8; 4];
+            rand::rng().fill_bytes(&mut r);
+            format!("TK-{}", hex::encode(&r).to_uppercase())
+        }
+    };
+    let claims = teko_credentials::civic::civic_claims(
+        &teko_credentials::civic::CivicSubject {
+            name: form.name,
+            birth_date: form.birth_date,
+            nationality: form.nationality,
+            electoral_state: form.state,
+            electoral_municipality: form.municipality,
+        },
+        &registry_id,
+        now_secs(),
+    )
+    .map_err(|m| ui_err("InvalidArgument", m))?;
+    issue_inner(
+        app,
+        issuer.inner().clone(),
+        teko_crypto::civic::CIVIC_TYPE.to_string(),
+        req.pk_identity,
+        claims,
+        form.valid_days,
+    )
+    .await
+}
+
+/// Hands the citizen the package for an approved credential: the claims, the salt and the
+/// transactions the quorum signed, found ON THE CHAIN. The citizen's device checks it alone.
+#[tauri::command]
+pub async fn civic_deliver(id: String) -> Result<String, UiError> {
+    tauri::async_runtime::spawn_blocking(move || {
+        use teko_crypto::civic::{BundleTx, CIVIC_TYPE, CivicBundle, CivicPolicy, verify_civic_bundle};
+        use teko_crypto::ledger::{CRED_OP_APPROVE, cred_propose_payload, cred_vote_payload};
+        let id = hex::decode(&id)
+            .ok()
+            .filter(|i| i.len() == 32)
+            .ok_or_else(|| ui_err("InvalidArgument", "identificador inválido"))?;
+        let world = open_world()?;
+        let rec = teko_credentials::credential(World::ledger(&world), CIVIC_TYPE.as_bytes(), &id)
+            .ok_or_else(|| ui_err("InvalidArgument", "credencial desconhecida"))?;
+        match rec.status_at(now_secs()) {
+            Status::Pending | Status::Active => {}
+            _ => {
+                return Err(ui_err(
+                    "NotReady",
+                    "a credencial ainda não tem o quórum, ou foi vetada, revogada ou expirou",
+                ));
+            }
+        }
+        let (claims, salt) = load_bundle(&id, &rec).ok_or_else(|| {
+            ui_err("NoBundle", "este app não guardou os atributos desta credencial (só quem a propôs os tem)")
+        })?;
+        let commitment: [u8; 32] = rec
+            .commitment
+            .as_slice()
+            .try_into()
+            .map_err(|_| ui_err("Internal", "compromisso"))?;
+        let id32: [u8; 32] = id.as_slice().try_into().map_err(|_| ui_err("Internal", "id"))?;
+        let propose = cred_propose_payload(CIVIC_TYPE.as_bytes(), &rec.subject, &commitment, &[], rec.valid_until);
+        let approve = cred_vote_payload(CRED_OP_APPROVE, CIVIC_TYPE.as_bytes(), &id32, "");
+        // the signed transactions of the issuance, from the chain's blocks
+        let mut proposal: Option<BundleTx> = None;
+        let mut approvals: Vec<BundleTx> = Vec::new();
+        for d in world.chain().blocks() {
+            let Ok(block) = d.block() else { continue };
+            for raw in &block.txs {
+                let Ok(tx) = Tx::from_bytes(raw) else { continue };
+                if tx.module != teko_credentials::CREDENTIALS_MODULE {
+                    continue;
+                }
+                let bt = BundleTx {
+                    chain_id: tx.chain_id.clone(),
+                    nonce: tx.nonce,
+                    fee: tx.fee,
+                    payload: tx.payload.clone(),
+                    sender: tx.sender.clone(),
+                    signature: tx.signature.clone(),
+                };
+                if tx.payload == propose {
+                    proposal.get_or_insert(bt);
+                } else if tx.payload == approve && !approvals.iter().any(|a| a.sender == bt.sender) {
+                    approvals.push(bt);
+                }
+            }
+        }
+        let proposal = proposal.ok_or_else(|| ui_err("NotReady", "a proposta não está na chain"))?;
+        let mut txs = vec![proposal];
+        txs.extend(approvals);
+        let bundle = CivicBundle {
+            chain_id: world.chain_id().to_string(),
+            ctype: CIVIC_TYPE.to_string(),
+            claims,
+            salt: salt.to_vec(),
+            valid_until: rec.valid_until,
+            txs,
+        };
+        // what the citizen's device will check, checked here first
+        let trust = trust_policy()?;
+        verify_civic_bundle(
+            &bundle,
+            &CivicPolicy {
+                chain_id: trust.civic_chain_id.clone(),
+                threshold: trust.civic_threshold,
+                members: trust.civic_members.clone(),
+            },
+            &rec.subject,
+        )
+        .map_err(|e| {
+            ui_err(
+                "BadBundle",
+                format!("o pacote não passaria no dispositivo ({e}): confira se o trust.txt é o desta rede (reinicie o emulador depois de criar a rede)"),
+            )
+        })?;
+        let dir = resolve_dev_dir().join("inbox");
+        fs::create_dir_all(&dir).map_err(|e| ui_err("Io", e))?;
+        let path = dir.join(format!("civic-{}.bundle", &hex::encode(&id)[..8]));
+        fs::write(&path, prost::Message::encode_to_vec(&bundle)).map_err(|e| ui_err("Io", e))?;
+        Ok(path.display().to_string())
+    })
+    .await
+    .map_err(|e| ui_err("Internal", e))?
 }

@@ -1,5 +1,7 @@
 # ADR-0005 — Credenciais com divulgação seletiva: SD-JWT vs BBS+
 
+> **Atualização (ADR-0038):** a credencial de **identidade** deixou de ser um SD-JWT assinado por uma chave única e fora da chain. Ela é uma credencial **na chain** emitida por quórum; a divulgação seletiva continua pela mesma ideia (resumos salgados por atributo), agora sobre o **compromisso** registrado na chain, e a lista de revogação fora da chain foi substituída pela revogação na chain. A decisão SD-JWT × BBS+ segue pendente para a apresentação sem ligação.
+
 **Status:** Proposto · PENDENTE. **Implementado como protótipo:** modelo simplificado estilo SD-JWT (digests de claims salgadas assinados pela autoridade; claims derivadas `age_over_N`). Sem unlinkability.
 
 ## Contexto

@@ -33,6 +33,10 @@
     result: null,       // resultado da última emissão
     form: { ctype: '', holder: '', claims: '', days: 365 },
     voting: null,       // {op, id, ctype} aguardando o motivo
+    civicReqs: [],      // pedidos de ID cívico (dev/requests)
+    civicFile: '',
+    civicForm: { name: '', birth: '', nat: 'BR', uf: 'SP', mun: '3550308', reg: '', days: 3650 },
+    delivered: '',
   };
 
   const PROMPTS = {
@@ -74,14 +78,17 @@
   async function refreshOverview() {
     try { S.ov = await invoke('overview'); S.ovError = ''; } catch (e) { S.ovError = asErr(e).message; }
   }
-  async function refresh() { await refreshDevice(); await refreshOverview(); render(); }
+  async function refreshCivic() {
+    try { S.civicReqs = await invoke('civic_requests'); } catch (e) { S.civicReqs = []; }
+  }
+  async function refresh() { await refreshDevice(); await refreshOverview(); if (S.route === 'civic') await refreshCivic(); render(); }
 
   const unlocked = () => !!(S.dev && S.dev.connected && S.dev.status && !S.dev.status.locked);
   const myOrgs = () => (S.ov ? S.ov.orgs.filter((o) => o.is_member) : []);
 
   // ───────────────────────── ações ─────────────────────────
   const ACTIONS = {
-    nav(el) { S.route = el.dataset.id; S.result = null; render(); },
+    async nav(el) { S.route = el.dataset.id; S.result = null; if (S.route === 'civic') await refreshCivic(); render(); },
     async unlock() {
       try {
         const r = await call('unlock');
@@ -118,6 +125,21 @@
       if (!reason) { toast('Informe o motivo público.'); return; }
       const v = S.voting; S.voting = null;
       await sendVote({ ...v, reason });
+    },
+    pickrequest(el) { S.civicFile = el.dataset.file; render(); },
+    async civicissue() {
+      S.civicForm = { name: $('#c-name').value, birth: $('#c-birth').value, nat: $('#c-nat').value, uf: $('#c-uf').value, mun: $('#c-mun').value, reg: $('#c-reg').value, days: Number($('#c-days').value) };
+      if (!S.civicFile) { toast('Escolha um pedido verificado.'); return; }
+      try {
+        S.result = await call('civic_issue', { form: { request_file: S.civicFile, name: S.civicForm.name, birth_date: S.civicForm.birth, nationality: S.civicForm.nat, state: S.civicForm.uf, municipality: S.civicForm.mun, registry_id: S.civicForm.reg || null, valid_days: S.civicForm.days } });
+        toast('Proposta enviada. Ela conta como a primeira aprovação.', 'ok');
+      } catch (e) { toast(asErr(e).message); }
+      await refreshOverview(); render();
+    },
+    async civicdeliver(el) {
+      try { S.delivered = await call('civic_deliver', { id: el.dataset.id }); toast('Pacote entregue ao titular (dev/inbox).', 'ok'); }
+      catch (e) { toast(asErr(e).message); }
+      render();
     },
     filter(el) { S.filter = el.dataset.id; render(); },
     async copy(el) { try { await navigator.clipboard.writeText($(el.dataset.target).textContent); toast('Copiado.', 'ok'); } catch { toast('Não consegui copiar.'); } },
@@ -196,6 +218,30 @@
       </article>${res}`;
   }
 
+  function vCivic() {
+    const g = gate();
+    const org = myOrgs().find((o) => o.ctype === 'civic');
+    if (g || !org) return `${head('ID cívico', 'Emitir o ID cívico', '')}${g || callout('info', 'Sem órgão.', 'Sua carteira não é membro do órgão do ID cívico (tipo <code>civic</code>).')}`;
+    const f = S.civicForm;
+    const reqs = S.civicReqs.length ? S.civicReqs.map((r) => `<label class="card card--flat"><input type="radio" name="req" data-act="pickrequest" data-file="${esc(r.file)}" ${S.civicFile === r.file ? 'checked' : ''} ${r.verified ? '' : 'disabled'}>
+        <strong class="mono">${esc(short(r.civic_id || r.file, 14, 6))}</strong> ${r.verified ? chip('Dispositivo genuíno, chave conferida', 'ok') : chip(r.error || 'não verificado', 'bad')}</label>`).join('') : '<p class="muted">Nenhum pedido em <code>dev/requests</code>. O cidadão gera o pedido na Suite (passo "Credencial cívica").</p>';
+    const res = S.result ? `<article class="card"><div class="card__head"><h3>Proposta enviada</h3></div><p>Identificador <span class="mono">${esc(short(S.result.id, 12, 8))}</span>. Faltam as aprovações dos outros membros; depois da contestação, entregue o pacote na aba Credenciais.</p></article>` : '';
+    const del = S.delivered ? callout('ok', 'Pacote entregue.', `O titular o instala na Suite: <code>${esc(S.delivered)}</code>`) : '';
+    return `${head('ID cívico', 'Emitir o ID cívico', 'O pedido do cidadão prova que o dispositivo é genuíno e tem a chave de identidade. Você informa o que o órgão verificou; o quórum aprova; a credencial entra na chain e passa pela janela de contestação.')}
+      <article class="card"><h3>Pedidos</h3>${reqs}</article>
+      <article class="card"><div class="issue-form">
+        <label class="field"><span>Nome completo</span><input class="input" id="c-name" value="${esc(f.name)}" autocomplete="off"></label>
+        <label class="field"><span>Data de nascimento</span><input class="input" id="c-birth" type="date" value="${esc(f.birth)}"></label>
+        <label class="field"><span>Nacionalidade (2 letras)</span><input class="input" id="c-nat" maxlength="2" value="${esc(f.nat)}"></label>
+        <label class="field"><span>Domicílio eleitoral: UF</span><input class="input" id="c-uf" maxlength="2" value="${esc(f.uf)}"></label>
+        <label class="field"><span>Domicílio eleitoral: município (IBGE, 7 dígitos)</span><input class="input" id="c-mun" maxlength="7" value="${esc(f.mun)}"></label>
+        <label class="field"><span>Registro anterior (só numa REEMISSÃO: mantém o mesmo cidadão)</span><input class="input mono" id="c-reg" placeholder="TK-…" value="${esc(f.reg)}"></label>
+        <label class="field"><span>Validade (dias, no máximo ${Math.floor(org.validity_secs / 86400)})</span><input class="input" id="c-days" type="number" min="1" value="${f.days}"></label>
+        ${callout('info', 'Reemissão.', 'Se o cidadão perdeu o dispositivo: <strong>revogue</strong> a credencial antiga (aba Credenciais) e emita a nova informando o mesmo registro.')}
+        <p><button class="btn" data-act="civicissue">Emitir no dispositivo</button></p>
+      </div></article>${res}${del}`;
+  }
+
   function credRow(c, now) {
     const [label, kind] = STATUS[c.status] || [c.status, ''];
     const when = c.status === 'pending' ? ` · vale a partir de ${fmtDate(c.active_at)} (${fmtLeft(c.active_at, now)})`
@@ -212,6 +258,7 @@
         ${c.can_approve ? `<button class="btn btn--sm" data-act="vote" data-op="approve" data-id="${c.id}" data-ctype="${esc(c.ctype)}">Aprovar</button>` : ''}
         ${c.can_veto ? `<button class="btn btn--sm btn--danger" data-act="vote" data-op="veto" data-id="${c.id}" data-ctype="${esc(c.ctype)}">Vetar</button>` : ''}
         ${c.can_revoke ? `<button class="btn btn--sm btn--danger" data-act="vote" data-op="revoke" data-id="${c.id}" data-ctype="${esc(c.ctype)}">Revogar</button>` : ''}
+        ${c.ctype === 'civic' && c.claims && (c.status === 'pending' || c.status === 'active') ? `<button class="btn btn--sm" data-act="civicdeliver" data-id="${c.id}">Entregar o pacote ao titular</button>` : ''}
         ${c.approved_by_me && c.status === 'proposed' ? chip('Você já aprovou', 'ok') : ''}
       </div>${voting}</article>`;
   }
@@ -237,7 +284,7 @@
     $('#devcard').innerHTML = `<div class="devcard__row"><div><div class="devcard__title">${ok ? 'Dispositivo conectado' : 'Sem dispositivo'}</div>
       <div class="devcard__sub">${ok ? (d.status.locked ? 'bloqueado' : 'desbloqueado') : esc((d && d.error) || 'procurando…')}</div></div></div>
       <div class="devcard__chips">${ok ? chip(d.status.wallet_ready ? 'Carteira pronta' : 'Sem carteira', d.status.wallet_ready ? 'ok' : 'warn') : ''}</div>`;
-    const items = [['orgs', 'Órgãos'], ['issue', 'Emitir'], ['creds', 'Credenciais']];
+    const items = [['orgs', 'Órgãos'], ['civic', 'ID cívico'], ['issue', 'Emitir'], ['creds', 'Credenciais']];
     $('#nav').innerHTML = items.map(([id, l]) => `<button class="nav__item" data-act="nav" data-id="${id}" ${S.route === id ? 'aria-current="page"' : ''}><span>${l}</span></button>`).join('');
     $('#addr').textContent = d && d.addr ? `emulador ${d.addr}` : '';
   }
@@ -253,7 +300,7 @@
 
   function render() {
     renderDevice();
-    const views = { orgs: vOrgs, issue: vIssue, creds: vCreds };
+    const views = { orgs: vOrgs, civic: vCivic, issue: vIssue, creds: vCreds };
     const focus = document.activeElement && document.activeElement.id;
     $('#main').innerHTML = `<div class="view">${(views[S.route] || vOrgs)()}</div>`;
     if (focus) { const e = document.getElementById(focus); if (e) e.focus(); }

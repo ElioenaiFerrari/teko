@@ -153,12 +153,7 @@ Legenda: **P** = `proptest` (muitos casos), **U** = unitário, **E** = ponta a p
 
 | Garantia | Teste |
 |---|---|
-| Lista de revogação é canônica, assinada e à prova de adulteração (seq, remover/adicionar, ordem, outra autoridade) | crypto: `revocation_list_is_canonical_signed_and_tamper_evident` |
-| Quem já tem cadastro não obtém segunda identidade (nem com outra grafia do nome) | issuer: `a_person_cannot_get_a_second_identity_without_a_reissue` |
-| Reemissão revoga a anterior, mantém o mesmo cidadão, reemitir de novo revoga a ativa | issuer: `reissue_revokes_the_old_credential_and_keeps_the_same_citizen` |
-| Reemissão recusada para outra pessoa, ID desconhecido, prova de posse inválida; nada é revogado numa tentativa recusada | issuer: `reissue_is_refused_for_the_wrong_person...` |
-| Revogação imediata é idempotente e permite reemissão depois; lista adulterada rejeitada | issuer: `immediate_revoke_blocks...`, `a_tampered_revocation_list_is_rejected` |
-| **Ponta a ponta com dispositivo real:** registrar, perder, bloquear (prova do dispositivo perdido é recusada), reemitir, nova credencial verifica, lista falsa/atrasada recusada, **mesmo cidadão não registra de novo no mesmo pleito** mas registra em outro | e2e: `losing_the_device_means_reissue_the_old_credential_is_revoked_and_the_citizen_stays_one` |
+| **Substituído pelo ADR-0038:** a lista de revogação fora da chain, a `citizens.log` e o `issuer-cli issue/reissue/revoke` não existem mais (testes removidos); o que cobre a identidade agora está na seção "ID cívico na chain (ADR-0038)" abaixo | — |
 | A Suite de produção não contém a autoridade/operador de teste (com controle do detector) | `scripts/release-check.sh` (`cargo tree` sem/com `dev-simulation`) |
 
 ## Fase 2, etapa 8: cédulas cifradas (ADR-0019)
@@ -278,7 +273,7 @@ Legenda: **P** = `proptest` (muitos casos), **U** = unitário, **E** = ponta a p
 - **Cifra/provas:** sem vetores de teste de terceiros nem auditoria (implementação própria). Sem teste de tempo constante; sem fuzzing dos decodificadores. Sem teste de carga com milhares de cédulas por bloco.
 - **Cerimônia real:** só 3 processos em loopback, sem canal autenticado/cifrado nem tratamento de reclamações; sem teste com validador malicioso na rede (só no nível da biblioteca).
 - **UI de resultados cifrados (JS):** só exercitada com o mock no navegador.
-- **Fluxo de reemissão na Suite (JS):** só exercitado com o mock no navegador. Sem teste de autoridade real, dupla autorização nem de lista de revogação publicada e distribuída (hoje é um arquivo em `dev/`).
+- **Fluxo do pedido e da instalação do pacote na Suite (JS):** só exercitado com o mock no navegador; o lado do dispositivo e da chain é coberto pelos testes do ADR-0038.
 - **Rede em várias máquinas / testnet real, partições de rede e latência:** só loopback, 3 nós em threads. Sem teste de carga nem fuzzing do protocolo de rede.
 - **Painel de rede na Suite (JS):** só exercitado com o mock no navegador.
 - **Explorador público (Rust + JS):** a conferência de inclusão e o explorador só foram exercitados com o mock no navegador; a prova Merkle em si é testada em `teko-bulletin`. A "conferência" na Suite recalcula contra a raiz do MESMO arquivo: confirma consistência interna, não protege contra um operador que mostre logs diferentes (V19).
@@ -340,4 +335,21 @@ Legenda: **P** = `proptest` (muitos casos), **U** = unitário, **E** = ponta a p
 | Pedidos inválidos recusados antes de mostrar; sem botão não assina | device-core: `credential_requests_are_validated_before_anything_is_shown_or_signed` |
 | Com o dispositivo real do emulador (TCP) | client: `credential_keys_and_organ_transactions_are_signed_on_the_real_device_and_run_in_the_ledger` |
 | Em nós reais: proposta do emissor + cosign dos membros simulados | devnet-sim: `simulated_organ_members_cosign_a_credential_proposed_by_the_issuer_wallet_on_real_nodes` |
+
+## ID cívico na chain (ADR-0038)
+
+| Garantia | Teste |
+|---|---|
+| O pacote com M membros distintos do órgão do `trust.txt` é aceito e dá o id da credencial | crypto: `a_bundle_with_the_quorum_verifies_and_gives_the_chain_id` |
+| Quórum curto, o mesmo membro duas vezes ou membros que o dispositivo não conhece: recusados | crypto: `a_short_repeated_or_foreign_quorum_is_refused` |
+| Qualquer mudança nos atributos, no sal, no titular, na assinatura, no payload, na rede, na validade ou no tipo é recusada | crypto: `any_change_to_the_claims_the_salt_the_holder_or_a_transaction_is_refused` |
+| Um dispositivo sem órgão no `trust.txt` não instala nada | crypto: `a_device_with_no_trusted_organ_accepts_nothing`; device-core: `a_device_that_trusts_no_civic_organ_installs_nothing` |
+| Atributos lidos com rigor; o compromisso não depende da ordem e muda com qualquer atributo ou sal | crypto: `claims_are_parsed_strictly_and_commit_independently_of_their_order` |
+| A prova revela um atributo; o compromisso é refeito com os resumos dos demais e comparado com a chain; inativa, outro nonce, outro verificador ou valor trocado: recusado | crypto: `a_presentation_discloses_one_claim_and_the_chain_commitment_still_checks` |
+| A política do órgão civil é tudo-ou-nada e os membros são endereços de 32 bytes | attestation: `the_civic_organ_is_all_or_nothing_and_members_are_addresses` |
+| O dispositivo recusa pacote de outra chave, com quórum curto, adulterado ou malformado, sem gravar nada | device-core: `credential_for_another_key_or_forged_issuer_is_refused` |
+| Prova de idade revela só `age_over_18` e falha se a chain diz que não está ativa | device-core: `attribute_proof_discloses_only_the_predicate` |
+| Atributos do órgão: datas, idades derivadas, domicílio e recusas | credentials: `civic::tests` |
+| Com o dispositivo real do emulador: pedido, emissão, prova contra a chain, registro anônimo e reemissão com o mesmo cidadão | client: `full_onboarding_and_daily_use`, `election_flow_president_for_all_governor_and_mayor_by_domicile`, `losing_the_device_means_reissue_the_old_credential_is_revoked_on_the_chain_and_the_citizen_stays_one` |
+| **Em nós reais:** o dispositivo propõe como membro, o membro simulado aprova, o pacote sai da chain, o dispositivo o instala e a prova só vale após a janela | devnet-sim: `the_civic_credential_is_issued_on_real_nodes_by_the_organ_quorum_and_installed_on_the_device` |
 

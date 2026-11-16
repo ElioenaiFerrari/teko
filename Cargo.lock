@@ -784,18 +784,26 @@ dependencies = [
 name = "devnet-sim"
 version = "0.1.0"
 dependencies = [
+ "device-emulator",
+ "issuer-cli",
  "p256",
  "prost",
  "rand",
  "teko-assets",
+ "teko-attestation",
  "teko-bft",
  "teko-chain",
+ "teko-client",
  "teko-coin",
  "teko-credentials",
  "teko-crypto",
+ "teko-device-core",
  "teko-economy",
  "teko-ledger",
  "teko-node",
+ "teko-protocol",
+ "teko-registration",
+ "teko-transport",
 ]
 
 [[package]]
@@ -4323,16 +4331,19 @@ dependencies = [
 name = "teko-issuer"
 version = "0.1.0"
 dependencies = [
+ "prost",
  "rand",
  "serde",
  "serde_json",
  "tauri",
  "tauri-build",
  "teko-assets",
+ "teko-attestation",
  "teko-client",
  "teko-coin",
  "teko-credentials",
  "teko-crypto",
+ "teko-economy",
  "teko-ledger",
  "teko-node",
  "teko-protocol",
@@ -4402,6 +4413,7 @@ dependencies = [
  "election-admin-cli",
  "issuer-cli",
  "prost",
+ "rand",
  "serde",
  "serde_json",
  "tauri",

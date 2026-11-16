@@ -484,7 +484,7 @@ fn credential_types_in_the_genesis_survive_the_text_round_trip_and_build_the_mod
         threshold: 2,
         members: members.clone(),
         contest_secs: 604_800,
-        validity_secs: 157_680_000,
+        validity_secs: 315_360_000,
         public: false,
     });
     g.credtypes.push(teko_economy::CredTypeSpec {

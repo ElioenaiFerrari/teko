@@ -10,7 +10,11 @@ use teko_attestation::{
     BlobHasher, FactoryData, FirmwareError, FirmwareManifest, TrustPolicy, issue_request_message,
     manifest_fingerprint, sign_attestation, verify_blob, verify_manifest,
 };
-use teko_crypto::credential::{self, IssuedCredential};
+use teko_crypto::civic::{
+    CIVIC_TYPE, CivicBundle, CivicPolicy, CivicPresentation, claim_list, parse_claims,
+    presentation_signing_bytes, verify_civic_bundle,
+};
+use teko_crypto::credential::{Claim, claim_digest};
 use teko_crypto::{
     SigningKey, canonical_service_id, civic_id, derive_key, derive_signing_key, pairwise_id,
     public_key_bytes, sign_tagged, tags, voter,
@@ -1176,6 +1180,11 @@ impl<H: Hal, R: Rng + CryptoRng> Device<H, R> {
             .ok()
             .and_then(|t| sanitize(t, 2_048).filter(|c| c.as_str() == t))
             .ok_or_else(|| bad("atributos inválidos"))?;
+        if !m.claims.is_empty() && parse_claims(&m.claims).is_none() {
+            return Err(bad(
+                "atributos fora do formato nome=valor;nome=valor (nomes únicos)",
+            ));
+        }
         // the commitment: recomputed here whenever the claims are given
         let (commitment, claims_shown): ([u8; 32], bool) = if m.public {
             if m.claims.is_empty() || !m.commitment.is_empty() {
@@ -1528,10 +1537,11 @@ impl<H: Hal, R: Rng + CryptoRng> Device<H, R> {
         let verifier = sanitize(verifier, 60)
             .filter(|v| !v.trim().is_empty())
             .ok_or_else(|| fail(ErrorCode::InvalidArgument, "nome do verificador inválido"))?;
-        let issued = IssuedCredential::decode(self.p.credential.as_slice())
-            .map_err(|_| fail(ErrorCode::Internal, "credencial ilegível"))?;
+        let (bundle, claims) = self
+            .civic_claims()
+            .ok_or_else(|| fail(ErrorCode::Internal, "credencial ilegível"))?;
 
-        let (claim_name, description) = resolve_predicate(&predicate, &issued)?;
+        let (claim_name, description) = resolve_predicate(&predicate, &claims)?;
         let mut lines = Vec::from([String::from("Para:")]);
         lines.extend(wrap(&verifier, 28));
         lines.push(String::from("Será revelado:"));
@@ -1543,12 +1553,53 @@ impl<H: Hal, R: Rng + CryptoRng> Device<H, R> {
         )?;
 
         let key = self.identity_key()?;
-        let presentation =
-            credential::present(&key, &issued, &[claim_name.as_str()], nonce, &verifier)
-                .map_err(|_| fail(ErrorCode::Internal, "falha ao montar prova"))?;
+        let subject = public_key_bytes(&key);
+        let commitment = teko_crypto::civic::commitment_of(&claims);
+        let id = teko_crypto::ledger::cred_id(
+            CIVIC_TYPE.as_bytes(),
+            &subject,
+            &commitment,
+            &[],
+            bundle.valid_until,
+        );
+        let disclosed: Vec<Claim> = claims
+            .iter()
+            .filter(|c| c.name == claim_name)
+            .cloned()
+            .collect();
+        let hidden: Vec<Vec<u8>> = claims
+            .iter()
+            .filter(|c| c.name != claim_name)
+            .map(|c| claim_digest(c).to_vec())
+            .collect();
+        let mut presentation = CivicPresentation {
+            chain_id: bundle.chain_id.clone(),
+            ctype: String::from(CIVIC_TYPE),
+            credential_id: id.to_vec(),
+            subject,
+            valid_until: bundle.valid_until,
+            disclosed,
+            hidden,
+            nonce: nonce.to_vec(),
+            verifier,
+            holder_signature: Vec::new(),
+        };
+        presentation.holder_signature = sign_tagged(
+            &key,
+            tags::ATTR_PROOF,
+            &presentation_signing_bytes(&presentation),
+        );
         Ok(Response::AttributeProof(AttributeProof {
             presentation: presentation.encode_to_vec(),
         }))
+    }
+
+    /// The stored civic credential: the bundle and its claims (with their salts).
+    fn civic_claims(&self) -> Option<(CivicBundle, Vec<Claim>)> {
+        let bundle = CivicBundle::decode(self.p.credential.as_slice()).ok()?;
+        let salt: [u8; 16] = bundle.salt.as_slice().try_into().ok()?;
+        let claims = claim_list(&salt, &bundle.claims);
+        Some((bundle, claims))
     }
 
     // ───────────────────────── elections (Phase 2) ─────────────────────────
@@ -1566,14 +1617,8 @@ impl<H: Hal, R: Rng + CryptoRng> Device<H, R> {
 
     /// Electoral domicile from the credential (issued by the authority).
     fn domicile(&self) -> Option<Domicile> {
-        let issued = IssuedCredential::decode(self.p.credential.as_slice()).ok()?;
-        let claim = |n: &str| {
-            issued
-                .claims
-                .iter()
-                .find(|c| c.name == n)
-                .map(|c| c.value.clone())
-        };
+        let (_, claims) = self.civic_claims()?;
+        let claim = |n: &str| claims.iter().find(|c| c.name == n).map(|c| c.value.clone());
         Domicile::new(
             &claim("electoral_state")?,
             &claim("electoral_municipality")?,
@@ -2120,40 +2165,54 @@ impl<H: Hal, R: Rng + CryptoRng> Device<H, R> {
         }))
     }
 
+    /// Installs the civic credential: a `CivicBundle` the organ's members signed (ADR-0038). The
+    /// device checks it ALONE (commitment, id, M distinct trusted members, this identity key); veto,
+    /// expiry and revocation are checked by whoever uses the credential, reading the chain.
     fn load_credential(&mut self, bytes: &[u8]) -> Result<Response, Failure> {
         self.require_unlocked_initialized()?;
         if self.p.state() != DeviceState::Initialized {
             return Err(fail(ErrorCode::InvalidState, "credencial já instalada"));
         }
-        let issued = IssuedCredential::decode(bytes)
+        let bundle = CivicBundle::decode(bytes)
             .map_err(|_| fail(ErrorCode::InvalidArgument, "credencial malformada"))?;
-        credential::verify_issued(&self.trust.authority_root, &issued).map_err(|_| {
-            fail(
-                ErrorCode::BadSignature,
-                "credencial não assinada pela autoridade",
-            )
-        })?;
-        let cred = issued
-            .credential
-            .as_ref()
-            .ok_or_else(|| fail(ErrorCode::InvalidArgument, "credencial vazia"))?;
+        let policy = CivicPolicy {
+            chain_id: self.trust.civic_chain_id.clone(),
+            threshold: self.trust.civic_threshold,
+            members: self.trust.civic_members.clone(),
+        };
         let pk = public_key_bytes(&self.identity_key()?);
-        if cred.subject_key != pk {
-            return Err(fail(
-                ErrorCode::BadSignature,
-                "credencial emitida para outra chave",
-            ));
-        }
-        let mut lines = Vec::from([String::from("Emissor:")]);
-        lines.extend(wrap(&cred.issuer, 28));
-        for c in &issued.claims {
+        verify_civic_bundle(&bundle, &policy, &pk).map_err(|e| {
+            let code = match e {
+                teko_crypto::civic::CivicError::Policy => ErrorCode::InvalidState,
+                teko_crypto::civic::CivicError::Subject
+                | teko_crypto::civic::CivicError::Payload => ErrorCode::InvalidArgument,
+                _ => ErrorCode::BadSignature,
+            };
+            fail(code, &format!("credencial recusada: {e}"))
+        })?;
+        let claims = claim_list(
+            bundle
+                .salt
+                .as_slice()
+                .try_into()
+                .map_err(|_| fail(ErrorCode::InvalidArgument, "sal inválido"))?,
+            &bundle.claims,
+        );
+        let mut lines = Vec::from([String::from("Emitida pelo órgão:")]);
+        lines.extend(wrap(&bundle.chain_id, 28));
+        lines.push(format!(
+            "{} de {} membros assinaram",
+            policy.threshold,
+            policy.members.len()
+        ));
+        for c in &claims {
             lines.extend(wrap(&format!("{}: {}", c.name, c.value), 28));
         }
         self.confirm(
             ButtonKind::LoadCredential,
             Screen::new("INSTALAR CREDENCIAL?", lines),
         )?;
-        self.p.credential = issued.encode_to_vec();
+        self.p.credential = bundle.encode_to_vec();
         self.p.state = DeviceState::CredentialsIssued as i32;
         self.save()?;
         Ok(Response::CredentialLoaded(CredentialLoaded {}))
@@ -2183,10 +2242,7 @@ fn constant_time_eq(a: &[u8], b: &[u8]) -> bool {
 }
 
 /// Maps a predicate to the single claim to disclose and a human description.
-fn resolve_predicate(
-    p: &Predicate,
-    issued: &IssuedCredential,
-) -> Result<(String, String), Failure> {
+fn resolve_predicate(p: &Predicate, claims: &[Claim]) -> Result<(String, String), Failure> {
     let unavailable = || {
         fail(
             ErrorCode::InvalidArgument,
@@ -2196,8 +2252,7 @@ fn resolve_predicate(
     match PredicateKind::try_from(p.kind).unwrap_or(PredicateKind::Unspecified) {
         PredicateKind::AgeAtLeast => {
             // Smallest issuer-derived `age_over_K` with K >= requested and value "true".
-            let best = issued
-                .claims
+            let best = claims
                 .iter()
                 .filter(|c| c.value == "true")
                 .filter_map(|c| {
@@ -2209,16 +2264,14 @@ fn resolve_predicate(
             Ok((name, format!("Idade mínima de {k} anos: SIM")))
         }
         PredicateKind::Has => {
-            let c = issued
-                .claims
+            let c = claims
                 .iter()
                 .find(|c| c.name == p.name && c.value == "true")
                 .ok_or_else(unavailable)?;
             Ok((c.name.clone(), format!("Possui: {}", c.name)))
         }
         PredicateKind::Reveal => {
-            let c = issued
-                .claims
+            let c = claims
                 .iter()
                 .find(|c| c.name == p.name)
                 .ok_or_else(unavailable)?;

@@ -1,5 +1,7 @@
 # ADR-0003 — Recuperação: seed phrase vs reemissão presencial
 
+> **Atualização (ADR-0038):** a reemissão presencial agora é **na chain**: o órgão **revoga** a credencial antiga (quórum, motivo público) e emite a nova com o **mesmo `registry_id`**; não há mais lista de revogação por chave única nem `issuer-cli reissue`.
+
 > **Atualização (ADR-0023):** esta decisão continua valendo para a **identidade e o voto**. A **carteira** (moeda e bens) tem frase de recuperação própria, com entropia separada. Veja o [ADR-0023](0023-carteira-com-seed-bip39.md).
 
 **Status:** **Aceito** (2026-11-14, dono do produto, após o debate de BIP-39): **sem seed/mnemônico**; recuperação = **reemissão presencial com revogação**. Implementado na etapa 7 (ver [RECOVERY.md](../RECOVERY.md)). Revisável.

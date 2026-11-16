@@ -48,7 +48,7 @@ pub struct CredTypeSpec {
 /// vote_chain_id=teko-devnet-1                       (the vote chain whose institutions bond here, ADR-0035)
 /// founder=<hex consensus key> tekow1…        (the OWNER address gets the rewards)
 /// class=imovel 2 window=1200 <hex key> <hex key> <hex key>   (`window=` optional: default 1200 s)
-/// credtype=cnh-b 2 contest=604800 validity=157680000 public=0 tekow1… tekow1… tekow1…
+/// credtype=cnh-b 2 contest=604800 validity=315360000 public=0 tekow1… tekow1… tekow1…
 ///                                                   (credential type, ADR-0037; all options optional)
 /// alloc=tekow1… 5000000000                          (TEST networks only; normally absent)
 /// ```

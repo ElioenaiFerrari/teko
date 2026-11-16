@@ -6,19 +6,19 @@ mod error;
 mod paths;
 mod signed_doc;
 
-use std::time::{SystemTime, UNIX_EPOCH};
-
 use prost::Message;
 use rand::Rng;
 use rand::rand_core::UnwrapErr;
 use rand::rngs::SysRng;
 use serde::Serialize;
 use teko_attestation::{
-    FirmwareManifest, TrustPolicy, blob_hash, count_valid_signers, manifest_fingerprint,
-    verify_attestation, verify_blob, verify_manifest,
+    FirmwareManifest, TrustPolicy, blob_hash, count_valid_signers, issue_request_message,
+    manifest_fingerprint, verify_attestation, verify_batch_chain, verify_blob, verify_manifest,
 };
-use teko_crypto::credential::{self, Presentation};
-use teko_crypto::{civic_id, hex, ledger_address, parse_civic_id, parse_wallet_address};
+use teko_crypto::civic::{CIVIC_TYPE, ChainRecord, CivicPresentation, verify_civic_presentation};
+use teko_crypto::{
+    civic_id, hex, ledger_address, parse_civic_id, parse_wallet_address, tags, verify_tagged,
+};
 use teko_election::{
     BallotBody, ElectionBundle, ElectionManifest, GovernancePolicy, Transition, contest_hash,
     replay, verify_ballot,
@@ -38,8 +38,6 @@ pub struct DeviceClient<T: Transport> {
     on_button: Option<OnButton>,
     /// Manifest of the election last loaded (to verify ballots against).
     election: Option<ElectionManifest>,
-    /// Latest verified revocation list from the authority (None = none loaded).
-    revocations: Option<credential::RevocationList>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -109,6 +107,36 @@ pub struct AttributeResult {
     pub nonce: String,
 }
 
+pub use teko_crypto::civic::CivicRecord;
+
+/// What an ORGAN checks before it issues the civic credential: the device proved it holds the
+/// identity key (`ISSUE_POP`) and is a genuine device (batch attestation chain), for THIS nonce.
+pub fn verify_identity_request(
+    policy: &TrustPolicy,
+    nonce: &[u8],
+    request: &IdentityRequest,
+) -> Result<(), ClientError> {
+    let bad = |m: String| ClientError::Verification(m);
+    let msg = issue_request_message(nonce, &request.pk_identity);
+    verify_tagged(
+        &request.pk_identity,
+        tags::ISSUE_POP,
+        &msg,
+        &request.pop_signature,
+    )
+    .map_err(|_| bad("prova de posse da chave inválida".into()))?;
+    let batch = verify_batch_chain(policy, &request.attestation_chain)
+        .map_err(|e| bad(format!("atestação: {e}")))?;
+    verify_tagged(
+        &batch.public_key,
+        tags::ISSUE_ATTEST,
+        &msg,
+        &request.attestation_signature,
+    )
+    .map_err(|_| bad("assinatura de atestação inválida".into()))?;
+    Ok(())
+}
+
 pub fn state_name(state: DeviceState) -> &'static str {
     match state {
         DeviceState::Virgin => "virgin",
@@ -116,13 +144,6 @@ pub fn state_name(state: DeviceState) -> &'static str {
         DeviceState::Initialized => "initialized",
         DeviceState::CredentialsIssued => "credentials_issued",
     }
-}
-
-fn unix_secs() -> u64 {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|d| d.as_secs())
-        .unwrap_or(0)
 }
 
 /// Host-side inspection of a firmware offer BEFORE sending anything.
@@ -156,7 +177,6 @@ impl<T: Transport> DeviceClient<T> {
             next_id: 1,
             on_button: None,
             election: None,
-            revocations: None,
         }
     }
 
@@ -794,13 +814,15 @@ impl<T: Transport> DeviceClient<T> {
         Ok(doc)
     }
 
-    /// Acts as the verifier: fresh nonce, then checks the presentation against
-    /// the pinned authority root.
+    /// Acts as the verifier: fresh nonce, then checks the presentation against what the CHAIN says
+    /// about the credential (`chain` looks up its id): the commitment rebuilt from the disclosed
+    /// claims and the hidden digests, the holder's signature, and that the credential is active
+    /// (not vetoed, revoked or expired). A lost device is handled by the organ revoking on the chain.
     pub fn prove_attribute(
         &mut self,
-        policy: &TrustPolicy,
         predicate: Predicate,
         verifier_name: &str,
+        chain: &dyn Fn(&[u8]) -> Option<CivicRecord>,
     ) -> Result<AttributeResult, ClientError> {
         let mut nonce = [0u8; 16];
         UnwrapErr(SysRng).fill_bytes(&mut nonce);
@@ -815,45 +837,43 @@ impl<T: Transport> DeviceClient<T> {
                 o => Err(o),
             },
         )?;
-        let pres = Presentation::decode(proof.presentation.as_slice())
+        let pres = CivicPresentation::decode(proof.presentation.as_slice())
             .map_err(|_| ClientError::Verification("prova malformada".into()))?;
-        let disclosed =
-            credential::verify_presentation(&policy.authority_root, &pres, &nonce, unix_secs())
-                .map_err(|e| ClientError::Verification(format!("prova inválida: {e}")))?;
-        // A REVOKED credential never verifies, even if its signature is perfect (a lost
-        // device cannot be told: the check lives here, on the verifier).
-        if let (Some(list), Some(c)) = (&self.revocations, &pres.credential)
-            && list.is_revoked(&c.credential_id)
-        {
+        if pres.ctype != CIVIC_TYPE {
             return Err(ClientError::Verification(
-                "credencial REVOGADA pela autoridade (dispositivo perdido, roubado ou substituído)"
+                "não é uma credencial cívica".into(),
+            ));
+        }
+        let rec = chain(&pres.credential_id)
+            .ok_or_else(|| ClientError::Verification("a credencial não existe na chain".into()))?;
+        if !rec.active {
+            return Err(ClientError::Verification(
+                "credencial NÃO está ativa na chain (em contestação, vetada, revogada ou expirada)"
                     .into(),
             ));
         }
+        verify_civic_presentation(
+            &pres,
+            &ChainRecord {
+                subject: &rec.subject,
+                commitment: &rec.commitment,
+                valid_until: rec.valid_until,
+                active: rec.active,
+            },
+            &nonce,
+            verifier_name,
+        )
+        .map_err(|e| ClientError::Verification(format!("prova inválida: {e}")))?;
         Ok(AttributeResult {
             verified: true,
-            issuer: pres.credential.map(|c| c.issuer).unwrap_or_default(),
-            disclosed,
+            issuer: format!("órgão emissor em {}", pres.chain_id),
+            disclosed: pres
+                .disclosed
+                .iter()
+                .map(|c| (c.name.clone(), c.value.clone()))
+                .collect(),
             nonce: hex::encode(&nonce),
         })
-    }
-
-    /// Loads the authority's signed revocation list. A list that does not verify,
-    /// or is OLDER than the one already held (a rollback), is refused.
-    pub fn use_revocations(
-        &mut self,
-        policy: &TrustPolicy,
-        list: credential::RevocationList,
-    ) -> Result<(), ClientError> {
-        credential::verify_revocation_list(&policy.authority_root, &list)
-            .map_err(|_| ClientError::Verification("lista de revogação inválida".into()))?;
-        if self.revocations.as_ref().is_some_and(|l| l.seq > list.seq) {
-            return Err(ClientError::Verification(
-                "lista de revogação mais antiga que a já conhecida".into(),
-            ));
-        }
-        self.revocations = Some(list);
-        Ok(())
     }
 
     // ───────────────────────── elections (Phase 2) ─────────────────────────

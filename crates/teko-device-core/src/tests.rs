@@ -5,7 +5,14 @@ use teko_attestation::{
     FactoryData, FirmwareManifest, TrustPolicy, blob_hash, issue_batch_cert, issue_request_message,
     sign_manifest, verify_attestation, verify_batch_chain,
 };
-use teko_crypto::credential::{self, IssuedCredential, Presentation};
+use teko_crypto::civic::{
+    BundleTx, CIVIC_TYPE, ChainRecord, CivicBundle, CivicPresentation, claim_list, commitment_of,
+    verify_civic_presentation,
+};
+use teko_crypto::ledger::{
+    CRED_OP_APPROVE, MODULE_CREDENTIALS, cred_id, cred_propose_payload, cred_vote_payload,
+    tx_signing_bytes,
+};
 use teko_crypto::{SigningKey, generate_signing_key, hex, public_key_bytes, tags, verify_tagged};
 use teko_election::{
     BALLOT_KIND_PUBLIC, BallotBody, Contest, ElectionManifest, ElectionOption, GovernancePolicy,
@@ -18,9 +25,11 @@ use crate::testing::ScriptedHal;
 use crate::{Decision, Device, DeviceConfig};
 
 const PIN: &str = "482913";
+const CIVIC_CHAIN: &str = "teko-devnet-1-economy";
 
 struct World {
-    authority: SigningKey,
+    /// The civic organ's members (ADR-0038).
+    organ: Vec<SigningKey>,
     signers: Vec<SigningKey>,
     gov: Vec<SigningKey>,
     trust: TrustPolicy,
@@ -32,6 +41,7 @@ fn world() -> World {
     let authority = generate_signing_key(&mut rng);
     let signers: Vec<SigningKey> = (0..3).map(|_| generate_signing_key(&mut rng)).collect();
     let gov: Vec<SigningKey> = (0..3).map(|_| generate_signing_key(&mut rng)).collect();
+    let organ: Vec<SigningKey> = (0..3).map(|_| generate_signing_key(&mut rng)).collect();
     let batch = generate_signing_key(&mut rng);
     let cert = issue_batch_cert(&authority, "lote-test", &public_key_bytes(&batch));
     let trust = TrustPolicy {
@@ -42,13 +52,19 @@ fn world() -> World {
         gov_signers: gov.iter().map(public_key_bytes).collect(),
         gov_threshold: 2,
         chain_id: String::new(),
+        civic_chain_id: CIVIC_CHAIN.into(),
+        civic_threshold: 2,
+        civic_members: organ
+            .iter()
+            .map(|k| teko_crypto::ledger_address(&public_key_bytes(k)).to_vec())
+            .collect(),
     };
     let factory = FactoryData {
         batch_key: batch.to_bytes().to_vec(),
         batch_cert: prost::Message::encode_to_vec(&cert),
     };
     World {
-        authority,
+        organ,
         signers,
         gov,
         trust,
@@ -125,6 +141,71 @@ fn attrs() -> Vec<(String, String)> {
     .collect()
 }
 
+/// The claims of the test citizen as the organ writes them.
+fn attrs_text() -> Vec<u8> {
+    attrs()
+        .iter()
+        .map(|(k, v)| format!("{k}={v}"))
+        .collect::<Vec<_>>()
+        .join(";")
+        .into_bytes()
+}
+
+/// The civic bundle the organ hands to the holder `subject`: the proposal of `signers[0]` and the
+/// approvals of the others, exactly as their devices would sign them.
+fn civic_bundle_for(w: &World, subject: &[u8], claims: &[u8], signers: &[usize]) -> CivicBundle {
+    let salt = [3u8; 16];
+    let valid_until = 4_000_000_000;
+    let commitment = commitment_of(&claim_list(&salt, claims));
+    let id = cred_id(
+        CIVIC_TYPE.as_bytes(),
+        subject,
+        &commitment,
+        &[],
+        valid_until,
+    );
+    let txs = signers
+        .iter()
+        .enumerate()
+        .map(|(n, i)| {
+            let k = &w.organ[*i];
+            let payload = if n == 0 {
+                cred_propose_payload(
+                    CIVIC_TYPE.as_bytes(),
+                    subject,
+                    &commitment,
+                    &[],
+                    valid_until,
+                )
+            } else {
+                cred_vote_payload(CRED_OP_APPROVE, CIVIC_TYPE.as_bytes(), &id, "")
+            };
+            let sender = public_key_bytes(k);
+            let msg = tx_signing_bytes(CIVIC_CHAIN, 0, 0, MODULE_CREDENTIALS, &payload, &sender);
+            BundleTx {
+                chain_id: CIVIC_CHAIN.into(),
+                nonce: 0,
+                fee: 0,
+                payload,
+                sender,
+                signature: sign_tagged_for_test(k, &msg),
+            }
+        })
+        .collect();
+    CivicBundle {
+        chain_id: CIVIC_CHAIN.into(),
+        ctype: CIVIC_TYPE.into(),
+        claims: claims.to_vec(),
+        salt: salt.to_vec(),
+        valid_until,
+        txs,
+    }
+}
+
+fn sign_tagged_for_test(k: &SigningKey, msg: &[u8]) -> Vec<u8> {
+    teko_crypto::sign_tagged(k, tags::LEDGER_TX, msg)
+}
+
 /// Full onboarding. Returns the identity public key.
 fn onboard(dev: &mut Dev, w: &World, hal: &ScriptedHal) -> Vec<u8> {
     let blob = vec![7u8; 3000];
@@ -163,19 +244,9 @@ fn onboard(dev: &mut Dev, w: &World, hal: &ScriptedHal) -> Vec<u8> {
     };
     assert_eq!(req.pk_identity, pk);
 
-    let mut rng = StdRng::seed_from_u64(99);
-    let issued = credential::issue(
-        &w.authority,
-        "Autoridade Teste",
-        &pk,
-        1,
-        0,
-        [3; 16],
-        &attrs(),
-        &mut rng,
-    );
+    let bundle = civic_bundle_for(w, &pk, &attrs_text(), &[0, 1]);
     let r = dev.handle(Request::LoadCredential(LoadCredential {
-        credential: prost::Message::encode_to_vec(&issued),
+        credential: prost::Message::encode_to_vec(&bundle),
     }));
     assert!(matches!(r, Response::CredentialLoaded(_)), "{r:?}");
     assert_eq!(dev.state(), DeviceState::CredentialsIssued);
@@ -760,37 +831,78 @@ fn credential_for_another_key_or_forged_issuer_is_refused() {
     create_wallet(&mut dev, &hal);
     let mut rng = StdRng::seed_from_u64(5);
     let other_key = generate_signing_key(&mut rng);
-    let rogue_issuer = generate_signing_key(&mut rng);
     let Response::CivicId(me) = dev.handle(Request::GetCivicId(GetCivicId {})) else {
         panic!()
     };
-
-    let wrong_subject = credential::issue(
-        &w.authority,
-        "A",
-        &public_key_bytes(&other_key),
-        1,
-        0,
-        [1; 16],
-        &attrs(),
-        &mut rng,
-    );
-    let forged = credential::issue(
-        &rogue_issuer,
-        "A",
-        &me.pk_identity,
-        1,
-        0,
-        [1; 16],
-        &attrs(),
-        &mut rng,
-    );
-    for c in [wrong_subject, forged] {
+    // (bundle, the failure the device answers)
+    let cases = [
+        // issued to ANOTHER identity key
+        (
+            civic_bundle_for(&w, &public_key_bytes(&other_key), &attrs_text(), &[0, 1]),
+            ErrorCode::InvalidArgument,
+        ),
+        // only ONE member signed (quorum is 2)
+        (
+            civic_bundle_for(&w, &me.pk_identity, &attrs_text(), &[0]),
+            ErrorCode::BadSignature,
+        ),
+        // the SAME member twice is still one member
+        (
+            civic_bundle_for(&w, &me.pk_identity, &attrs_text(), &[1, 1]),
+            ErrorCode::BadSignature,
+        ),
+    ];
+    for (c, code) in cases {
         let r = dev.handle(Request::LoadCredential(LoadCredential {
             credential: prost::Message::encode_to_vec(&c),
         }));
-        assert_eq!(failure_code(&r), Some(ErrorCode::BadSignature));
+        assert_eq!(failure_code(&r), Some(code), "{r:?}");
     }
+    // claims tampered after the members signed
+    let mut tampered = civic_bundle_for(&w, &me.pk_identity, &attrs_text(), &[0, 1]);
+    tampered.claims =
+        b"name=Outra Pessoa;electoral_state=SP;electoral_municipality=3550308".to_vec();
+    let r = dev.handle(Request::LoadCredential(LoadCredential {
+        credential: prost::Message::encode_to_vec(&tampered),
+    }));
+    assert!(matches!(r, Response::Failure(_)), "{r:?}");
+    // garbage
+    let r = dev.handle(Request::LoadCredential(LoadCredential {
+        credential: vec![1, 2, 3],
+    }));
+    assert_eq!(failure_code(&r), Some(ErrorCode::InvalidArgument));
+    assert_eq!(dev.state(), DeviceState::Initialized);
+    assert!(rng_unused(&mut rng));
+}
+
+fn rng_unused(_: &mut StdRng) -> bool {
+    true
+}
+
+#[test]
+fn a_device_that_trusts_no_civic_organ_installs_nothing() {
+    let mut w = world();
+    w.trust = TrustPolicy {
+        civic_chain_id: String::new(),
+        civic_threshold: 0,
+        civic_members: Vec::new(),
+        ..w.trust.clone()
+    };
+    let hal = ScriptedHal::new();
+    let mut dev = boot(&w, &hal, 8);
+    let blob = vec![1u8; 64];
+    install_fw(&mut dev, &manifest(&w, 1, &blob, &[0, 1]), &blob);
+    hal.set_default_pin(Some(PIN));
+    dev.handle(Request::SetupPin(SetupPin {}));
+    create_wallet(&mut dev, &hal);
+    let Response::CivicId(me) = dev.handle(Request::GetCivicId(GetCivicId {})) else {
+        panic!()
+    };
+    let b = civic_bundle_for(&w, &me.pk_identity, &attrs_text(), &[0, 1]);
+    let r = dev.handle(Request::LoadCredential(LoadCredential {
+        credential: prost::Message::encode_to_vec(&b),
+    }));
+    assert_eq!(failure_code(&r), Some(ErrorCode::InvalidState));
     assert_eq!(dev.state(), DeviceState::Initialized);
 }
 
@@ -817,7 +929,7 @@ fn pairwise_ids_are_stable_per_service_and_distinct_across_services() {
 
 #[test]
 fn attribute_proof_discloses_only_the_predicate() {
-    let (w, _, mut dev, _) = ready();
+    let (w, _, mut dev, pk) = ready();
     let nonce = vec![6u8; 16];
     let prove = |dev: &mut Dev, kind: PredicateKind, arg: u32, name: &str| {
         dev.handle(Request::ProveAttribute(ProveAttribute {
@@ -833,9 +945,26 @@ fn attribute_proof_discloses_only_the_predicate() {
     let Response::AttributeProof(p) = prove(&mut dev, PredicateKind::AgeAtLeast, 18, "") else {
         panic!()
     };
-    let pres = <Presentation as prost::Message>::decode(p.presentation.as_slice()).unwrap();
-    let got = credential::verify_presentation(&w.trust.authority_root, &pres, &nonce, 0).unwrap();
-    assert_eq!(got, vec![("age_over_18".to_string(), "true".to_string())]);
+    let pres = <CivicPresentation as prost::Message>::decode(p.presentation.as_slice()).unwrap();
+    // what the chain holds for this credential (the verifier reads it from the ledger)
+    let bundle = civic_bundle_for(&w, &pk, &attrs_text(), &[0, 1]);
+    let commitment = commitment_of(&claim_list(&[3u8; 16], &attrs_text()));
+    let record = ChainRecord {
+        subject: &pk,
+        commitment: &commitment,
+        valid_until: bundle.valid_until,
+        active: true,
+    };
+    verify_civic_presentation(&pres, &record, &nonce, "Loja").unwrap();
+    assert_eq!(pres.disclosed.len(), 1);
+    assert_eq!(pres.disclosed[0].name, "age_over_18");
+    assert_eq!(pres.disclosed[0].value, "true");
+    // the same presentation fails when the chain says the credential is not active
+    let revoked = ChainRecord {
+        active: false,
+        ..record
+    };
+    assert!(verify_civic_presentation(&pres, &revoked, &nonce, "Loja").is_err());
     assert!(!p.presentation.windows(10).any(|w| w == b"1990-05-17"));
     assert!(!p.presentation.windows(5).any(|w| w == b"Maria"));
 
@@ -843,7 +972,7 @@ fn attribute_proof_discloses_only_the_predicate() {
     let Response::AttributeProof(p) = prove(&mut dev, PredicateKind::AgeAtLeast, 19, "") else {
         panic!()
     };
-    let pres = <Presentation as prost::Message>::decode(p.presentation.as_slice()).unwrap();
+    let pres = <CivicPresentation as prost::Message>::decode(p.presentation.as_slice()).unwrap();
     assert_eq!(pres.disclosed[0].name, "age_over_21");
     // Not provable: refused, nothing revealed.
     assert_eq!(
@@ -854,8 +983,6 @@ fn attribute_proof_discloses_only_the_predicate() {
         failure_code(&prove(&mut dev, PredicateKind::Reveal, 0, "inexistente")),
         Some(ErrorCode::InvalidArgument)
     );
-    // Rejected on the device: nothing is produced.
-    _ = IssuedCredential::default();
 }
 
 // ───────────────────────── elections: contests, jurisdiction, ballots ─────────────────────────

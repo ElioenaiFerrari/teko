@@ -154,9 +154,10 @@ pub fn init_economy(
 /// The credential types of the local test network (ADR-0037): name, public claims, contest
 /// window (s) and validity (s). Each has an organ of 3 members, 2-of-3: the `issuer` wallet (when
 /// given) and simulated test members whose keys live in `orgmember-<type>-<i>.key`.
-pub const DEVNET_CRED_TYPES: [(&str, bool, u64, u64); 3] = [
-    ("cnh-a", false, 1_200, 157_680_000),
-    ("cnh-b", false, 1_200, 157_680_000),
+pub const DEVNET_CRED_TYPES: [(&str, bool, u64, u64); 4] = [
+    ("civic", false, 1_200, 315_360_000),
+    ("cnh-a", false, 1_200, 315_360_000),
+    ("cnh-b", false, 1_200, 315_360_000),
     ("candidato", true, 1_200, 31_536_000),
 ];
 
@@ -254,7 +255,31 @@ pub fn init_economy_with_issuer(
         });
     }
     fs::write(&path, g.to_text())?;
+    sync_civic_trust(dir, &g)?;
     Ok(g)
+}
+
+/// Tells the DEVICES which organ issues the civic identity credential (ADR-0038): the members and
+/// the quorum of the `civic` credential type, written into `dev/trust.txt` (the folder above the
+/// network). The emulator reads it at start, so restart it after creating the network. Without a
+/// `trust.txt` there is nothing to update (a test folder).
+pub fn sync_civic_trust(dir: &Path, g: &teko_economy::EconomyGenesis) -> Result<(), NodeError> {
+    let Some(trust_path) = dir.parent().map(|p| p.join("trust.txt")) else {
+        return Ok(());
+    };
+    let Ok(text) = fs::read_to_string(&trust_path) else {
+        return Ok(());
+    };
+    let Some(civic) = g.credtypes.iter().find(|c| c.name == "civic") else {
+        return Ok(());
+    };
+    let mut trust = teko_attestation::TrustPolicy::parse(&text)
+        .map_err(|e| NodeError::Protocol(format!("trust.txt: {e}")))?;
+    trust.civic_chain_id.clone_from(&g.chain_id);
+    trust.civic_threshold = civic.threshold as usize;
+    trust.civic_members = civic.members.iter().map(|a| a.to_vec()).collect();
+    fs::write(&trust_path, trust.to_text())?;
+    Ok(())
 }
 
 /// The simulated members of a credential organ (TEST keys), in file order.

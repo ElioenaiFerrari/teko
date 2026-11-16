@@ -18,7 +18,7 @@ Até aqui a única credencial era um blob SD-JWT **fora da chain**, emitido por 
 ## Consequências e limites honestos
 - O livro prova **quais membros do órgão emitiram**, não que o que atestaram é verdade (problema do oráculo, como nos bens). Sem validade jurídica.
 - Quem só vê a chain não vê atributos de tipos privados (a menos que o titular os mostre com o sal). A chave de credencial é estável por tipo: duas credenciais do mesmo tipo do mesmo titular são ligáveis entre si.
-- **Ainda não feito:** troca de membros do órgão em execução (só na gênese), caução do órgão por veto/emissão abusivos, o titular provar a posse da chave de credencial a um verificador, e **a emissão da credencial de identidade cívica ainda é a do `issuer-cli` (feature `dev-simulation`)**: mudá-la para o Emissor é uma decisão pendente.
+- **Ainda não feito:** troca de membros do órgão em execução (só na gênese), caução do órgão por veto/emissão abusivos, o titular provar a posse da chave de credencial a um verificador, e a credencial de identidade cívica, que agora é o tipo `civic` ([ADR-0038](0038-id-civico-como-credencial-na-chain.md)).
 - Etapas B (candidatos por credencial e credencial vitalícia de eleito) e C (o eleitor conferir o próprio voto) estão em [ADR-0038/0039, planejados].
 
 ## Testes

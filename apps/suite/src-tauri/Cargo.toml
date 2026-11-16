@@ -24,6 +24,7 @@ teko-attestation.workspace = true
 teko-protocol.workspace = true
 teko-transport.workspace = true
 teko-crypto.workspace = true
+rand.workspace = true
 # Test authority (signs credentials/registrations): DEV ONLY, behind `dev-simulation`.
 issuer-cli = { workspace = true, optional = true }
 election-admin.workspace = true

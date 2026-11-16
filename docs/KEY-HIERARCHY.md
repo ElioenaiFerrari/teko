@@ -49,7 +49,7 @@ Persiste só a **chave mestra derivada** (64 B) e um indicador de passphrase. **
 
 ## 4. Chave de identidade
 
-- Par `Curve`, assinatura identificável. A credencial emitida pela autoridade vincula `pk_identity` ao cidadão.
+- Par `Curve`, assinatura identificável. A credencial cívica, emitida **na chain por um órgão** (quórum M-de-N, ADR-0038), vincula `pk_identity` ao cidadão; é o único tipo de credencial cujo titular é a chave de identidade (os demais usam uma chave por tipo, sem ligação: ADR-0037).
 - Usada para: `SignDocument`, prova de posse na emissão, assinatura de provas de atributos.
 - Nunca usada para votar.
 

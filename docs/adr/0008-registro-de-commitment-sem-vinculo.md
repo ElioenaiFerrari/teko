@@ -1,5 +1,7 @@
 # ADR-0008 — Registro do commitment de eleitor sem vínculo com a identidade
 
+> **Atualização (ADR-0038):** o registro confere o **pacote da credencial cívica** e que ela está **ativa na chain**; o cidadão é identificado pelo `registry_id` (o mesmo numa reemissão), não por uma `citizens.log` da autoridade.
+
 **Status:** Aceito **provisoriamente** (2026-11-14): assinatura cega RFC 9474, uma chave RSA por pleito. **Implementado** (etapa 5). A decisão formal do dono do produto continua pendente (§10 #2 de `PHASE-2-VOTING.md`). · **Criticidade: a mais alta da fase**
 
 ## Implementação (etapa 5)

@@ -146,7 +146,7 @@ Mensagens de erro **nunca** incluem material secreto nem diferenciam causas de f
 
 \* Só em `Inicializado` (antes do ID Cívico) e uma única vez: `GetCivicId` e `GetIdentityRequest` respondem `InvalidState` enquanto não houver carteira pronta (`Features.wallet_ready`).
 
-Nota: após `CredenciaisEmitidas` o dispositivo entra em `Bloqueado` no próximo ciclo/no reinício/após inatividade; `Desbloqueado` expira por inatividade. O estado "Inicializado" é transitório e **desbloqueado** (acabou de definir o PIN). Mensagens de emissão de credencial (`GetIdentityRequest` / `LoadCredential`) são detalhadas no ONBOARDING-FLOW e serão adicionadas ao catálogo (pergunta 2).
+Nota: após `CredenciaisEmitidas` o dispositivo entra em `Bloqueado` no próximo ciclo/no reinício/após inatividade; `Desbloqueado` expira por inatividade. O estado "Inicializado" é transitório e **desbloqueado** (acabou de definir o PIN). As mensagens da credencial cívica (`GetIdentityRequest` / `LoadCredential`) estão no [ONBOARDING-FLOW](ONBOARDING-FLOW.md#passo-6--credencial-cívica-emitida-pelo-órgão-na-chain): `GetIdentityRequest{authority_nonce, authority_name}` devolve a prova de posse da chave de identidade e a atestação do lote (exige carteira e estado `Inicializado`); `LoadCredential{credential}` leva um **`CivicBundle`** (atributos, sal e as transações `Propose`/`Approve` assinadas pelos membros do órgão) que o dispositivo confere **sozinho** contra o órgão do `trust.txt` (`civic_chain_id`, `civic_threshold`, `civic_member`) e só então pede a confirmação ([ADR-0038](adr/0038-id-civico-como-credencial-na-chain.md)). `ProveAttribute` devolve uma **apresentação** (`CivicPresentation`) que o verificador confere contra a **chain**.
 
 ## 8. Invariantes testáveis
 

@@ -4,9 +4,7 @@ use std::time::Duration;
 
 use election_admin::{Admin, AnyBoard, feed_step};
 #[cfg(feature = "dev-simulation")]
-use issuer_cli::{ISSUER_NAME, Issuer, Subject};
-#[cfg(feature = "dev-simulation")]
-use prost::Message;
+use issuer_cli::Issuer;
 use serde::Serialize;
 use tauri::{AppHandle, Emitter, Manager, State};
 use teko_attestation::TrustPolicy;
@@ -207,18 +205,6 @@ fn load_trust() -> Result<TrustPolicy, UiError> {
         )
     })?;
     TrustPolicy::parse(&text).map_err(|e| ui_err("NoTrust", e))
-}
-
-/// The authority's signed revocation list, if it has published one. A list that
-/// does not verify is ignored by the client (it only ever LOADS verified lists).
-fn load_revocations(c: &mut Client, trust: &TrustPolicy) {
-    let path = resolve_dev_dir().join("revocations.signed");
-    if let Ok(bytes) = fs::read(path)
-        && let Ok(list) =
-            <teko_crypto::credential::RevocationList as prost::Message>::decode(bytes.as_slice())
-    {
-        let _ = c.use_revocations(trust, list);
-    }
 }
 
 /// Returned when a command needs the TEST authority/operator, which a production
@@ -1416,115 +1402,212 @@ pub async fn civic_id(app: AppHandle, suite: State<'_, Suite>) -> Result<CivicId
     with_device(app, suite.inner().clone(), |c| c.civic_id()).await
 }
 
-/// Simulated authority: the person was verified out of band; the device
-/// proves possession of its key and genuineness; the issuer binds the
-/// credential to the device's identity key.
-/// What the person tells the authority (in person, in real life).
-#[derive(serde::Deserialize)]
-#[serde(rename_all = "camelCase")]
-#[cfg_attr(not(feature = "dev-simulation"), allow(dead_code))]
-pub struct IssueForm {
-    name: String,
-    birth_date: String,
-    nationality: String,
-    state: String,
-    municipality: String,
-    /// Set = REISSUE (lost/replaced device): the previous credential is revoked.
-    old_civic_id: Option<String>,
-    reason: Option<String>,
+// ───────────────────────── civic credential (ADR-0038) ─────────────────────────
+
+/// The civic credentials of the (verified) economy chain, by id: subject, commitment, expiry and
+/// whether each is ACTIVE now (past the contest window, not vetoed, revoked or expired).
+/// Credentials are issued on the chain by the organ's app, so this is where the Suite learns
+/// whether the citizen's credential is worth anything.
+fn civic_snapshot() -> Result<std::collections::HashMap<Vec<u8>, teko_client::CivicRecord>, UiError>
+{
+    let net = resolve_dev_dir().join("net");
+    if !net.join(teko_node::ECONOMY_FILE).exists() {
+        return Err(ui_err(
+            "NoNetwork",
+            "Sem rede: a credencial cívica vive na chain. Rode make devnet.",
+        ));
+    }
+    let world = teko_node::NodeWorld::open(&net)
+        .map_err(|e| ui_err("NoNetwork", format!("rede indisponível: {e}")))?;
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |d| d.as_secs());
+    Ok(
+        teko_credentials::credentials_of_type(world.ledger_ref(), b"civic")
+            .into_iter()
+            .map(|(id, rec)| {
+                (
+                    id,
+                    teko_client::CivicRecord {
+                        subject: rec.subject.clone(),
+                        commitment: rec.commitment.clone(),
+                        valid_until: rec.valid_until,
+                        active: rec.status_at(now) == teko_credentials::Status::Active,
+                    },
+                )
+            })
+            .collect(),
+    )
 }
 
+#[derive(Serialize)]
+pub struct CivicRequestInfo {
+    civic_id: String,
+    /// Where the request file was written (hand it to the organ).
+    path: String,
+    /// The same content, to copy.
+    json: String,
+}
+
+/// The citizen asks the organ for the civic credential: the device (after the confirmation)
+/// proves it holds the identity key and is genuine. The Suite only writes the request down.
 #[tauri::command]
-pub async fn issue_credential(
+pub async fn civic_request(
     app: AppHandle,
     suite: State<'_, Suite>,
-    form: IssueForm,
-) -> Result<(), UiError> {
-    issue_credential_impl(app, suite, form).await
+) -> Result<CivicRequestInfo, UiError> {
+    use rand::Rng;
+    let mut nonce = [0u8; 32];
+    rand::rand_core::UnwrapErr(rand::rngs::SysRng).fill_bytes(&mut nonce);
+    let (id, req) = with_device(app, suite.inner().clone(), move |c| {
+        let id = c.civic_id()?;
+        let req = c.identity_request(&nonce, "Órgão emissor")?;
+        Ok((id, req))
+    })
+    .await?;
+    let json = serde_json::json!({
+        "civic_id": id.id,
+        "nonce": hex::encode(&nonce),
+        "request": hex::encode(&prost::Message::encode_to_vec(&req)),
+    })
+    .to_string();
+    let dir = resolve_dev_dir().join("requests");
+    fs::create_dir_all(&dir).map_err(|e| ui_err("Io", e))?;
+    let path = dir.join(format!("civic-request-{}.json", &hex::encode(&nonce)[..8]));
+    fs::write(&path, &json).map_err(|e| ui_err("Io", e))?;
+    Ok(CivicRequestInfo {
+        civic_id: id.id,
+        path: path.display().to_string(),
+        json,
+    })
 }
 
-#[cfg(not(feature = "dev-simulation"))]
-async fn issue_credential_impl(
-    _app: AppHandle,
-    _suite: State<'_, Suite>,
-    _form: IssueForm,
-) -> Result<(), UiError> {
-    Err(dev_only())
+#[derive(Serialize)]
+pub struct CivicStatusInfo {
+    /// `none`, `installed`.
+    state: &'static str,
+    /// What the chain says: `missing`, `proposed`, `pending`, `active`, `expired`, `vetoed`, `revoked`.
+    chain: &'static str,
+    active_at: u64,
+    valid_until: u64,
+    now: u64,
 }
 
-#[cfg(feature = "dev-simulation")]
-async fn issue_credential_impl(
-    app: AppHandle,
-    suite: State<'_, Suite>,
-    form: IssueForm,
-) -> Result<(), UiError> {
-    let IssueForm {
-        name,
-        birth_date,
-        nationality,
-        state,
-        municipality,
-        old_civic_id,
-        reason,
-    } = form;
-    let subject = Subject {
-        name,
-        birth_date,
-        nationality,
-        electoral_state: state,
-        electoral_municipality: municipality,
-    };
+/// Installs the credential the organ handed over: the first bundle waiting in `dev/inbox/` that is
+/// for THIS device (the device checks the organ's signatures and the holder itself).
+#[tauri::command]
+pub async fn civic_import(app: AppHandle, suite: State<'_, Suite>) -> Result<String, UiError> {
+    let inbox = resolve_dev_dir().join("inbox");
+    let mut files: Vec<_> = fs::read_dir(&inbox)
+        .map_err(|_| {
+            ui_err(
+                "NoBundle",
+                "Nenhum pacote do órgão em dev/inbox. Peça a emissão no app Teko Emissor.",
+            )
+        })?
+        .filter_map(Result::ok)
+        .map(|e| e.path())
+        .filter(|p| p.extension().is_some_and(|x| x == "bundle"))
+        .collect();
+    files.sort();
+    if files.is_empty() {
+        return Err(ui_err(
+            "NoBundle",
+            "Nenhum pacote do órgão em dev/inbox. Peça a emissão no app Teko Emissor.",
+        ));
+    }
+    let bundles: Vec<(String, Vec<u8>)> = files
+        .iter()
+        .filter_map(|p| Some((p.display().to_string(), fs::read(p).ok()?)))
+        .collect();
     with_device(app, suite.inner().clone(), move |c| {
-        let issuer = Issuer::open(resolve_dev_dir());
-        let nonce = Issuer::new_nonce();
-        let request = c.identity_request(&nonce, ISSUER_NAME)?;
-        let now = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map_or(0, |d| d.as_secs());
-        let issued = match old_civic_id
-            .as_deref()
-            .map(str::trim)
-            .filter(|s| !s.is_empty())
-        {
-            // In-person REISSUE (no seed): revokes the previous credential.
-            Some(old) => issuer.reissue_credential_at(
-                &nonce,
-                &request,
-                &subject,
-                old,
-                reason.as_deref().unwrap_or("lost"),
-                now,
-            ),
-            None => issuer.issue_credential(&nonce, &request, &subject),
+        let mut last: Option<ClientError> = None;
+        for (name, bytes) in bundles {
+            check_size_client(&bytes)?;
+            match c.load_credential(&bytes) {
+                Ok(()) => return Ok(name),
+                // not for this device or not trusted: try the next one; the user refusing stops here
+                Err(ClientError::Device(f)) if f.code == teko_protocol::ErrorCode::UserRejected => {
+                    return Err(ClientError::Device(f));
+                }
+                Err(e) => last = Some(e),
+            }
         }
-        .map_err(|e| ClientError::Verification(e.to_string()))?;
-        c.load_credential(&issued.encode_to_vec())
+        Err(last.unwrap_or_else(|| {
+            ClientError::Unexpected("nenhum pacote serve a este dispositivo".into())
+        }))
     })
     .await
 }
 
-/// "I lost my device": the authority blocks the credential at once. Needs no device.
-#[tauri::command]
-pub async fn revoke_credential(civic_id: String, reason: String) -> Result<usize, UiError> {
-    #[cfg(not(feature = "dev-simulation"))]
-    {
-        let _ = (civic_id, reason);
-        Err(dev_only())
+fn check_size_client(bytes: &[u8]) -> Result<(), ClientError> {
+    if bytes.len() > MAX_FILE_BYTES {
+        return Err(ClientError::Unexpected("pacote grande demais".into()));
     }
-    #[cfg(feature = "dev-simulation")]
-    {
-        revoke_impl(civic_id, reason)
-    }
+    Ok(())
 }
 
-#[cfg(feature = "dev-simulation")]
-fn revoke_impl(civic_id: String, reason: String) -> Result<usize, UiError> {
-    let now = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map_or(0, |d| d.as_secs());
-    Issuer::open(resolve_dev_dir())
-        .revoke_civic_id(civic_id.trim(), &reason, now)
-        .map_err(|e| ui_err("Revoke", e))
+/// What the chain says about the credential installed on the device (read-only).
+#[tauri::command]
+pub async fn civic_status() -> Result<CivicStatusInfo, UiError> {
+    tauri::async_runtime::spawn_blocking(|| {
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_or(0, |d| d.as_secs());
+        let mut info = CivicStatusInfo {
+            state: "installed",
+            chain: "missing",
+            active_at: 0,
+            valid_until: 0,
+            now,
+        };
+        let net = resolve_dev_dir().join("net");
+        let world = teko_node::NodeWorld::open(&net).map_err(|e| ui_err("NoNetwork", e))?;
+        // the credential installed on the device is not exposed to the Suite: the chain is searched
+        // for the bundle the organ handed over (the one in the inbox that matches)
+        let inbox = resolve_dev_dir().join("inbox");
+        let ledger = world.ledger_ref();
+        let mut best: Option<teko_credentials::CredRec> = None;
+        for entry in fs::read_dir(&inbox)
+            .into_iter()
+            .flatten()
+            .filter_map(Result::ok)
+        {
+            let Ok(bytes) = fs::read(entry.path()) else {
+                continue;
+            };
+            let Ok(bundle) =
+                <teko_crypto::civic::CivicBundle as prost::Message>::decode(bytes.as_slice())
+            else {
+                continue;
+            };
+            for (_, rec) in teko_credentials::credentials_of_type(ledger, b"civic") {
+                let salt: [u8; 16] = bundle.salt.as_slice().try_into().unwrap_or([0; 16]);
+                let c = teko_crypto::civic::commitment_of(&teko_crypto::civic::claim_list(
+                    &salt,
+                    &bundle.claims,
+                ));
+                if rec.commitment == c && rec.valid_until == bundle.valid_until {
+                    best = Some(rec);
+                }
+            }
+        }
+        if let Some(rec) = best {
+            info.chain = match rec.status_at(now) {
+                teko_credentials::Status::Proposed => "proposed",
+                teko_credentials::Status::Pending => "pending",
+                teko_credentials::Status::Active => "active",
+                teko_credentials::Status::Expired => "expired",
+                teko_credentials::Status::Vetoed => "vetoed",
+                teko_credentials::Status::Revoked => "revoked",
+            };
+            info.active_at = rec.active_at;
+            info.valid_until = rec.valid_until;
+        }
+        Ok(info)
+    })
+    .await
+    .map_err(|e| ui_err("Internal", e))?
 }
 
 fn reveal(name: &str) -> Predicate {
@@ -1541,12 +1624,12 @@ pub async fn reveal_identity(
     app: AppHandle,
     suite: State<'_, Suite>,
 ) -> Result<Vec<(String, String)>, UiError> {
-    let trust = load_trust()?;
+    let snap = civic_snapshot()?;
     with_device(app, suite.inner().clone(), move |c| {
-        load_revocations(c, &trust);
+        let lookup = |id: &[u8]| snap.get(id).cloned();
         let mut out = Vec::new();
         for field in ["name", "birth_date", "nationality", "registry_id"] {
-            let r = c.prove_attribute(&trust, reveal(field), "Teko Suite (ver meus dados)")?;
+            let r = c.prove_attribute(reveal(field), "Teko Suite (ver meus dados)", &lookup)?;
             out.extend(r.disclosed);
         }
         Ok(out)
@@ -1665,7 +1748,6 @@ pub async fn prove_attribute(
     name: String,
     verifier: String,
 ) -> Result<AttributeResult, UiError> {
-    let trust = load_trust()?;
     let kind = match kind.as_str() {
         "age_at_least" => PredicateKind::AgeAtLeast,
         "has" => PredicateKind::Has,
@@ -1677,9 +1759,9 @@ pub async fn prove_attribute(
         arg,
         name,
     };
+    let snap = civic_snapshot()?;
     with_device(app, suite.inner().clone(), move |c| {
-        load_revocations(c, &trust);
-        c.prove_attribute(&trust, predicate, &verifier)
+        c.prove_attribute(predicate, &verifier, &|id: &[u8]| snap.get(id).cloned())
     })
     .await
 }
@@ -1824,11 +1906,11 @@ fn authority_sign_registration(
     contest_id: &str,
     req: &teko_protocol::RegistrationRequest,
 ) -> Result<Vec<u8>, ClientError> {
-    let now = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map_or(0, |d| d.as_secs());
+    let snap = civic_snapshot().map_err(|e| ClientError::Unexpected(e.message))?;
     Issuer::open(resolve_dev_dir())
-        .sign_registration(election_id, contest_id, req, now)
+        .sign_registration(election_id, contest_id, req, &|id: &[u8]| {
+            snap.get(id).cloned()
+        })
         .map_err(|e| ClientError::Unexpected(e.to_string()))
 }
 

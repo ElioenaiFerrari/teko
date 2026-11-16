@@ -190,10 +190,11 @@ pub fn cred_public_commitment(claims: &[u8]) -> [u8; 32] {
     crate::keys::tagged_hash(crate::tags::CRED_CLAIMS, &[claims])
 }
 
-/// Commitment of a PRIVATE credential: a salted hash. The holder keeps the claims and the salt,
-/// the chain only the commitment.
+/// Commitment of a PRIVATE credential (ADR-0038): a hash of the SORTED per-claim digests, each
+/// salted, so the holder can later disclose ONE claim (for example `age_over_18`) without the
+/// others. The holder keeps the claims and the salt; the chain only the commitment.
 pub fn cred_private_commitment(salt: &[u8; 16], claims: &[u8]) -> [u8; 32] {
-    crate::keys::tagged_hash(crate::tags::CRED_CLAIMS, &[salt, claims])
+    crate::civic::commitment_of(&crate::civic::claim_list(salt, claims))
 }
 
 /// Hash that a registrar QUORUM approval signs: network, action, class, asset, parties, price and

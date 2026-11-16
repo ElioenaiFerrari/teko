@@ -54,6 +54,10 @@ pub const ASSET_APPROVAL: &str = "teko/v2/asset-approval";
 pub const ASSET_ESCROW: &str = "teko/v2/asset-escrow";
 /// Key a device derives per credential type (ADR-0037); unlinkable to identity, wallet and voter keys.
 pub const CRED_KEY: &str = "teko/v2/credential-key";
+/// Commitment of a PRIVATE on-chain credential: a hash of its sorted per-claim digests (ADR-0038).
+pub const CRED_CLAIMS_PRIVATE: &str = "teko/v2/credential-claims-private";
+/// Per-claim salt derived from the credential salt and the claim name (ADR-0038).
+pub const CRED_CLAIM_SALT: &str = "teko/v2/credential-claim-salt";
 /// Identifier of an on-chain credential (ADR-0037).
 pub const CRED_ID: &str = "teko/v2/credential-id";
 /// Commitment to the PUBLIC claims of an on-chain credential (ADR-0037).

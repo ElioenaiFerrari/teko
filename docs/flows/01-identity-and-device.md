@@ -6,11 +6,11 @@
 Antes de qualquer voto, o dispositivo precisa provar que é autêntico, rodar firmware assinado por várias instituições, ter um PIN, uma **carteira com frase de recuperação** e gerar o **ID Cívico**. Tudo isso acontece em uma ordem fixa, imposta por uma máquina de estados.
 
 ## Quem participa
-Suite (host não confiável), dispositivo, emissor.
+Suite (host não confiável), dispositivo, órgão emissor.
 
 ## Diagramas
 
-![Sequência do onboarding: atestação, firmware, PIN, ID Cívico e credencial entre Suite, dispositivo e emissor](../diagrams/onboarding.png)
+![Sequência do onboarding: atestação, firmware, PIN, carteira, ID Cívico, pedido da credencial ao órgão e instalação do pacote entre Suite, dispositivo e órgão](../diagrams/onboarding.png)
 
 ![Máquina de estados do dispositivo: virgem, firmware instalado, inicializado, credenciais emitidas, bloqueado e desbloqueado](../diagrams/device-states.png)
 
@@ -22,7 +22,7 @@ Suite (host não confiável), dispositivo, emissor.
 3. **PIN**: digitado duas vezes **no dispositivo**. Nenhuma mensagem do protocolo carrega o PIN.
 4. **Carteira**: o dispositivo mostra 24 palavras na tela e confirma que você as anotou, pedindo posições sorteadas ([fluxo 14](14-wallet-and-seed.md)). Sem isso, o passo seguinte é recusado.
 5. **ID Cívico**: a semente nasce e o ID (bech32m, com checksum) aparece na tela para conferência.
-6. **Credencial**: o emissor assina e a Suite a guarda no dispositivo ([fluxo 03](03-credentials-and-reissue.md)).
+6. **Credencial cívica**: a Suite pede, o **órgão** emite na chain (app Teko Emissor) e o cidadão instala o pacote; o dispositivo confere o quórum sozinho ([fluxo 03](03-credentials-and-reissue.md)). Até aqui carteira, bens, credenciais e stake já funcionam na Suite.
 
 ## O que é verificado e por quem
 - Atestação e firmware: pela Suite e pelo próprio dispositivo (M-de-N).

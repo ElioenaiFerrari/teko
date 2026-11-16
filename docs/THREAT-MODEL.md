@@ -53,7 +53,7 @@ Colunas: **STRIDE** (S spoofing, T tampering, R repudiation, I info disclosure, 
 | T2 | Comparação de PIN revela informação por tempo | `subtle::ConstantTimeEq`; hash do PIN com sal e KDF lento | Canais laterais de HW | `prop_pin_compare_constant_time` (estrutural) |
 | T3 | Reiniciar/cortar energia para zerar o contador | Incrementar e persistir o contador **antes** de comparar o PIN | Rollback do armazenamento (no emulador) | `prop_counter_persisted_before_check` |
 | T4 | Extração física de chaves | **Fora de escopo no emulador**; HW real: SE/MCU com proteção de leitura (ADR-0012) | Total no emulador | — |
-| T5 | Dispositivo perdido ainda é válido | Revogação pela autoridade na reemissão (ADR-0003); lista de revogação | Janela entre perda e revogação; revogação de lote vs. individual (ver §4) | e2e de revogação (futuro) |
+| T5 | Dispositivo perdido ainda é válido | Revogação **na chain** pelo quórum do órgão (ADR-0038); quem usa a credencial lê a chain | Janela entre perda e revogação; o dispositivo perdido continua com a credencial instalada (ela só deixa de valer para quem lê a chain) | e2e: `losing_the_device_means_reissue…` |
 
 ### 3.3 Coerção e venda de voto (E3)
 
@@ -95,7 +95,7 @@ Colunas: **STRIDE** (S spoofing, T tampering, R repudiation, I info disclosure, 
 |---|---|---|---|
 | X1 | Emite identidades falsas (cidadãos fantasma) | Auditoria pública do registro de emissões (futuro); separação de funções | Confiança na autoridade é irredutível nesta fase |
 | X2 | **Liga identidade ↔ commitment de eleitor** no registro | Canal separado + mecanismo sem vínculo (assinatura cega / credencial anônima / prova de pertinência) — **ADR-0008, a questão de segurança mais importante** | Enquanto o ADR-0008 estiver pendente, o stub é **ingênuo e vincula** (documentar) |
-| X3 | Chave raiz única comprometida | Raízes múltiplas independentes, M-de-N para firmware; chaves raiz offline | Chave raiz de emissão de credencial ainda é única nesta fase (pergunta em aberto) |
+| X3 | Chave raiz única comprometida | Raízes múltiplas independentes, M-de-N para firmware; chaves raiz offline | A credencial cívica passou a ser emitida por **quórum M-de-N** (ADR-0038); a chave da autoridade de atestação do lote continua única nesta fase |
 | X4 | Rastreia dispositivos pela atestação | **Chaves de lote** (ADR-0007), atestação nunca acompanha voto | Lotes pequenos reduzem o anonimato |
 | X5 | Autoridade vê o dispositivo gerar chaves | As chaves nascem no dispositivo; só a pública vai à autoridade | Firmware malicioso (mitigado por S1/S6) |
 
@@ -185,7 +185,7 @@ Não implementadas; ver `PHASE-2-VOTING.md`. Cada linha vira teste quando houver
 
 1. **Valor de N (tentativas de PIN antes do wipe) e comprimento do PIN.** Alternativas: 8 tentativas / PIN 6 dígitos (similar a Trezor/Ledger); 5 / 8 dígitos. *Recomendação:* 8 tentativas, PIN de 6–9 dígitos, atraso exponencial a partir da 4ª. **PENDENTE (dono do produto)**.
 2. **Wipe após N erros apaga também a credencial?** Apagar tudo exige reemissão presencial (mais seguro, mais custo). *Recomendação:* apagar tudo. **PENDENTE**.
-3. **Raiz de emissão de credenciais: única ou M-de-N?** *Recomendação:* chave única para credenciais nesta fase (offline, com ADR de rotação), M-de-N para firmware. **PENDENTE**.
+3. **Raiz de emissão de credenciais: única ou M-de-N?** **Decidido no ADR-0038:** a credencial cívica é emitida por quórum M-de-N na chain; a chave única que sobra é a da atestação do lote.
 4. **Como tratar o stub de registro de commitment enquanto ADR-0008 está aberto?** Alternativas: (a) registro ingênuo marcado como "NÃO PRIVADO"; (b) não implementar o registro, apenas a interface. *Recomendação:* (b). **PENDENTE**.
 5. **Tamanho mínimo de lote de atestação** → ADR-0007. **PENDENTE**.
 6. **Política de revogação de dispositivo perdido** → ADR-0003. **PENDENTE**.

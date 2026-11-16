@@ -3,7 +3,7 @@
 ← [Índice da documentação](../README.md)
 
 ## Resumo
-A **Teko Suite** é o app Tauri v2 (interface em HTML/CSS/JS, regras em Rust). Ela conversa com o dispositivo, o emissor e a rede, mas **nunca** tem campo de PIN nem vê chaves.
+A **Teko Suite** é o app Tauri v2 (interface em HTML/CSS/JS, regras em Rust). Ela conversa com o dispositivo e a rede, mas **nunca** tem campo de PIN nem vê chaves. **Ela não emite nada**: credenciais (inclusive o ID cívico) são emitidas por órgãos no app **Teko Emissor** ([fluxo 16](16-credentials-on-chain.md)); a Suite pede, instala e lê.
 
 ## Quem participa
 Interface, comandos Tauri, `teko-client`, dispositivo, quadro e rede.
@@ -14,7 +14,7 @@ Interface, comandos Tauri, `teko-client`, dispositivo, quadro e rede.
 
 ## Passo a passo
 1. `make emulator` (terminal 1): o PIN é digitado **aqui**.
-2. `make suite` (terminal 2): onboarding guiado (inclui a **Carteira** e a frase de recuperação), identidade, **Carteira** (endereço e saldo de teste), assinar, votar e **Resultados**. Para ter saldo de teste: `make fund ADDR=<seu endereço> AMOUNT=1000`.
+2. `make suite` (terminal 2): onboarding guiado (inclui a **Carteira** e a frase de recuperação e o pedido da **credencial cívica**; antes dela, Carteira, Bens, Credenciais e Validadores já funcionam), identidade, **Carteira** (endereço e saldo de teste), assinar, votar e **Resultados**. Para ter saldo de teste: `make fund ADDR=<seu endereço> AMOUNT=1000`.
 3. Sem emulador ligado a Suite abre no Explorador público.
 4. Pré-visualização só visual: `make preview` (usa backend falso fora do pacote).
 

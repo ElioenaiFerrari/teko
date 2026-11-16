@@ -28,6 +28,14 @@ rand.workspace = true
 
 [dev-dependencies]
 teko-chain.workspace = true
+device-emulator.workspace = true
+issuer-cli.workspace = true
+teko-attestation.workspace = true
+teko-client.workspace = true
+teko-protocol.workspace = true
+teko-registration.workspace = true
+teko-transport.workspace = true
+teko-device-core = { workspace = true, features = ["testing"] }
 p256.workspace = true
 
 [lints]

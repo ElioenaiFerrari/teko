@@ -3,10 +3,9 @@ use std::fs;
 use std::path::PathBuf;
 use std::process::ExitCode;
 
-use issuer_cli::{FW_SIGNERS, Issuer, IssuerError, Subject, make_firmware_blob};
+use issuer_cli::{FW_SIGNERS, Issuer, IssuerError, make_firmware_blob};
 use prost::Message;
 use teko_crypto::hex;
-use teko_protocol::IdentityRequest;
 
 const HELP: &str = "\
 issuer-cli — autoridade simulada do Teko (CHAVES DE TESTE)
@@ -18,18 +17,12 @@ USO:
   issuer-cli make-firmware --version N --out ARQ [--size 49152]
   issuer-cli sign-firmware [--dir dev] --version N --blob ARQ --signers 0,1 --out ARQ.manifest
   issuer-cli provision [--dir dev] --out factory.bin
-  issuer-cli nonce
   issuer-cli dev-election [--dir dev]
       Recria dev/election.bundle (eleição de exemplo com 4 pleitos, datas relativas a agora).
-  issuer-cli issue [--dir dev] --nonce HEX --request ARQ --name NOME --birth AAAA-MM-DD --state SP --municipality 3550308
-                   --nationality BR --out credencial.bin
-  issuer-cli reissue [--dir dev] --nonce HEX --request ARQ --old-civic-id ID [--reason lost|stolen|replaced]
-                     --name NOME --birth AAAA-MM-DD --state SP --municipality 3550308 --nationality BR --out credencial.bin
-      Reemissão PRESENCIAL (não há seed): reverifica a pessoa, REVOGA a credencial anterior e emite a nova.
-  issuer-cli revoke [--dir dev] --civic-id ID [--reason lost|stolen|replaced]
-      Bloqueia já um dispositivo perdido/roubado (a pessoa ainda pode pedir reemissão depois).
   issuer-cli dev-forget [--dir dev]
-      TESTE: esquece cidadãos/registros/revogações (use junto com `make reset`).
+      TESTE: esquece os registros anônimos de voto (use junto com `make reset`).
+
+A EMISSÃO do ID cívico não é mais daqui: é do app Teko Emissor (`make issuer`), pelo órgão (ADR-0038).
   issuer-cli economy-fund [--dir dev] --address tekow1… --amount TEKO   (ex.: 1000 ou 0,5)
       TESTE (devnet): aloca N moedas de TESTE ao endereço da carteira (grava dev/economy.txt).
   issuer-cli trust [--dir dev]
@@ -201,67 +194,9 @@ fn run(args: Vec<String>) -> Result<(), String> {
                 dir.display()
             );
         }
-        "nonce" => println!("{}", hex::encode(&Issuer::new_nonce())),
-        "issue" => {
-            let nonce = hex::decode(need(&flags, "nonce")?).map_err(|_| "nonce inválido")?;
-            let req =
-                IdentityRequest::decode(fs::read(need(&flags, "request")?).map_err(io)?.as_slice())
-                    .map_err(|_| "arquivo de pedido inválido")?;
-            let subject = Subject {
-                name: need(&flags, "name")?.clone(),
-                birth_date: need(&flags, "birth")?.clone(),
-                nationality: need(&flags, "nationality")?.clone(),
-                electoral_state: need(&flags, "state")?.clone(),
-                electoral_municipality: need(&flags, "municipality")?.clone(),
-            };
-            let issued = issuer.issue_credential(&nonce, &req, &subject).map_err(e)?;
-            fs::write(need(&flags, "out")?, issued.encode_to_vec()).map_err(io)?;
-            println!("Credencial emitida e vinculada à chave de identidade do dispositivo");
-        }
-        "reissue" => {
-            let nonce = hex::decode(need(&flags, "nonce")?).map_err(|_| "nonce inválido")?;
-            let req =
-                IdentityRequest::decode(fs::read(need(&flags, "request")?).map_err(io)?.as_slice())
-                    .map_err(|_| "arquivo de pedido inválido")?;
-            let subject = Subject {
-                name: need(&flags, "name")?.clone(),
-                birth_date: need(&flags, "birth")?.clone(),
-                nationality: need(&flags, "nationality")?.clone(),
-                electoral_state: need(&flags, "state")?.clone(),
-                electoral_municipality: need(&flags, "municipality")?.clone(),
-            };
-            let now = std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .map_or(0, |d| d.as_secs());
-            let reason = flags.get("reason").map_or("lost", String::as_str);
-            let issued = issuer
-                .reissue_credential_at(
-                    &nonce,
-                    &req,
-                    &subject,
-                    need(&flags, "old-civic-id")?,
-                    reason,
-                    now,
-                )
-                .map_err(e)?;
-            fs::write(need(&flags, "out")?, issued.encode_to_vec()).map_err(io)?;
-            println!(
-                "Reemissão feita: a credencial anterior foi REVOGADA e a nova está vinculada ao mesmo cidadão"
-            );
-        }
-        "revoke" => {
-            let now = std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .map_or(0, |d| d.as_secs());
-            let reason = flags.get("reason").map_or("lost", String::as_str);
-            let n = issuer
-                .revoke_civic_id(need(&flags, "civic-id")?, reason, now)
-                .map_err(e)?;
-            println!("{n} credencial(is) revogada(s); lista assinada atualizada");
-        }
         "dev-forget" => {
-            issuer.dev_forget_citizens();
-            println!("Cadastro de cidadãos, registros e revogações de TESTE apagados.");
+            issuer.dev_forget_registrations();
+            println!("Registros anônimos de TESTE apagados.");
         }
         other => return Err(format!("comando desconhecido: {other}\n\n{HELP}")),
     }

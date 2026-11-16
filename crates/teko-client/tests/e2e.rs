@@ -9,15 +9,18 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Duration;
 
 use device_emulator::{LinkSlot, Linked, serve};
-use issuer_cli::{Issuer, Subject, scratch_dir};
+use issuer_cli::{Issuer, scratch_dir};
 use prost::Message;
 use rand::SeedableRng;
 use rand::rand_core::UnwrapErr;
 use rand::rngs::SysRng;
 use teko_attestation::{FirmwareManifest, TrustPolicy};
 use teko_client::{
-    ClientError, DeviceClient, UnlockOutcome, inspect_firmware, verify_signed_document,
+    CivicRecord, ClientError, DeviceClient, UnlockOutcome, inspect_firmware,
+    verify_identity_request, verify_signed_document,
 };
+use teko_credentials::civic::{CivicSubject, civic_claims};
+use teko_crypto::civic::{build_civic_bundle, civic_record_of};
 use teko_device_core::testing::ScriptedHal;
 use teko_device_core::{Decision, Device, DeviceConfig};
 use teko_protocol::{ErrorCode, FirmwareBegin, Predicate, PredicateKind, Request};
@@ -25,16 +28,77 @@ use teko_transport::{TcpTransport, connect_tcp};
 
 const PIN: &str = "482913";
 
+type ChainMap = Arc<std::sync::Mutex<std::collections::HashMap<Vec<u8>, CivicRecord>>>;
+
 struct Rig {
     addr: SocketAddr,
     issuer: Issuer,
     trust: TrustPolicy,
     hal: ScriptedHal,
+    /// The civic organ's members (ADR-0038): 2 of 3 sign every identity credential.
+    organ: Vec<teko_crypto::SigningKey>,
+    /// What the economy chain says about each civic credential (a stand-in for the ledger).
+    chain: ChainMap,
+}
+
+impl Rig {
+    fn lookup(&self) -> impl Fn(&[u8]) -> Option<CivicRecord> + '_ {
+        move |id| self.chain.lock().unwrap().get(id).cloned()
+    }
+
+    /// The organ issues the citizen's civic credential to the device: the device proves it holds the
+    /// identity key, two members sign the issuance, the chain records it ACTIVE, the device installs it.
+    fn issue(&self, c: &mut DeviceClient<TcpTransport>, registry_id: &str) {
+        let nonce = vec![0x5a; 32];
+        let req = c.identity_request(&nonce, "Órgão emissor").unwrap();
+        verify_identity_request(&self.trust, &nonce, &req).unwrap();
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_secs();
+        let subject = CivicSubject {
+            name: "Maria da Silva".into(),
+            birth_date: "1990-05-17".into(),
+            nationality: "BR".into(),
+            electoral_state: "SP".into(),
+            electoral_municipality: "3550308".into(),
+        };
+        let claims = civic_claims(&subject, registry_id, now).unwrap();
+        let bundle = build_civic_bundle(
+            &self.trust.civic_chain_id,
+            claims.as_bytes(),
+            [3; 16],
+            now + 315_360_000,
+            &req.pk_identity,
+            &[&self.organ[0], &self.organ[1]],
+        );
+        let (id, record) = civic_record_of(&bundle, &req.pk_identity, true);
+        self.chain.lock().unwrap().insert(id.to_vec(), record);
+        c.load_credential(&bundle.encode_to_vec()).unwrap();
+    }
+
+    /// The organ revokes every credential on the chain (the device was lost).
+    fn revoke_all(&self) {
+        for r in self.chain.lock().unwrap().values_mut() {
+            r.active = false;
+        }
+    }
 }
 
 fn start() -> Rig {
     let issuer = Issuer::open(scratch_dir("e2e"));
-    let trust = issuer.dev_setup().unwrap();
+    let mut trust = issuer.dev_setup().unwrap();
+    let mut rng = rand::rngs::StdRng::seed_from_u64(2024);
+    let organ: Vec<teko_crypto::SigningKey> = (0..3)
+        .map(|_| teko_crypto::generate_signing_key(&mut rng))
+        .collect();
+    trust.civic_chain_id = "teko-devnet-1-economy".into();
+    trust.civic_threshold = 2;
+    trust.civic_members = organ
+        .iter()
+        .map(|k| teko_crypto::ledger_address(&teko_crypto::public_key_bytes(k)).to_vec())
+        .collect();
+    fs::write(issuer.dir().join("trust.txt"), trust.to_text()).unwrap();
     let factory = issuer.provision_device().unwrap();
     let hal = ScriptedHal::new();
     hal.set_default_pin(Some(PIN));
@@ -65,6 +129,8 @@ fn start() -> Rig {
         issuer,
         trust,
         hal,
+        organ,
+        chain: ChainMap::default(),
     }
 }
 
@@ -89,17 +155,7 @@ fn onboard(rig: &Rig, c: &mut DeviceClient<TcpTransport>) {
     assert!(wallet.address.starts_with("tekow1"));
     let id = c.civic_id().unwrap();
     assert!(id.id.starts_with("teko1"));
-    let nonce = Issuer::new_nonce();
-    let req = c.identity_request(&nonce, "Autoridade Cívica").unwrap();
-    let subject = Subject {
-        name: "Maria da Silva".into(),
-        birth_date: "1990-05-17".into(),
-        nationality: "BR".into(),
-        electoral_state: "SP".into(),
-        electoral_municipality: "3550308".into(),
-    };
-    let issued = rig.issuer.issue_credential(&nonce, &req, &subject).unwrap();
-    c.load_credential(&issued.encode_to_vec()).unwrap();
+    rig.issue(c, "TK-E2E00001");
 }
 
 fn device_code(e: ClientError) -> ErrorCode {
@@ -170,17 +226,7 @@ fn full_onboarding_and_daily_use() {
         "civic id shown on the device equals the Suite's"
     );
 
-    let nonce = Issuer::new_nonce();
-    let req = c.identity_request(&nonce, "Autoridade Cívica").unwrap();
-    let subject = Subject {
-        name: "Maria da Silva".into(),
-        birth_date: "1990-05-17".into(),
-        nationality: "BR".into(),
-        electoral_state: "SP".into(),
-        electoral_municipality: "3550308".into(),
-    };
-    let issued = rig.issuer.issue_credential(&nonce, &req, &subject).unwrap();
-    c.load_credential(&issued.encode_to_vec()).unwrap();
+    rig.issue(&mut c, "TK-E2E00001");
     let st = c.features().unwrap();
     assert_eq!(
         (st.state.as_str(), st.has_credential),
@@ -220,13 +266,13 @@ fn full_onboarding_and_daily_use() {
     // prove an attribute without revealing the birth date
     let proof = c
         .prove_attribute(
-            &rig.trust,
             Predicate {
                 kind: PredicateKind::AgeAtLeast as i32,
                 arg: 18,
                 name: String::new(),
             },
             "Loja Exemplo",
+            &rig.lookup(),
         )
         .unwrap();
     assert!(proof.verified);
@@ -502,15 +548,11 @@ fn election_flow_president_for_all_governor_and_mayor_by_domicile() {
     // ANONYMOUS REGISTRATION (ADR-0008): the device blinds its own voter key, the
     // authority checks WHO (identity + domicile + phase) and blind-signs, the device
     // unblinds, and `(voter_key, token)` goes to the board on its own channel.
-    let now = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap()
-        .as_secs();
     for contest in ["presidente", "governador-sp"] {
         let req = c.begin_registration(&eid, contest).unwrap();
         let sig = rig
             .issuer
-            .sign_registration(&eid, contest, &req, now)
+            .sign_registration(&eid, contest, &req, &rig.lookup())
             .unwrap();
         let token = c.finish_registration(&eid, contest, &sig).unwrap();
         // The authority saw the citizen and a blinded value: never the voter key.
@@ -528,7 +570,7 @@ fn election_flow_president_for_all_governor_and_mayor_by_domicile() {
         assert_eq!(again.blind_message, req.blind_message);
         assert!(
             rig.issuer
-                .sign_registration(&eid, contest, &again, now)
+                .sign_registration(&eid, contest, &again, &rig.lookup())
                 .is_ok()
         );
         admin
@@ -545,19 +587,19 @@ fn election_flow_president_for_all_governor_and_mayor_by_domicile() {
     forged.blind_message[3] ^= 1; // the host swaps the blinded message
     assert!(
         rig.issuer
-            .sign_registration(&eid, "presidente", &forged, now)
+            .sign_registration(&eid, "presidente", &forged, &rig.lookup())
             .is_err()
     );
     let req = c.begin_registration(&eid, "presidente").unwrap();
     assert!(
         rig.issuer
-            .sign_registration(&eid, "governador-rj", &req, now)
+            .sign_registration(&eid, "governador-rj", &req, &rig.lookup())
             .is_err(),
         "request is bound to its contest (and RJ is not my state)"
     );
     assert!(
         rig.issuer
-            .sign_registration(&eid, "prefeito-3550308", &req, now)
+            .sign_registration(&eid, "prefeito-3550308", &req, &rig.lookup())
             .is_err(),
         "bound to its contest; the mayor's registration is not open yet"
     );
@@ -631,27 +673,23 @@ fn a_forged_or_old_election_never_reaches_a_vote() {
 }
 
 #[test]
-fn losing_the_device_means_reissue_the_old_credential_is_revoked_and_the_citizen_stays_one() {
-    use teko_crypto::credential::RevocationList;
+fn losing_the_device_means_reissue_the_old_credential_is_revoked_on_the_chain_and_the_citizen_stays_one()
+ {
     let rig = start();
     let mut c = connect(&rig);
     onboard(&rig, &mut c);
     let old_civic = c.civic_id().unwrap().id;
     let e = c.load_election(&rig.trust, &election_bundle(&rig)).unwrap();
     let eid = e.election_id.clone();
-    let now = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap()
-        .as_secs();
     let attr = |c: &mut DeviceClient<TcpTransport>| {
         c.prove_attribute(
-            &rig.trust,
             teko_protocol::Predicate {
                 kind: teko_protocol::PredicateKind::AgeAtLeast as i32,
                 arg: 18,
                 name: String::new(),
             },
             "Loja",
+            &rig.lookup(),
         )
     };
     assert!(attr(&mut c).is_ok(), "valid before any revocation");
@@ -660,82 +698,52 @@ fn losing_the_device_means_reissue_the_old_credential_is_revoked_and_the_citizen
     let req = c.begin_registration(&eid, "presidente").unwrap();
     let sig = rig
         .issuer
-        .sign_registration(&eid, "presidente", &req, now)
+        .sign_registration(&eid, "presidente", &req, &rig.lookup())
         .unwrap();
     c.finish_registration(&eid, "presidente", &sig).unwrap();
 
-    // Device A is LOST: the citizen asks the authority to block it at once.
-    rig.issuer.revoke_civic_id(&old_civic, "lost", now).unwrap();
-    let blocked = RevocationList::decode(
-        fs::read(rig.issuer.dir().join("revocations.signed"))
-            .unwrap()
-            .as_slice(),
-    )
-    .unwrap();
-    c.use_revocations(&rig.trust, blocked).unwrap();
+    // Device A is LOST: the organ REVOKES the credential ON THE CHAIN (quorum, public reason).
+    rig.revoke_all();
     let err = attr(&mut c).unwrap_err();
     assert!(
-        err.to_string().contains("REVOGADA"),
+        err.to_string().contains("NÃO está ativa"),
         "the lost device's proof is refused: {err}"
     );
-    // Then she goes in person with a new device.
+    // The registration authority also refuses a revoked credential.
+    let again = c.begin_registration(&eid, "governador-sp").unwrap();
+    let err = rig
+        .issuer
+        .sign_registration(&eid, "governador-sp", &again, &rig.lookup())
+        .unwrap_err();
+    assert!(err.to_string().contains("não está ativa"), "{err}");
+
+    // Then she goes in person with a new device: the organ issues a NEW credential, with the SAME
+    // registry id, to the new identity key.
     c.wipe().unwrap(); // the new/clean device (same emulator here, stands for a new one)
     c.setup_pin().unwrap();
     let wallet = c.wallet_setup().unwrap();
     assert!(wallet.address.starts_with("tekow1"));
-    let nonce = Issuer::new_nonce();
-    let new_req = c.identity_request(&nonce, "Autoridade Cívica").unwrap();
-    let subject = Subject {
-        name: "Maria da Silva".into(),
-        birth_date: "1990-05-17".into(),
-        nationality: "BR".into(),
-        electoral_state: "SP".into(),
-        electoral_municipality: "3550308".into(),
-    };
-    // A plain first issuance is refused: she already has a record.
-    let refused = rig.issuer.issue_credential(&nonce, &new_req, &subject);
-    assert!(refused.unwrap_err().to_string().contains("REEMISSÃO"));
-    // The in-person reissue works and REVOKES the old credential.
-    let issued = rig
-        .issuer
-        .reissue_credential_at(&nonce, &new_req, &subject, &old_civic, "lost", now)
-        .unwrap();
-    c.load_credential(&issued.encode_to_vec()).unwrap();
+    rig.issue(&mut c, "TK-E2E00001");
     let new_civic = c.civic_id().unwrap().id;
     assert_ne!(new_civic, old_civic, "a new device has a new identity key");
-
-    // Verifiers holding the signed list reject the OLD credential id and accept the new one.
-    let list = RevocationList::decode(
-        fs::read(rig.issuer.dir().join("revocations.signed"))
-            .unwrap()
-            .as_slice(),
-    )
-    .unwrap();
-    let old_id = rig.issuer.revocation_list().unwrap().unwrap().revoked[0].clone();
-    assert!(list.is_revoked(&old_id));
-    c.use_revocations(&rig.trust, list.clone()).unwrap();
     assert!(
         attr(&mut c).is_ok(),
-        "the NEW credential verifies against the list"
+        "the NEW credential verifies on the chain"
     );
-    // A stale (lower seq) or forged list is refused.
-    let mut forged = list.clone();
-    forged.revoked.clear();
-    assert!(c.use_revocations(&rig.trust, forged).is_err());
 
     // Same CITIZEN: a new device cannot register again for the contest she already registered.
     c.load_election(&rig.trust, &election_bundle(&rig)).unwrap();
     let req2 = c.begin_registration(&eid, "presidente").unwrap();
     let err = rig
         .issuer
-        .sign_registration(&eid, "presidente", &req2, now)
+        .sign_registration(&eid, "presidente", &req2, &rig.lookup())
         .unwrap_err();
     assert!(err.to_string().contains("já se registrou"), "{err}");
     // ...but a contest she had NOT registered for is fine.
     let req3 = c.begin_registration(&eid, "governador-sp").unwrap();
     assert!(
         rig.issuer
-            .sign_registration(&eid, "governador-sp", &req3, now)
+            .sign_registration(&eid, "governador-sp", &req3, &rig.lookup())
             .is_ok()
     );
     let _ = fs::remove_dir_all(rig.issuer.dir());
@@ -770,7 +778,7 @@ fn an_encrypted_election_the_device_encrypts_the_vote_and_the_public_tally_canno
     let req = c.begin_registration(&eid, "presidente").unwrap();
     let sig = rig
         .issuer
-        .sign_registration(&eid, "presidente", &req, now)
+        .sign_registration(&eid, "presidente", &req, &rig.lookup())
         .unwrap();
     let token = c.finish_registration(&eid, "presidente", &sig).unwrap();
     let ballot = c.sign_ballot(&eid, "presidente", 1).unwrap();

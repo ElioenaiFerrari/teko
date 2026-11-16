@@ -222,6 +222,8 @@
     const st = d.status;
     if (st.locked) return 'locked';
     if (st.state === 'credentials_issued') return 'ready';
+    // initialized with a confirmed wallet: money, assets, credentials and stake work before the civic ID
+    if (st.state === 'initialized' && st.wallet_ready) return 'wallet';
     return 'onboarding';
   }
 
@@ -229,7 +231,8 @@
     switch (phase()) {
       case 'none': return 'explorer';
       case 'locked': return 'unlock';
-      case 'onboarding': return 'onboarding';
+      case 'onboarding':
+      case 'wallet': return 'onboarding';
       default: return 'home';
     }
   }
@@ -238,7 +241,8 @@
     const p = phase();
     if (r === 'explorer' || r === 'results') return true;
     if (r === 'unlock') return p === 'locked';
-    if (r === 'onboarding') return p === 'onboarding';
+    if (r === 'onboarding') return p === 'onboarding' || p === 'wallet';
+    if (p === 'wallet') return ['wallet', 'assets', 'credentials', 'stake'].includes(r);
     return p === 'ready';
   }
 
@@ -345,7 +349,7 @@
   }
 
   function resetSession() {
-    S.genuine = null; S.authAck = false; S.fw = null; S.civic = null; S.identity = null;
+    S.genuine = null; S.authAck = false; S.fw = null; S.civic = null; S.civicReq = null; S.identity = null;
     S.pairwise = null; S.signed = null; S.file = null; S.verifyRes = null; S.prove.result = null;
     S.election = null; S.elecChecked = false; S.idTried = false; S.fwTried = false; S.picks = {}; S.ballots = {}; S.wipeArmed = false; S.lastKey = '';
   }
@@ -649,32 +653,27 @@
   }
 
   function sIssue() {
+    const r = S.civicReq;
     return `<article class="card">
       <div class="card__head"><div class="card__ico">${ico('id')}</div><h2>Seu ID Cívico</h2></div>
       <div class="screen"><div class="screen__label">Confira com o dispositivo</div><div class="id-big">${esc(S.civic.id)}</div></div>
       <p class="muted">Não é RG nem CPF: é derivado da sua chave pública e não contém dados pessoais.</p>
     </article>
-    ${S.devMode ? '' : `<article class="card"><div class="card__head"><div class="card__ico card__ico--boto">${ico('badge')}</div><h2>Emissão da credencial</h2></div>${callout('info', 'shield', 'Feita pela autoridade', '<p>Nesta versão a emissão é feita pela autoridade, presencialmente, em um serviço externo que ainda não está integrado a esta Suite. Se você perdeu ou trocou de dispositivo, é lá que a credencial anterior é revogada e uma nova é emitida.</p>')}</article>`}
-    ${S.devMode ? `<article class="card">
-      <div class="card__head"><div class="card__ico card__ico--boto">${ico('badge')}</div><h2>Emissão da credencial</h2></div>
-      ${callout('info', 'shield', 'Simulação da autoridade', '<p>Na vida real você é verificado presencialmente pela autoridade, que digita estes dados. Aqui o <code>issuer-cli</code> faz esse papel: confere que o dispositivo é genuíno e que possui a chave, e assina a credencial vinculada à sua chave de identidade.</p>')}
-      <div class="fields">
-        <div class="field"><label for="f-name">Nome completo</label><input class="input" id="f-name" value="Maria da Silva" autocomplete="off"></div>
-        <div class="field"><label for="f-birth">Data de nascimento</label><input class="input" id="f-birth" type="date" value="1990-05-17"></div>
-        <div class="field"><label for="f-nat">Nacionalidade</label>${combo('f-nat', geoCountries(), 'BR', 'Digite para buscar o país')}</div>
-        <div class="field"><label for="f-uf">Domicílio eleitoral: estado</label>${combo('f-uf', geoStates(), 'SP', 'Digite para buscar o estado')}<span class="hint">Define em quais pleitos você vota (governador)</span></div>
-        <div class="field"><label for="f-mun">Domicílio eleitoral: município</label>${combo('f-mun', geoCities('SP'), '3550308', 'Escolha o estado e busque o município')}<span class="hint">Define o pleito de prefeito</span></div>
+    <article class="card">
+      <div class="card__head"><div class="card__ico card__ico--boto">${ico('badge')}</div><h2>Credencial cívica</h2></div>
+      ${callout('info', 'shield', 'Emitida por um órgão, na chain', '<p>A credencial é emitida por um <strong>órgão autorizado</strong> (quórum de membros, cada um com o próprio dispositivo), fica <strong>registrada na chain</strong> e passa por uma <strong>janela de contestação</strong> antes de valer. A Suite não emite nada: ela só pede e instala.</p>')}
+      <ol class="muted">
+        <li><strong>Peça</strong> a credencial: o dispositivo prova que é genuíno e que tem a sua chave.</li>
+        <li>Leve o pedido ao órgão, no app <strong>Teko Emissor</strong> (<code>make issuer</code>, aba <em>ID cívico</em>).</li>
+        <li>Depois da emissão e da aprovação do quórum, <strong>instale</strong> o pacote entregue pelo órgão.</li>
+      </ol>
+      <div class="row">
+        <button class="btn" data-act="civicrequest">${ico('upload')}Pedir a credencial ao órgão</button>
+        <button class="btn btn--ghost" data-act="civicimport">${ico('badge')}Instalar o pacote do órgão</button>
       </div>
-      <p class="muted">Quem atesta o domicílio no mundo real é o cadastro eleitoral; aqui o <code>issuer-cli</code> simula esse papel.</p>
-      <details class="protonote" ${S.reissue ? 'open' : ''}><summary>${ico('lock')}Perdi ou troquei de dispositivo (reemissão)</summary>
-        <p class="muted">A identidade não tem frase de recuperação (a carteira tem): a chave de identidade só existe no dispositivo. Para voltar a usar sua identidade, a autoridade confere você <strong>presencialmente</strong>, <strong>revoga</strong> a credencial anterior e emite uma nova. Quem estiver com o dispositivo antigo não consegue mais provar nada. Se você já se registrou para votar em um pleito, esse registro continua valendo (e não pode ser refeito).</p>
-        <div class="fields">
-          <div class="field"><label for="f-old">ID Cívico do dispositivo anterior</label><input class="input" id="f-old" placeholder="teko1…" autocomplete="off" spellcheck="false" value="${esc(S.oldCivic || '')}"><span class="hint">Deixe em branco se é a sua primeira credencial.</span></div>
-          <div class="field"><label for="f-why">Motivo</label><select class="input" id="f-why"><option value="lost">Perdido</option><option value="stolen">Roubado</option><option value="replaced">Troquei de aparelho</option></select></div>
-        </div>
-      </details>
-      <div class="row"><button class="btn" data-act="issue">${ico('badge')}Emitir credencial</button></div>
-    </article>` : ''}`;
+      ${r ? `<div class="callout callout--ok">${ico('check')}<div><strong>Pedido gerado.</strong> Entregue ao órgão o arquivo <code>${esc(r.path)}</code>. O Emissor o lê dali.</div></div>` : ''}
+      <p class="muted">Se você perdeu ou trocou de dispositivo: a identidade não tem frase de recuperação (a carteira tem). O órgão confere você <strong>presencialmente</strong>, <strong>revoga</strong> a credencial anterior na chain e emite uma nova com o mesmo registro. Quem estiver com o dispositivo antigo não consegue mais provar nada.</p>
+    </article>`;
   }
 
   function sDone() {
@@ -684,7 +683,7 @@
       <dl class="kv">
         <dt>Autenticidade</dt><dd>${S.genuine && S.genuine.genuine ? 'Dispositivo genuíno' : 'não verificada nesta sessão'}</dd>
         <dt>Firmware</dt><dd>v${st.fw_version}</dd>
-        <dt>Credencial</dt><dd>Emitida e vinculada à sua chave</dd>
+        <dt>Credencial</dt><dd>Emitida pelo órgão, na chain, e vinculada à sua chave</dd>
       </dl>
       <div class="row"><button class="btn" data-act="gohome">${ico('id')}Ir para minha identidade</button></div>
     </article>`;
@@ -1314,15 +1313,12 @@
       await guarded(async () => { S.civic = await call('civic_id'); });
       S.lastKey = ''; render();
     },
-    async issue() {
-      const name = $('#f-name').value, birth = $('#f-birth').value, nat = comboValue('f-nat');
-      const state = comboValue('f-uf'), municipality = comboValue('f-mun');
-      if (!state || !municipality || !nat) { toast('Escolha nacionalidade, estado e município na lista.'); return; }
-      await guarded(async () => {
-        const oldCivicId = ($('#f-old') || {}).value || '', reason = ($('#f-why') || {}).value || 'lost';
-        await call('issue_credential', { form: { name, birthDate: birth, nationality: nat, state, municipality, oldCivicId: oldCivicId.trim() || null, reason } });
-        toast(oldCivicId.trim() ? 'Credencial reemitida: a anterior foi revogada.' : 'Credencial emitida e instalada no dispositivo.', 'ok');
-      });
+    async civicrequest() {
+      await guarded(async () => { S.civicReq = await call('civic_request'); toast('Pedido gerado. Leve-o ao órgão (app Teko Emissor).', 'ok'); });
+      S.lastKey = ''; render();
+    },
+    async civicimport() {
+      await guarded(async () => { await call('civic_import'); toast('Credencial instalada no dispositivo.', 'ok'); });
       S.lastKey = ''; await poll();
     },
     lastack(b) { S.lastAck = b.checked; S.lastKey = ''; render(); },
@@ -1442,7 +1438,7 @@
   }
 
   async function loadWallet() {
-    if (S.walletTried || phase() !== 'ready') return;
+    if (S.walletTried || !['ready', 'wallet'].includes(phase())) return;
     S.walletTried = true;
     await guarded(async () => { S.walletAddr = await call('wallet_address', {}, { delay: 5000 }); }, { silent: true });
     if (S.walletAddr) {
@@ -1518,7 +1514,7 @@
   }
 
   async function loadStake() {
-    if (S.stakeTried || phase() !== 'ready') return;
+    if (S.stakeTried || !['ready', 'wallet'].includes(phase())) return;
     S.stakeTried = true;
     if (!S.walletAddr) await guarded(async () => { S.walletAddr = await call('wallet_address', {}, { delay: 5000 }); }, { silent: true });
     if (S.walletAddr) {
@@ -1588,7 +1584,7 @@
   }
 
   async function loadAssets() {
-    if (S.assetsTried || phase() !== 'ready') return;
+    if (S.assetsTried || !['ready', 'wallet'].includes(phase())) return;
     S.assetsTried = true;
     if (!S.walletAddr) await guarded(async () => { S.walletAddr = await call('wallet_address', {}, { delay: 5000 }); }, { silent: true });
     if (S.walletAddr) {
@@ -1598,7 +1594,7 @@
   }
 
   async function loadCreds() {
-    if (S.credsTried || phase() !== 'ready') return;
+    if (S.credsTried || !['ready', 'wallet'].includes(phase())) return;
     S.credsTried = true;
     try { S.creds = await invoke('credentials_view'); } catch (e) { S.creds = { available: false, reason: asErr(e).message, types: [], mine: [] }; }
     S.lastKey = ''; render();

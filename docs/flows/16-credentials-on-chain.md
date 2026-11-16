@@ -44,8 +44,8 @@ make devnet FOUNDER=tekow1… [ISSUER=tekow1…]   # a carteira do emissor entra
 make emulator                                   # o dispositivo (PIN no emulador)
 make issuer                                     # o Emissor: emitir, aprovar, vetar, revogar
 make devnet-cosign                              # SIMULA os outros membros aprovando (só dev)
-make suite                                      # Credenciais: sua chave por tipo e o que foi emitido
+make suite                                      # Credenciais: sua chave por tipo e o que foi emitido; ID cívico: pedir e instalar o pacote
 ```
 
 ## Limites honestos
-Sem validade jurídica; sem auditoria; só devnet. A emissão da **credencial de identidade cívica** continua no `issuer-cli` (`dev-simulation`) e as **candidaturas na eleição** e o **registro de eleitos** são a etapa B (planejado).
+Sem validade jurídica; sem auditoria; só devnet. A **credencial de identidade cívica** é o tipo `civic` ([fluxo 03](03-credentials-and-reissue.md), [ADR-0038](../adr/0038-id-civico-como-credencial-na-chain.md)). As **candidaturas na eleição** e o **registro de eleitos** são a etapa B (planejado).

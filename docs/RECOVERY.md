@@ -4,9 +4,9 @@
 
 **Para a identidade, não existe frase de recuperação.** A chave de identidade nasce no dispositivo e nunca sai dele (princípio 3). Se o dispositivo for perdido, roubado ou trocado:
 
-1. **Bloqueio imediato (opcional):** a autoridade revoga a credencial (`issuer-cli revoke --civic-id ID`). Quem estiver com o aparelho não consegue mais provar atributos a quem confere a lista de revogação, nem registrar-se para votar.
-2. **Reemissão presencial:** no dispositivo novo, na tela de emissão da Suite, abra "Perdi ou troquei de dispositivo", informe o **ID Cívico do dispositivo anterior** e o motivo. A autoridade reverifica seus dados, **revoga** a credencial anterior e emite a nova (`issuer-cli reissue`). O ID Cívico muda (a chave é nova).
-3. **Sua identidade continua sendo uma só:** a autoridade liga as duas credenciais ao mesmo cidadão. Uma primeira emissão para quem já tem cadastro é recusada.
+1. **Bloqueio imediato (opcional):** o órgão **revoga** a credencial **na chain** (quórum, motivo público), pelo app Teko Emissor. Quem estiver com o aparelho não consegue mais provar atributos a quem lê a chain, nem registrar-se para votar.
+2. **Reemissão presencial:** no dispositivo novo, a Suite gera o **pedido** e o órgão, no Emissor, **revoga** a credencial anterior (se ainda não o fez) e emite a nova informando o **mesmo registro** (`registry_id`). O ID Cívico muda (a chave é nova).
+3. **Sua identidade continua sendo uma só:** o órgão deduplica pelo `registry_id`; a chain não impede por si só duas identidades de chaves diferentes (ADR-0038).
 
 ## E o voto?
 - O que você **já votou** conta normalmente.
@@ -15,8 +15,8 @@
 
 ## Limites
 - A autoridade é ponto central e de confiança: um funcionário malicioso poderia reemitir indevidamente (mitigação: dados precisam bater com o cadastro; registro auditável; reemissão revoga a anterior e fica no livro).
-- O verificador precisa ter a lista de revogação **recente** (o `seq` mostra se está atrasada). O dispositivo perdido não pode ser avisado.
-- A lista revela cada revogação (só IDs aleatórios de credencial). Evolução possível: Token Status List com herd privacy.
+- O verificador precisa **ler a chain** para saber da revogação. O dispositivo perdido não pode ser avisado e continua com a credencial instalada (mas ela não vale mais).
+- Veto, revogação e o motivo são **públicos na chain**.
 - Reemissão só presencial: o custo operacional é alto e é a escolha consciente de segurança (ADR-0003).
 
 ## Carteira e frase de recuperação

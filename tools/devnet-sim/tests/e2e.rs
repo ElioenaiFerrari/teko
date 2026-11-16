@@ -382,3 +382,265 @@ fn simulated_organ_members_cosign_a_credential_proposed_by_the_issuer_wallet_on_
     }
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+/// A device on its own TCP port with the given trust policy; `hal` keeps its storage, so a second
+/// instance on the same `hal` is the SAME device booted again with another trust file.
+fn spawn_device(
+    hal: &teko_device_core::testing::ScriptedHal,
+    trust: teko_attestation::TrustPolicy,
+    factory: teko_attestation::FactoryData,
+) -> std::net::SocketAddr {
+    use device_emulator::{LinkSlot, Linked, serve};
+    use rand::rand_core::UnwrapErr;
+    use rand::rngs::SysRng;
+    use teko_device_core::{Device, DeviceConfig};
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let addr = listener.local_addr().unwrap();
+    let hal = hal.clone();
+    std::thread::spawn(move || {
+        let slot = LinkSlot::default();
+        let cfg = DeviceConfig {
+            pin_kdf_iterations: 50,
+            ..DeviceConfig::default()
+        };
+        let mut dev = Device::new(
+            Linked::new(hal, slot.clone()),
+            UnwrapErr(SysRng),
+            cfg,
+            trust,
+            Some(factory),
+        )
+        .unwrap()
+        .with_registration_blinder(Box::new(teko_registration::RsaRegistration));
+        let _ = serve(&listener, &mut dev, &slot, |_| {});
+    });
+    addr
+}
+
+#[test]
+fn the_civic_credential_is_issued_on_real_nodes_by_the_organ_quorum_and_installed_on_the_device() {
+    use issuer_cli::{Issuer, scratch_dir};
+    use prost::Message;
+    use teko_assets::devnet::World;
+    use teko_client::{CivicRecord, CredentialOpArgs, CredentialOpKind, DeviceClient};
+    use teko_credentials::civic::{CivicSubject, civic_claims};
+    use teko_crypto::civic::{BundleTx, CIVIC_TYPE, CivicBundle, CivicPolicy};
+    use teko_crypto::ledger::{CRED_OP_APPROVE, cred_propose_payload, cred_vote_payload};
+    use teko_device_core::testing::ScriptedHal;
+    use teko_node::init_economy_with_issuer;
+    use teko_transport::connect_tcp;
+
+    let _turn = TURN.lock().unwrap_or_else(|e| e.into_inner());
+    // 1) the citizen's device: firmware, PIN and wallet (its wallet will be a MEMBER of the organ)
+    let issuer = Issuer::open(scratch_dir("civic-real"));
+    let trust0 = issuer.dev_setup().unwrap();
+    let factory = issuer.provision_device().unwrap();
+    let hal = ScriptedHal::new();
+    hal.set_default_pin(Some("482913"));
+    hal.set_auto_words(true);
+    let addr1 = spawn_device(&hal, trust0.clone(), factory.clone());
+    let mut c = DeviceClient::new(connect_tcp(addr1, Duration::from_secs(3)).unwrap());
+    let d = issuer.dir();
+    let (m, b) = (
+        std::fs::read(d.join("firmware-v1.manifest")).unwrap(),
+        std::fs::read(d.join("firmware-v1.blob")).unwrap(),
+    );
+    c.install_firmware(&trust0, &m, &b, &mut |_, _| {}).unwrap();
+    c.setup_pin().unwrap();
+    let wallet = c.wallet_setup().unwrap();
+    let wallet_addr = teko_crypto::parse_wallet_address(&wallet.address).unwrap();
+    drop(c);
+
+    // 2) the network: the device wallet is a member of the `civic` organ (with 2 simulated members)
+    let net = d.join("net");
+    init_network(&net, NetworkKind::Devnet, 3, free_port_base(), false).unwrap();
+    let mut g = init_economy_with_issuer(
+        &net,
+        Some(wallet_addr),
+        Some(wallet_addr),
+        None,
+        Some(10_000),
+        false,
+    )
+    .unwrap();
+    for t in &mut g.credtypes {
+        t.contest_secs = 2; // short: the credential becomes active within the test
+    }
+    std::fs::write(net.join(ECONOMY_FILE), g.to_text()).unwrap();
+    let ec = load_economy(&net).unwrap().unwrap();
+    let nodes: Vec<NodeHandle> = (0..3).map(|i| start_node(&net, i, &ec)).collect();
+
+    // 3) the SAME device boots again with a trust file that now names the organ (sync_civic_trust)
+    let trust = teko_attestation::TrustPolicy::parse(
+        &std::fs::read_to_string(d.join("trust.txt")).unwrap(),
+    )
+    .unwrap();
+    assert_eq!(trust.civic_chain_id, ec.genesis.chain_id);
+    assert_eq!(trust.civic_members.len(), 3);
+    let addr2 = spawn_device(&hal, trust.clone(), factory);
+    let mut c = DeviceClient::new(connect_tcp(addr2, Duration::from_secs(3)).unwrap());
+    assert!(matches!(
+        c.unlock().unwrap(),
+        teko_client::UnlockOutcome::Unlocked
+    ));
+
+    // 4) the request: the organ checks the device is genuine and holds the identity key
+    let nonce = vec![0x77; 32];
+    let req = c.identity_request(&nonce, "Órgão emissor").unwrap();
+    teko_client::verify_identity_request(&trust, &nonce, &req).unwrap();
+
+    // 5) member A (the device wallet) PROPOSES; the claims are shown and signed on the device
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_secs();
+    let claims = civic_claims(
+        &CivicSubject {
+            name: "Maria da Silva".into(),
+            birth_date: "1990-05-17".into(),
+            nationality: "BR".into(),
+            electoral_state: "SP".into(),
+            electoral_municipality: "3550308".into(),
+        },
+        "TK-REAL0001",
+        now,
+    )
+    .unwrap();
+    let salt = [9u8; 16];
+    let valid_until = now + 100_000_000;
+    let mut world = teko_node::NodeWorld::open(&net).unwrap();
+    let tx = c
+        .wallet_sign_credential_op(&CredentialOpArgs {
+            chain_id: world.chain_id(),
+            kind: CredentialOpKind::Propose,
+            ctype: CIVIC_TYPE,
+            subject: &req.pk_identity,
+            claims: claims.as_bytes(),
+            public: false,
+            salt: Some(&salt),
+            commitment: None,
+            valid_until,
+            reason: "",
+            contest_secs: 2,
+            fee: 0,
+            nonce: world.nonce(&wallet_addr),
+        })
+        .unwrap();
+    world.submit(tx).unwrap();
+    drop(world);
+    // 1 of 2: nothing can be installed yet
+    // 6) the other member approves (simulated)
+    let said = devnet_sim::cosign(&net, Some("civic")).unwrap();
+    assert!(said.contains("civic"), "{said}");
+
+    // 7) the bundle: claims + salt + the signed transactions found ON THE CHAIN
+    let world = teko_node::NodeWorld::open(&net).unwrap();
+    let commitment = teko_crypto::civic::commitment_of(&teko_crypto::civic::claim_list(
+        &salt,
+        claims.as_bytes(),
+    ));
+    let id = teko_crypto::ledger::cred_id(
+        CIVIC_TYPE.as_bytes(),
+        &req.pk_identity,
+        &commitment,
+        &[],
+        valid_until,
+    );
+    let propose = cred_propose_payload(
+        CIVIC_TYPE.as_bytes(),
+        &req.pk_identity,
+        &commitment,
+        &[],
+        valid_until,
+    );
+    let approve = cred_vote_payload(CRED_OP_APPROVE, CIVIC_TYPE.as_bytes(), &id, "");
+    let (mut proposal, mut approvals) = (None, Vec::<BundleTx>::new());
+    for d in world.chain().blocks() {
+        for raw in &d.block().unwrap().txs {
+            let tx = Tx::from_bytes(raw).unwrap();
+            let bt = BundleTx {
+                chain_id: tx.chain_id.clone(),
+                nonce: tx.nonce,
+                fee: tx.fee,
+                payload: tx.payload.clone(),
+                sender: tx.sender.clone(),
+                signature: tx.signature.clone(),
+            };
+            if tx.payload == propose {
+                proposal.get_or_insert(bt);
+            } else if tx.payload == approve && !approvals.iter().any(|a| a.sender == bt.sender) {
+                approvals.push(bt);
+            }
+        }
+    }
+    let mut txs = vec![proposal.expect("the proposal is on the chain")];
+    txs.extend(approvals);
+    let bundle = CivicBundle {
+        chain_id: world.chain_id().to_string(),
+        ctype: CIVIC_TYPE.into(),
+        claims: claims.clone().into_bytes(),
+        salt: salt.to_vec(),
+        valid_until,
+        txs,
+    };
+    // the device checks the organ's quorum ALONE and installs it
+    c.load_credential(&bundle.encode_to_vec()).unwrap();
+    let st = c.features().unwrap();
+    assert_eq!(
+        (st.state.as_str(), st.has_credential),
+        ("credentials_issued", true)
+    );
+    let policy = CivicPolicy {
+        chain_id: trust.civic_chain_id.clone(),
+        threshold: trust.civic_threshold,
+        members: trust.civic_members.clone(),
+    };
+    assert_eq!(
+        teko_crypto::civic::verify_civic_bundle(&bundle, &policy, &req.pk_identity).unwrap(),
+        id
+    );
+
+    // 8) a verifier reads the chain: the credential is ACTIVE only after the contest window
+    let lookup_at = |t: u64| {
+        let w = teko_node::NodeWorld::open(&net).unwrap();
+        let rec = teko_credentials::credential(w.ledger_ref(), b"civic", &id).unwrap();
+        move |i: &[u8]| {
+            (i == id.as_slice()).then(|| CivicRecord {
+                subject: rec.subject.clone(),
+                commitment: rec.commitment.clone(),
+                valid_until: rec.valid_until,
+                active: rec.status_at(t) == teko_credentials::Status::Active,
+            })
+        }
+    };
+    let age18 = || teko_protocol::Predicate {
+        kind: teko_protocol::PredicateKind::AgeAtLeast as i32,
+        arg: 18,
+        name: String::new(),
+    };
+    let rec = teko_credentials::credential(world.ledger_ref(), b"civic", &id).unwrap();
+    drop(world);
+    // inside the window: refused (not active yet)
+    let err = c
+        .prove_attribute(age18(), "Loja", &lookup_at(rec.approved_at))
+        .unwrap_err();
+    assert!(err.to_string().contains("NÃO está ativa"), "{err}");
+    // after the window: the proof of age verifies against the chain and reveals only that claim
+    let proof = c
+        .prove_attribute(age18(), "Loja", &lookup_at(rec.active_at))
+        .unwrap();
+    assert_eq!(
+        proof.disclosed,
+        vec![("age_over_18".to_string(), "true".to_string())]
+    );
+    // a credential the chain does not know is refused
+    assert!(
+        c.prove_attribute(age18(), "Loja", &|_: &[u8]| None)
+            .is_err()
+    );
+
+    for n in nodes {
+        n.stop();
+    }
+    let _ = std::fs::remove_dir_all(d);
+}

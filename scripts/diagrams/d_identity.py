@@ -4,14 +4,14 @@ SEQ_LEG = [(MUTED, "pedido", False), (GREEN, "resposta aceita", False), (MUTED, 
 
 def onboarding():
     d = D("onboarding", 1000, 0, "Configurar o dispositivo (onboarding)", "Autenticidade, firmware, PIN, carteira, ID Cívico e credencial — nesta ordem", "IDENTIDADE")
-    A = [("s", "Suite", "host não confiável", "link", 140), ("d", "Dispositivo", "tela e botões", "onca", 500), ("e", "Emissor", "autoridade", "external", 860)]
+    A = [("s", "Suite", "host não confiável", "link", 140), ("d", "Dispositivo", "tela e botões", "onca", 500), ("e", "Órgão", "app Emissor + quórum", "external", 860)]
     M = [("s", "d", "AttestationChallenge", "default", False), ("d", "s", "cadeia de atestação", "ok", True),
          ("s", "d", "FirmwareUpdate", "default", False), ("d", "s", "FirmwareStatus", "ok", True),
          ("s", "d", "SetupPin", "default", False), ("d", "s", "PinSet", "ok", True),
          ("s", "d", "SetupWallet", "default", False), ("d", "s", "WalletReady{endereço}", "ok", True),
          ("s", "d", "GetCivicId", "default", False), ("d", "s", "CivicId", "ok", True),
-         ("s", "e", "pedido de credencial", "link", False), ("e", "s", "credencial assinada", "link", True),
-         ("s", "d", "StoreCredential", "default", False)]
+         ("d", "s", "IdentityRequest (prova de posse + atestação)", "link", True), ("s", "e", "pedido levado ao órgão", "link", False),
+         ("e", "s", "pacote: atributos + assinaturas do quórum", "link", True), ("s", "d", "LoadCredential (pacote)", "default", False)]
     N = [(0, "s", "Suite confere a cadeia M-de-N", 220), (2, "d", "Tela: instalar vX? hash ab12… (botão)", 260),
          (4, "d", "PIN digitado 2x NO dispositivo", 230),
          (6, "d", "24 palavras SÓ na tela; você confirma posições", 280), (8, "d", "Tela mostra o ID completo para conferir", 260)]
@@ -84,19 +84,20 @@ def trust_boundaries():
     return d
 
 def reissue_revocation():
-    d = D("reissue-revocation", 1000, 0, "Reemissão presencial com revogação", "Perdeu o dispositivo? Mesma identidade, sem frase-semente", "CREDENCIAIS")
-    A = [("c", "Cidadão", "no balcão", "input", 120), ("e", "Emissor", "issuer-cli", "external", 420), ("n", "Lista de revogação", "assinada", "security", 720), ("d", "Novo dispositivo", "ID Cívico novo", "onca", 920)]
-    M = [("c", "e", "comparece com documento", "default", False), ("e", "n", "revoga o ID Cívico antigo", "bad", False),
-         ("n", "e", "RevocationList assinada", "ok", True), ("e", "d", "credencial nova (mesmo citizen_ref)", "link", False)]
-    N = [(0, "e", "Primeira emissão para quem já existe: recusada", 280), (3, "n", "Dispositivos e verificadores consultam a lista", 300)]
+    d = D("reissue-revocation", 1000, 0, "Reemissão presencial com revogação na chain", "Perdeu o dispositivo? Mesma identidade, sem frase-semente", "CREDENCIAIS")
+    A = [("c", "Cidadão", "no balcão", "input", 120), ("e", "Órgão", "app Emissor + quórum", "external", 420), ("n", "Chain", "módulo de credenciais", "security", 720), ("d", "Novo dispositivo", "ID Cívico novo", "onca", 920)]
+    M = [("c", "e", "comparece com documento + pedido do novo dispositivo", "default", False), ("e", "n", "Revoke da credencial antiga (quórum, motivo público)", "bad", False),
+         ("e", "n", "Propose + Approve da nova (mesmo registry_id)", "default", False), ("n", "e", "contestação e depois ativa", "ok", True),
+         ("e", "d", "pacote com as assinaturas do quórum", "link", False)]
+    N = [(0, "e", "Quem já tem registro: mesma identidade (registry_id)", 280), (3, "n", "Verificadores leem o estado na chain", 300)]
     d.sequence(A, M, notas=N, passo=36)
     d.legend(SEQ_LEG)
     return d
 
 def blind_registration():
     d = D("blind-registration", 1000, 0, "Registro anônimo de eleitor", "Assinatura cega RFC 9474: a autoridade assina sem ver a chave de eleitor", "REGISTRO")
-    A = [("d", "Dispositivo", "chave de eleitor", "onca", 130), ("a", "Autoridade", "chave RSA por pleito", "external", 450), ("q", "Quadro", "público", "boto", 820)]
-    M = [("d", "a", "BeginRegistration: valor cego + credencial", "default", False), ("a", "d", "assinatura cega", "link", True),
+    A = [("d", "Dispositivo", "chave de eleitor", "onca", 130), ("a", "Autoridade", "confere o pacote e a chain", "external", 450), ("q", "Quadro", "público", "boto", 820)]
+    M = [("d", "a", "BeginRegistration: valor cego + pacote da credencial", "default", False), ("a", "d", "assinatura cega", "link", True),
          ("d", "d", "desfaz o cegamento", "default", False), ("d", "q", "publica (chave de eleitor, token)", "boto", False)]
     N = [(0, "a", "Checa elegibilidade e 1 registro por cidadão", 300), (3, "q", "Token válido sem identidade", 220)]
     d.sequence(A, M, notas=N, passo=38)

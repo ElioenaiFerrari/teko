@@ -76,20 +76,21 @@ Errou uma palavra: o dispositivo mostra a frase de novo e sorteia outras posiç�
 - Estado: `Inicializado` (PIN definido, chaves geradas).
 - `s` (segredo de eleitor) também é gerado agora, **mas não é exibido nem exportado**; só `C` poderá sair, depois, por canal separado.
 
-## Passo 6 — Emissão da credencial de cidadão
+## Passo 6 — Credencial cívica (emitida pelo órgão, na chain)
 
-Pré-requisito **fora do sistema**: a pessoa foi verificada presencialmente pela autoridade.
+Pré-requisito **fora do sistema**: a pessoa foi verificada presencialmente pelo órgão. A emissão **não é mais da Suite**: é do app **Teko Emissor**, com o dispositivo de cada membro do órgão ([ADR-0038](adr/0038-id-civico-como-credencial-na-chain.md)).
 
-| Suite mostra | Dispositivo mostra | Protocolo / `issuer-cli` |
+| Quem | Mostra | Protocolo |
 |---|---|---|
-| "Apresente-se à autoridade. Código de emissão: `XXXX-XXXX`" | — | — |
-| "Pedindo prova de posse da chave…" | "Emitir credencial para a autoridade <nome>? ID `teko1…`" [Confirmar] | `GetIdentityRequest{authority_nonce}` → `ButtonRequest` → `IdentityRequest{pk_identity, atestação, assinatura}` |
-| Entrega o pedido à `issuer-cli` | — | `issuer-cli issue --request req.bin --subject <dados>` (a autoridade verifica atestação e prova de posse, assina a credencial **vinculada a `pk_identity`**) |
-| "Carregando credencial…" | "Instalar credencial? Emissor: …, atributos: nome, data de nascimento…" [Confirmar] | `LoadCredential{credential}` → `ButtonRequest` → `CredentialLoaded` |
-| "Credencial emitida ✔" | "Credencial instalada" | — |
+| Cidadão, na Suite ("Pedir a credencial ao órgão") | Dispositivo: "Emitir credencial para o órgão? ID `teko1…`" [Confirmar] | `GetIdentityRequest{authority_nonce}` → `ButtonRequest` → `IdentityRequest{pk_identity, atestação, assinatura}`; a Suite salva o pedido em `dev/requests/` |
+| Membro A, no Emissor (aba *ID cívico*) | Verifica a prova de posse e a atestação do lote; preenche os dados; o dispositivo dele mostra tipo, titular, atributos, validade e janela [Confirmar] | `SignCredentialOp(Propose)`: é a 1ª aprovação |
+| Membros seguintes | Aprovam, cada um no próprio dispositivo | `SignCredentialOp(Approve)` (na devnet: `make devnet-cosign`) |
+| Chain | Contestação (o quórum pode vetar) e depois **ativa** | `teko-credentials` |
+| Membro A | "Entregar o pacote ao titular": monta o pacote com as transações assinadas, tiradas da chain | `dev/inbox/civic-….bundle` |
+| Cidadão, na Suite ("Instalar o pacote do órgão") | Dispositivo: "Instalar credencial? Emitida pelo órgão; 2 de 3 membros assinaram; atributos…" [Confirmar] | `LoadCredential{credential = CivicBundle}` → `ButtonRequest` → `CredentialLoaded` |
 
-Erros: credencial com `subject_key` ≠ chave do dispositivo → recusada; assinatura do emissor inválida → recusada; emissor não reconhecido → recusada.
-Estado: `Inicializado → CredenciaisEmitidas`.
+Erros: pacote para outra chave de identidade, de outra rede, sem M membros distintos do órgão do `trust.txt`, ou adulterado → recusado (nada é gravado). Um dispositivo **sem órgão no `trust.txt`** não instala nada.
+Estado: `Inicializado → CredenciaisEmitidas`. Antes disso, **carteira, bens, credenciais e stake já funcionam** na Suite.
 
 ## Passo 7 — Registro do commitment de eleitor (canal separado)
 
@@ -115,7 +116,7 @@ Objetivo: a autoridade/registro aceita `C` como eleitor elegível **sem ligá-lo
 - **Uso diário:** `Unlock` (PIN no dispositivo) → ações; `Desbloqueado` expira por inatividade.
 - **PIN errado:** `PinWrong{remaining}`; a partir da 4ª tentativa, atraso exponencial (`PinLocked{retry_after}`); após N → `DeviceWiped`, volta a `Virgem`/`FirmwareInstalado`.
 - **Wipe voluntário:** `Wipe` com confirmação (segurar botão); depois, reemissão presencial.
-- **Perda/troca de dispositivo:** reemissão presencial na autoridade com **revogação** do dispositivo antigo (depende do ADR-0003).
+- **Perda/troca de dispositivo:** reemissão presencial no órgão: **revoga** a credencial antiga **na chain** e emite a nova com o mesmo `registry_id` (ADR-0003 e ADR-0038).
 - **Atualização de firmware posterior:** mesmo passo 3, exige `Desbloqueado`.
 - **Sem dispositivo:** Suite abre em modo leitura (explorador público; placeholder).
 

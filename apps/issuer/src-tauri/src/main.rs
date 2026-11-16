@@ -25,6 +25,9 @@ fn main() {
             commands::holder_key,
             commands::issue,
             commands::vote,
+            commands::civic_requests,
+            commands::civic_issue,
+            commands::civic_deliver,
         ])
         .run(tauri::generate_context!());
     if let Err(e) = result {

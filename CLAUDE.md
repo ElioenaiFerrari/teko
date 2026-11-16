@@ -33,10 +33,10 @@ crates/teko-bulletin/      (Fase 2) log Merkle append-only, provas, head assinad
 tools/election-admin-cli/  (Fase 2) publicar no quadro, simular votos (rotulados), apurar
 tools/device-emulator/     4. "tela" e "botões" simulados, processo separado
 crates/teko-attestation/   5. manifestos de firmware, M-de-N, cadeias de atestação
-tools/issuer-cli/          5. autoridade simulada
+tools/issuer-cli/          5. autoridade simulada de TESTE (chaves, firmware, eleição de exemplo, registro anônimo; a emissão do ID cívico saiu: é do Emissor, ADR-0038)
 crates/teko-transport/     (junto de 4) trait Transport + implementação local
 apps/suite/                6. Tauri v2
-apps/issuer/               (Fase 2, etapa A) Teko Emissor: app separado, órgãos emitem credenciais (`make issuer`)
+apps/issuer/               (Fase 2, etapa A/D) Teko Emissor: app separado, órgãos emitem credenciais e o ID cívico na chain (`make issuer`, ADR-0037/0038)
 ```
 
 Cada etapa só começa com a anterior com testes passando. Ao fim de cada etapa, atualizar os docs e resumir o que mudou.

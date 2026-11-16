@@ -15,8 +15,9 @@
   const H = (c) => c.repeat(64).slice(0, 64);
   const cred = (o) => ({ ctype: 'cnh-b', subject: '02' + H('ab').slice(0, 64), status: 'active', approvals: 2, threshold: 2, approved_by_me: true, valid_until: now + 86400 * 900, active_at: now - 3600, reason: '', claims: null, can_approve: false, can_veto: false, can_revoke: false, ...o });
   let orgs = [
-    { ctype: 'cnh-a', public: false, threshold: 2, members: 3, contest_secs: 1200, validity_secs: 157680000, is_member: true, credentials: [] },
-    { ctype: 'cnh-b', public: false, threshold: 2, members: 3, contest_secs: 1200, validity_secs: 157680000, is_member: true, credentials: [
+    { ctype: 'civic', public: false, threshold: 2, members: 3, contest_secs: 1200, validity_secs: 315360000, is_member: true, credentials: [cred({ id: H('c'), ctype: 'civic', claims: 'name=Maria da Silva;registry_id=TK-9A41C07E', status: 'pending', active_at: now + 600 })] },
+    { ctype: 'cnh-a', public: false, threshold: 2, members: 3, contest_secs: 1200, validity_secs: 315360000, is_member: true, credentials: [] },
+    { ctype: 'cnh-b', public: false, threshold: 2, members: 3, contest_secs: 1200, validity_secs: 315360000, is_member: true, credentials: [
       cred({ id: H('1'), claims: 'nome=Ana Souza;categoria=B', can_revoke: true }),
       cred({ id: H('2'), status: 'proposed', approvals: 1, approved_by_me: false, can_approve: true, active_at: 0 }),
       cred({ id: H('3'), status: 'pending', active_at: now + 900, can_veto: true }),
@@ -37,6 +38,9 @@
     holder_key: async () => { await prompt('credential_key'); return '03' + H('cd'); },
     issue: async ({ form }) => { await prompt('sign_credential_op'); const id = H('9'); return { id, bundle: JSON.stringify({ ctype: form.ctype, id, claims: form.claims, salt: H('7').slice(0, 32) }, null, 2), bundle_path: 'dev/issued/' + id + '.json' }; },
     vote: async () => { await prompt('sign_credential_op'); return 'ok'; },
+    civic_requests: async () => [{ file: 'civic-request-1a2b3c4d.json', civic_id: 'teko1qpzry9x8gf2tvdw0s3jn54khce6mua7l', verified: true, error: '' }],
+    civic_issue: async () => { await prompt('sign_credential_op'); return { id: H('8'), bundle: JSON.stringify({ ctype: 'civic' }), bundle_path: 'dev/issued/x.json' }; },
+    civic_deliver: async () => 'dev/inbox/civic-1a2b3c4d.bundle',
   };
   window.__TAURI__ = {
     core: { invoke: async (cmd, args) => { const h = handlers[cmd]; if (!h) throw { code: 'Internal', message: 'comando sem mock: ' + cmd }; return h(args || {}); } },

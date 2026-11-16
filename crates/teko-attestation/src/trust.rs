@@ -28,6 +28,13 @@ pub struct TrustPolicy {
     pub gov_threshold: usize,
     /// Network this device accepts elections for (`chain_id=`). Empty = any (dev).
     pub chain_id: String,
+    /// The economy network whose `civic` organ issues the identity credential (ADR-0038).
+    /// Empty = this device accepts no civic credential.
+    pub civic_chain_id: String,
+    /// How many DISTINCT members of the civic organ must have signed the issuance.
+    pub civic_threshold: usize,
+    /// 32-byte wallet addresses of the civic organ's members.
+    pub civic_members: Vec<Vec<u8>>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Error)]
@@ -68,6 +75,24 @@ impl TrustPolicy {
                     }
                     p.chain_id = String::from(v);
                 }
+                "civic_chain_id" => {
+                    if v.is_empty() || v.len() > 64 || !v.is_ascii() {
+                        return Err(TrustError::Invalid("bad civic_chain_id"));
+                    }
+                    p.civic_chain_id = String::from(v);
+                }
+                "civic_threshold" => {
+                    p.civic_threshold = v
+                        .parse()
+                        .map_err(|_| TrustError::Invalid("bad civic_threshold"))?
+                }
+                "civic_member" => {
+                    let a = hex::decode(v).map_err(|_| TrustError::Invalid("bad civic_member"))?;
+                    if a.len() != 32 {
+                        return Err(TrustError::Invalid("civic_member must be 32 bytes"));
+                    }
+                    p.civic_members.push(a);
+                }
                 "gov_threshold" => {
                     p.gov_threshold = v
                         .parse()
@@ -90,6 +115,15 @@ impl TrustPolicy {
         {
             return Err(TrustError::Invalid(
                 "gov_threshold must be in 1..=N when governance is set",
+            ));
+        }
+        let civic_set = !p.civic_chain_id.is_empty();
+        if civic_set != !p.civic_members.is_empty()
+            || civic_set != (p.civic_threshold != 0)
+            || p.civic_threshold > p.civic_members.len()
+        {
+            return Err(TrustError::Invalid(
+                "civic_chain_id, civic_threshold and civic_member go together (1 <= M <= N)",
             ));
         }
         Ok(p)
@@ -115,6 +149,13 @@ impl TrustPolicy {
         if !self.chain_id.is_empty() {
             let _ = writeln!(s, "chain_id={}", self.chain_id);
         }
+        if !self.civic_chain_id.is_empty() {
+            let _ = writeln!(s, "civic_chain_id={}", self.civic_chain_id);
+            let _ = writeln!(s, "civic_threshold={}", self.civic_threshold);
+            for m in &self.civic_members {
+                let _ = writeln!(s, "civic_member={}", hex::encode(m));
+            }
+        }
         s
     }
 
@@ -137,8 +178,32 @@ mod tests {
             gov_signers: alloc::vec![alloc::vec![5; 33], alloc::vec![6; 33]],
             gov_threshold: 2,
             chain_id: String::from("teko-devnet-1"),
+            civic_chain_id: String::from("teko-devnet-1-economy"),
+            civic_threshold: 2,
+            civic_members: alloc::vec![alloc::vec![7; 32], alloc::vec![8; 32], alloc::vec![9; 32]],
         };
         assert_eq!(TrustPolicy::parse(&p.to_text()).unwrap(), p);
+    }
+
+    #[test]
+    fn the_civic_organ_is_all_or_nothing_and_members_are_addresses() {
+        let base = "authority_root=02\nfw_threshold=1\nfw_signer=02\n";
+        let m = "07".repeat(32);
+        assert!(
+            TrustPolicy::parse(base).is_ok(),
+            "a device may trust no civic organ"
+        );
+        let ok = alloc::format!("{base}civic_chain_id=x\ncivic_threshold=1\ncivic_member={m}\n");
+        assert!(TrustPolicy::parse(&ok).is_ok());
+        for bad in [
+            alloc::format!("{base}civic_chain_id=x\ncivic_member={m}\n"), // no threshold
+            alloc::format!("{base}civic_threshold=1\ncivic_member={m}\n"), // no chain
+            alloc::format!("{base}civic_chain_id=x\ncivic_threshold=1\n"), // no members
+            alloc::format!("{base}civic_chain_id=x\ncivic_threshold=2\ncivic_member={m}\n"), // M > N
+            alloc::format!("{base}civic_chain_id=x\ncivic_threshold=1\ncivic_member=0707\n"), // not 32 bytes
+        ] {
+            assert!(TrustPolicy::parse(&bad).is_err(), "{bad}");
+        }
     }
 
     #[test]

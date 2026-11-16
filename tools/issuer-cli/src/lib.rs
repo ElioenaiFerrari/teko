@@ -91,6 +91,50 @@ fn now_secs() -> u64 {
         .unwrap_or(0)
 }
 
+/// One candidate of a contest, taken from an on-chain `candidato` credential (ADR-0040).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DevCandidate {
+    pub credential_id: Vec<u8>,
+    pub numero: String,
+    pub nome: String,
+}
+
+/// Candidates by contest id.
+pub type DevCandidates = std::collections::BTreeMap<String, Vec<DevCandidate>>;
+
+/// A contest of the sample election, as far as the candidates need to know.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DevContestPlan {
+    pub id: &'static str,
+    /// `presidente`, `governador` or `prefeito`.
+    pub cargo: &'static str,
+    /// Empty (national), the UF or the IBGE code.
+    pub scope_code: &'static str,
+    /// When voting closes (unix seconds), with the same calendar `dev_election` uses.
+    pub voting_closes: u64,
+}
+
+/// The contests of the sample election: id, office, jurisdiction and closing time, relative to `now`.
+pub fn dev_contest_plan(now: u64) -> Vec<DevContestPlan> {
+    const DAY: u64 = 86_400;
+    let (open, announced) = (now + 3 * DAY, now + 4 * DAY);
+    let c = |id, cargo, scope_code, voting_closes| DevContestPlan {
+        id,
+        cargo,
+        scope_code,
+        voting_closes,
+    };
+    vec![
+        c("presidente", "presidente", "", open),
+        c("governador-sp", "governador", "SP", open),
+        c("governador-rj", "governador", "RJ", open),
+        c("governador-mg", "governador", "MG", open),
+        c("governador-ba", "governador", "BA", open),
+        c("governador-rs", "governador", "RS", open),
+        c("prefeito-3550308", "prefeito", "3550308", announced),
+    ]
+}
+
 pub struct Issuer {
     dir: PathBuf,
 }
@@ -237,6 +281,19 @@ impl Issuer {
     /// A NEW bundle is a NEW election (the id carries today's date): the board and
     /// the "simulated data" marker of the previous one are removed.
     pub fn dev_election(&self, now: u64) -> Result<(), IssuerError> {
+        self.dev_election_with(now, None, &DevCandidates::new())
+    }
+
+    /// Like `dev_election`, with the candidates of some contests taken from the CHAIN (ADR-0040):
+    /// `cands` maps a contest id to its candidates (each referencing its `candidato` credential), and
+    /// `election_id` names the election the candidacies were issued for. A contest without an entry
+    /// keeps the example list.
+    pub fn dev_election_with(
+        &self,
+        now: u64,
+        election_id: Option<&str>,
+        cands: &DevCandidates,
+    ) -> Result<(), IssuerError> {
         const DAY: u64 = 86_400;
         let gov: Vec<SigningKey> = (0..GOV_SIGNERS)
             .map(|i| load_key(&self.dir.join(format!("gov-{i}.key"))))
@@ -249,6 +306,7 @@ impl Issuer {
                     index: i as u32,
                     name: (*n).to_string(),
                     number: format!("{}", first + i as u32),
+                    ..Default::default()
                 })
                 .collect()
         };
@@ -256,23 +314,7 @@ impl Issuer {
         let announced = (now + DAY, now + 3 * DAY, now + 4 * DAY);
         // One RSA key PER CONTEST (reused if it exists), so a registration for one
         // contest is worthless in any other.
-        let reg_key = |id: &str| -> Result<Vec<u8>, IssuerError> {
-            let key = match self.registration_key(id) {
-                Ok(k) => k,
-                Err(_) => {
-                    let k = IssuerKey::generate(2048)
-                        .map_err(|e| IssuerError::Corrupt(e.to_string()))?;
-                    let der = k
-                        .to_pkcs8_der()
-                        .map_err(|e| IssuerError::Corrupt(e.to_string()))?;
-                    fs::create_dir_all(self.dir.join("registration"))?;
-                    write_private(&self.reg_key_path(id), &hex::encode(&der))?;
-                    k
-                }
-            };
-            key.public_spki()
-                .map_err(|e| IssuerError::Corrupt(e.to_string()))
-        };
+        let reg_key = |id: &str| self.registration_spki(id);
         let contest = |id: &str,
                        office: Office,
                        title: &str,
@@ -280,18 +322,34 @@ impl Issuer {
                        o: Vec<ElectionOption>,
                        s: (u64, u64, u64)|
          -> Result<Contest, IssuerError> {
+            // candidates from the chain replace the example list of this contest
+            let options = match cands.get(id) {
+                Some(list) => list
+                    .iter()
+                    .enumerate()
+                    .map(|(i, c)| ElectionOption {
+                        index: i as u32,
+                        name: c.nome.clone(),
+                        number: c.numero.clone(),
+                        credential_id: c.credential_id.clone(),
+                    })
+                    .collect(),
+                None => o,
+            };
             Ok(Contest {
                 contest_id: id.to_string(),
                 office: office as i32,
                 title: title.to_string(),
                 scope: Some(scope),
-                options: o,
+                options,
+                runoff: office.is_single_seat(),
                 registration_key: reg_key(id)?,
                 schedule: Some(Schedule {
                     registration_opens: s.0,
                     voting_opens: s.1,
                     voting_closes: s.2,
                 }),
+                ..Default::default()
             })
         };
         // If a local test network exists (`dev/net/network.txt`), the election is bound
@@ -433,8 +491,11 @@ impl Issuer {
         .into_iter()
         .collect::<Result<_, _>>()?;
         let mut manifest = ElectionManifest {
-            format_version: 2,
-            election_id: format!("eleicoes-exemplo-{y:04}{m:02}{d:02}"),
+            format_version: teko_election::FORMAT_VERSION,
+            election_id: election_id.map_or_else(
+                || format!("eleicoes-exemplo-{y:04}{m:02}{d:02}"),
+                str::to_string,
+            ),
             title: "Eleições de exemplo (protótipo, dados fictícios)".to_string(),
             contests,
             ballot_kind: BALLOT_KIND_PUBLIC.to_string(),
@@ -504,6 +565,139 @@ impl Issuer {
             let _ = fs::remove_file(self.dir.join(stale));
         }
         Ok(())
+    }
+
+    /// The public key (SPKI) of a contest's registration authority; the key is created on first use.
+    fn registration_spki(&self, id: &str) -> Result<Vec<u8>, IssuerError> {
+        let key = match self.registration_key(id) {
+            Ok(k) => k,
+            Err(_) => {
+                let k =
+                    IssuerKey::generate(2048).map_err(|e| IssuerError::Corrupt(e.to_string()))?;
+                let der = k
+                    .to_pkcs8_der()
+                    .map_err(|e| IssuerError::Corrupt(e.to_string()))?;
+                fs::create_dir_all(self.dir.join("registration"))?;
+                write_private(&self.reg_key_path(id), &hex::encode(&der))?;
+                k
+            }
+        };
+        key.public_spki()
+            .map_err(|e| IssuerError::Corrupt(e.to_string()))
+    }
+
+    /// SIMULATED governance of a SECOND ROUND (ADR-0040): adds the contest `<parent>-2t` between the
+    /// two finalists to the election, as a manifest REVISION signed M-of-N (revisions only ADD
+    /// contests), with its own registration key and the transitions up to `VotingOpen`. Returns
+    /// the new contest id. The caller publishes the bundle on the board.
+    pub fn dev_add_runoff(
+        &self,
+        now: u64,
+        parent_id: &str,
+        finalists: &[DevCandidate; 2],
+    ) -> Result<String, IssuerError> {
+        const DAY: u64 = 86_400;
+        let corrupt = || IssuerError::Corrupt("election.bundle".into());
+        let path = self.dir.join("election.bundle");
+        let mut bundle = ElectionBundle::decode(fs::read(&path).map_err(|_| corrupt())?.as_slice())
+            .map_err(|_| corrupt())?;
+        let mut manifest =
+            ElectionManifest::decode(bundle.manifest.as_slice()).map_err(|_| corrupt())?;
+        let parent = manifest
+            .contest(parent_id)
+            .cloned()
+            .ok_or_else(|| IssuerError::InvalidRequest("pleito desconhecido".into()))?;
+        let id = format!("{parent_id}-2t");
+        if manifest.contest(&id).is_some() {
+            return Err(IssuerError::InvalidRequest(
+                "o 2º turno deste pleito já existe".into(),
+            ));
+        }
+        let gov: Vec<SigningKey> = (0..GOV_SIGNERS)
+            .map(|i| load_key(&self.dir.join(format!("gov-{i}.key"))))
+            .collect::<Result<_, _>>()?;
+        let second = Contest {
+            contest_id: id.clone(),
+            office: parent.office,
+            title: format!("{} (2º turno)", parent.title),
+            scope: parent.scope.clone(),
+            options: finalists
+                .iter()
+                .enumerate()
+                .map(|(i, c)| ElectionOption {
+                    index: i as u32,
+                    name: c.nome.clone(),
+                    number: c.numero.clone(),
+                    credential_id: c.credential_id.clone(),
+                })
+                .collect(),
+            registration_key: self.registration_spki(&id)?,
+            schedule: Some(Schedule {
+                registration_opens: now.saturating_sub(DAY),
+                voting_opens: now.saturating_sub(1),
+                voting_closes: now + 3 * DAY,
+            }),
+            runoff: false,
+            parent: parent_id.to_string(),
+        };
+        // the old transitions are bound to the OLD contests' hashes, which do not change
+        let mut transitions = bundle
+            .transitions
+            .iter()
+            .map(|t| Transition::decode(t.as_slice()))
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|_| corrupt())?;
+        let policy = teko_election::GovernancePolicy::new(
+            self.trust()?.gov_signers.clone(),
+            self.trust()?.gov_threshold,
+        )
+        .map_err(|_| IssuerError::Corrupt("trust.txt (governança)".into()))?;
+        let status = replay(&policy, &manifest, &transitions).map_err(|_| corrupt())?;
+        manifest.revision += 1;
+        manifest.contests.push(second.clone());
+        manifest.signatures = [0usize, 1]
+            .iter()
+            .map(|i| sign_election_manifest(&gov[*i], &manifest))
+            .collect();
+        let s = second.schedule.clone().unwrap_or_default();
+        let steps = [
+            (
+                Phase::Draft,
+                Phase::CandidatesPublished,
+                s.registration_opens.saturating_sub(DAY / 2),
+            ),
+            (
+                Phase::CandidatesPublished,
+                Phase::RegistrationOpen,
+                s.registration_opens,
+            ),
+            (Phase::RegistrationOpen, Phase::VotingOpen, s.voting_opens),
+        ];
+        for (seq, (from, to, at)) in (status.seq + 1..).zip(steps) {
+            let mut t = Transition {
+                election_id: manifest.election_id.clone(),
+                contest_id: id.clone(),
+                contest_hash: contest_hash(&second).to_vec(),
+                from_phase: from as i32,
+                to_phase: to as i32,
+                seq,
+                at,
+                reason: String::new(),
+                signatures: Vec::new(),
+            };
+            t.signatures = [1usize, 2]
+                .iter()
+                .map(|k| sign_transition(&gov[*k], &t))
+                .collect();
+            transitions.push(t);
+        }
+        // the whole history must still replay with the revision
+        replay(&policy, &manifest, &transitions)
+            .map_err(|_| IssuerError::Corrupt("o 2º turno foi recusado pela governança".into()))?;
+        bundle.manifest = manifest.encode_to_vec();
+        bundle.transitions = transitions.iter().map(|t| t.encode_to_vec()).collect();
+        fs::write(&path, bundle.encode_to_vec())?;
+        Ok(id)
     }
 
     fn reg_key_path(&self, contest_id: &str) -> PathBuf {
@@ -873,6 +1067,114 @@ mod tests {
         assert!(
             verify_attestation(&trust, b"0123456789abcdef", 1, 0, &[f.batch_cert], &sig).is_ok()
         );
+        let _ = fs::remove_dir_all(issuer.dir());
+    }
+
+    #[test]
+    fn candidates_from_the_chain_replace_the_example_list_and_bind_the_credential() {
+        let issuer = Issuer::open(scratch_dir("cands"));
+        issuer.dev_setup().unwrap();
+        let mut cands = DevCandidates::new();
+        cands.insert(
+            "governador-sp".into(),
+            vec![
+                DevCandidate {
+                    credential_id: vec![1; 32],
+                    numero: "13".into(),
+                    nome: "Ana Souza".into(),
+                },
+                DevCandidate {
+                    credential_id: vec![2; 32],
+                    numero: "22".into(),
+                    nome: "Beto Lima".into(),
+                },
+            ],
+        );
+        issuer
+            .dev_election_with(1_900_000_000, Some("geral-2026"), &cands)
+            .unwrap();
+        let bytes = fs::read(issuer.dir().join("election.bundle")).unwrap();
+        let b = ElectionBundle::decode(bytes.as_slice()).unwrap();
+        let m = ElectionManifest::decode(b.manifest.as_slice()).unwrap();
+        assert_eq!(m.election_id, "geral-2026");
+        let sp = m.contest("governador-sp").unwrap();
+        assert_eq!(sp.options.len(), 2);
+        assert_eq!(sp.options[1].name, "Beto Lima");
+        assert_eq!(sp.options[1].number, "22");
+        assert_eq!(sp.options[1].credential_id, vec![2; 32]);
+        assert!(sp.runoff, "a governor admits a second round");
+        // a contest with no candidates from the chain keeps the example list (no credential)
+        let rj = m.contest("governador-rj").unwrap();
+        assert!(rj.options.iter().all(|o| o.credential_id.is_empty()));
+        // the plan names every contest with the same calendar
+        let plan = dev_contest_plan(1_900_000_000);
+        assert_eq!(plan.len(), m.contests.len());
+        for p in &plan {
+            let c = m.contest(p.id).unwrap();
+            assert_eq!(c.schedule.as_ref().unwrap().voting_closes, p.voting_closes);
+        }
+        let _ = fs::remove_dir_all(issuer.dir());
+    }
+
+    #[test]
+    fn a_second_round_is_a_signed_revision_that_adds_a_contest_with_the_two_finalists() {
+        let issuer = Issuer::open(scratch_dir("runoff"));
+        let trust = issuer.dev_setup().unwrap();
+        let now = 1_900_000_000;
+        issuer.dev_election(now).unwrap();
+        let f = |n: u8, num: &str, nome: &str| DevCandidate {
+            credential_id: vec![n; 32],
+            numero: num.into(),
+            nome: nome.into(),
+        };
+        let id = issuer
+            .dev_add_runoff(
+                now,
+                "governador-sp",
+                &[f(1, "13", "Ana"), f(2, "22", "Beto")],
+            )
+            .unwrap();
+        assert_eq!(id, "governador-sp-2t");
+        // asking twice, or for an unknown contest, is refused
+        assert!(
+            issuer
+                .dev_add_runoff(
+                    now,
+                    "governador-sp",
+                    &[f(1, "13", "Ana"), f(2, "22", "Beto")]
+                )
+                .is_err()
+        );
+        assert!(
+            issuer
+                .dev_add_runoff(now, "nao-existe", &[f(1, "13", "Ana"), f(2, "22", "Beto")])
+                .is_err()
+        );
+        let b = ElectionBundle::decode(
+            fs::read(issuer.dir().join("election.bundle"))
+                .unwrap()
+                .as_slice(),
+        )
+        .unwrap();
+        let m = ElectionManifest::decode(b.manifest.as_slice()).unwrap();
+        assert_eq!(m.revision, 2);
+        let policy =
+            teko_election::GovernancePolicy::new(trust.gov_signers.clone(), trust.gov_threshold)
+                .unwrap();
+        teko_election::verify_manifest(&policy, &m).unwrap();
+        let second = m.contest(&id).unwrap();
+        assert_eq!(second.parent, "governador-sp");
+        assert_eq!(second.options.len(), 2);
+        assert!(!second.runoff);
+        // the whole history replays and the second round is OPEN for voting
+        let transitions: Vec<Transition> = b
+            .transitions
+            .iter()
+            .map(|t| Transition::decode(t.as_slice()).unwrap())
+            .collect();
+        let status = replay(&policy, &m, &transitions).unwrap();
+        assert_eq!(status.phase_of(&id), Some(Phase::VotingOpen));
+        assert_eq!(status.phase_of("governador-sp"), Some(Phase::VotingOpen));
         let _ = fs::remove_dir_all(issuer.dir());
     }
 }

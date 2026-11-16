@@ -1,9 +1,14 @@
 use prost::Message;
 use teko_ledger::{Ctx, Ledger, Module, ModuleError};
 
+use teko_attestation::SignerSignature;
+use teko_crypto::{tagged_hash, tags};
+use teko_election::{ElectionOutcome, Office, OutcomeKind, ScopeLevel, count_outcome_signers};
+
+use crate::candidate::{Cargo, parse_candidate};
 use crate::types::{
-    CredRec, Op, ProposeOp, STATE_APPROVED, STATE_PROPOSED, STATE_REVOKED, STATE_VETOED, Status,
-    TypeRec, VoteOp,
+    ClaimElectedOp, CredRec, Op, ProposeOp, STATE_APPROVED, STATE_PROPOSED, STATE_REVOKED,
+    STATE_SUPERSEDED, STATE_VETOED, Status, TypeRec, VoteOp, VoteSet,
 };
 
 /// Module id of the credentials module in `Tx::module`.
@@ -58,6 +63,57 @@ pub fn public_commitment(claims: &[u8]) -> [u8; 32] {
     teko_crypto::ledger::cred_public_commitment(claims)
 }
 
+const K_VOTE_SET: &[u8] = b"v:set";
+/// The type of the lifetime credential of an elected person (ADR-0040).
+pub const ELECTED_TYPE: &str = "eleito";
+/// The type candidates hold.
+pub const CANDIDATE_TYPE: &str = "candidato";
+
+/// The institutions of the vote chain whose certified outcomes this ledger accepts (ADR-0040),
+/// fixed at genesis (rotating the set is PENDING).
+pub fn genesis_vote_set(
+    ledger: &mut Ledger,
+    chain_id: &str,
+    validators: &[Vec<u8>],
+) -> Result<(), String> {
+    if chain_id.is_empty() || validators.is_empty() || validators.len() > 64 {
+        return Err("invalid vote chain institutions".into());
+    }
+    for (i, v) in validators.iter().enumerate() {
+        if v.len() != 33 && v.len() != 65 {
+            return Err("invalid institution key".into());
+        }
+        if validators.iter().take(i).any(|o| o == v) {
+            return Err("duplicate institution".into());
+        }
+    }
+    let rec = VoteSet {
+        chain_id: chain_id.into(),
+        validators: validators.to_vec(),
+    };
+    ledger
+        .genesis_put(CREDENTIALS_MODULE, K_VOTE_SET, rec.encode_to_vec())
+        .map_err(|e| format!("{e:?}"))
+}
+
+/// Creates a SYSTEM credential type (no organ): its credentials come from the module's own rules.
+pub fn genesis_system_type(ledger: &mut Ledger, ctype: &[u8], public: bool) -> Result<(), String> {
+    if ctype.is_empty() || ctype.len() > MAX_TYPE {
+        return Err("invalid credential type name".into());
+    }
+    let rec = TypeRec {
+        members: Vec::new(),
+        threshold: 0,
+        contest_secs: 0,
+        validity_secs: 0,
+        public,
+        system: true,
+    };
+    ledger
+        .genesis_put(CREDENTIALS_MODULE, &k_type(ctype), rec.encode_to_vec())
+        .map_err(|e| format!("{e:?}"))
+}
+
 /// Creates a credential type (an issuing organ) at genesis.
 pub fn genesis_type(
     ledger: &mut Ledger,
@@ -78,6 +134,7 @@ pub fn genesis_type(
         contest_secs,
         validity_secs,
         public,
+        system: false,
     };
     ledger
         .genesis_put(CREDENTIALS_MODULE, &k_type(ctype), rec.encode_to_vec())
@@ -289,6 +346,177 @@ fn revoke(ctx: &mut Ctx<'_, '_>, op: VoteOp) -> Result<(), ModuleError> {
     Ok(())
 }
 
+fn office_name(o: Office) -> Option<&'static str> {
+    match o {
+        Office::President => Some(Cargo::Presidente.name()),
+        Office::Governor => Some(Cargo::Governador.name()),
+        Office::Mayor => Some(Cargo::Prefeito.name()),
+        _ => None,
+    }
+}
+
+/// Anyone can carry the result of a contest here (ADR-0040). The ledger believes it because MORE
+/// THAN 2/3 of the vote chain's institutions (keys fixed at genesis) signed the very same outcome:
+/// the same trust as the vote chain's own consensus, with no change to its blocks. The winner gets
+/// a lifetime `eleito` credential and the previous holder of the same office and jurisdiction is
+/// SUPERSEDED (kept in the history).
+fn claim_elected(ctx: &mut Ctx<'_, '_>, op: ClaimElectedOp) -> Result<(), ModuleError> {
+    let set = ctx
+        .get(K_VOTE_SET)
+        .and_then(|raw| VoteSet::decode(raw.as_slice()).ok())
+        .ok_or_else(|| err("this network has no vote chain institutions"))?;
+    let t = load_type(ctx, ELECTED_TYPE.as_bytes())?;
+    if !t.system {
+        return Err(err("the elected type is not a system type"));
+    }
+    if op.outcome.len() > 4_096 || op.signers.len() != op.signatures.len() || op.signers.len() > 64
+    {
+        return Err(err("malformed claim"));
+    }
+    let outcome =
+        ElectionOutcome::decode(op.outcome.as_slice()).map_err(|_| err("malformed outcome"))?;
+    // canonical bytes: what the institutions signed is exactly what was decoded
+    if outcome.encode_to_vec() != op.outcome {
+        return Err(err("non-canonical outcome"));
+    }
+    if outcome.vote_chain_id != set.chain_id {
+        return Err(err("the outcome is from another vote chain"));
+    }
+    if outcome.kind() != OutcomeKind::Elected {
+        return Err(err("only a decided contest elects someone"));
+    }
+    let sigs: Vec<SignerSignature> = op
+        .signers
+        .iter()
+        .zip(&op.signatures)
+        .map(|(signer, signature)| SignerSignature {
+            signer: signer.clone(),
+            signature: signature.clone(),
+        })
+        .collect();
+    let signed = count_outcome_signers(&set.validators, &outcome, &sigs);
+    if signed * 3 <= set.validators.len() * 2 {
+        return Err(err(
+            "more than 2/3 of the institutions must sign the outcome",
+        ));
+    }
+    // the office and the jurisdiction agree (the ledger re-checks what the manifest enforced)
+    let office = outcome.office();
+    let cargo =
+        office_name(office).ok_or_else(|| err("this office is not elected automatically"))?;
+    let scope = outcome
+        .scope
+        .clone()
+        .ok_or_else(|| err("outcome without jurisdiction"))?;
+    if office.required_level() != Some(scope.level()) {
+        return Err(err("office and jurisdiction do not match"));
+    }
+    // one claim per contest
+    let marker = {
+        let mut k = b"o:".to_vec();
+        k.extend_from_slice(&tagged_hash(
+            tags::CRED_ID,
+            &[
+                outcome.election_id.as_bytes(),
+                outcome.contest_id.as_bytes(),
+                &outcome.contest_hash,
+            ],
+        ));
+        k
+    };
+    if ctx.get(&marker).is_some() {
+        return Err(err("this contest's result was already claimed"));
+    }
+    // the winner is a candidate the chain knows: its holder is who is elected
+    let cand = load_cred(
+        ctx,
+        CANDIDATE_TYPE.as_bytes(),
+        &outcome.winner_credential_id,
+    )?;
+    if matches!(cand.state, STATE_VETOED | STATE_REVOKED) {
+        return Err(err("the winner's candidacy was vetoed or revoked"));
+    }
+    let c =
+        parse_candidate(&cand.claims).ok_or_else(|| err("the winner's candidacy is not valid"))?;
+    let scope_code = match scope.level() {
+        ScopeLevel::National => "",
+        _ => scope.code.as_str(),
+    };
+    if c.cargo.name() != cargo || c.scope_code() != scope_code || c.eleicao != outcome.election_id {
+        return Err(err("the winner's candidacy is not for this contest"));
+    }
+    let votes = outcome
+        .totals
+        .get(outcome.winner_option as usize)
+        .copied()
+        .ok_or_else(|| err("winner outside the ballot"))?;
+    let mut parts = vec![format!("cargo={cargo}")];
+    if office == Office::Governor {
+        parts.push(format!("uf={scope_code}"));
+    }
+    if office == Office::Mayor {
+        parts.push(format!("municipio={scope_code}"));
+    }
+    parts.push(format!("numero={}", c.numero));
+    parts.push(format!("nome={}", c.nome));
+    parts.push(format!("eleicao={}", outcome.election_id));
+    parts.push(format!("pleito={}", outcome.contest_id));
+    parts.push(format!("votos={votes}"));
+    parts.push(format!(
+        "candidatura={}",
+        teko_crypto::hex::encode(&outcome.winner_credential_id)
+    ));
+    let claims = parts.join(";").into_bytes();
+    let commitment = public_commitment(&claims);
+    let id = credential_id(
+        ELECTED_TYPE.as_bytes(),
+        &cand.subject,
+        &commitment,
+        &claims,
+        0,
+    );
+    if ctx.get(&k_cred(ELECTED_TYPE.as_bytes(), &id)).is_some() {
+        return Err(err("this credential already exists"));
+    }
+    // the previous holder of this office and jurisdiction is superseded
+    let slot = {
+        let mut k = b"e:".to_vec();
+        k.push(office as u8);
+        k.push(scope.level() as u8);
+        k.extend_from_slice(scope_code.as_bytes());
+        k
+    };
+    if let Some(old_id) = ctx.get(&slot)
+        && let Some(raw) = ctx.get(&k_cred(ELECTED_TYPE.as_bytes(), &old_id))
+        && let Ok(mut old) = CredRec::decode(raw.as_slice())
+    {
+        old.state = STATE_SUPERSEDED;
+        old.reason = format!("sucedido por {}", teko_crypto::hex::encode(&id[..8]));
+        save(ctx, ELECTED_TYPE.as_bytes(), &old_id, &old);
+        ctx.emit("superseded", old_id);
+    }
+    let rec = CredRec {
+        subject: cand.subject.clone(),
+        commitment: commitment.to_vec(),
+        claims,
+        valid_until: 0,
+        proposed_at: ctx.time,
+        approved_at: ctx.time,
+        active_at: ctx.time,
+        state: STATE_APPROVED,
+        ..Default::default()
+    };
+    save(ctx, ELECTED_TYPE.as_bytes(), &id, &rec);
+    ctx.set(
+        &k_subject(&cand.subject, ELECTED_TYPE.as_bytes(), &id),
+        vec![1],
+    );
+    ctx.set(&slot, id.to_vec());
+    ctx.set(&marker, vec![1]);
+    ctx.emit("elected", id.to_vec());
+    Ok(())
+}
+
 impl Module for CredentialsModule {
     fn id(&self) -> u32 {
         CREDENTIALS_MODULE
@@ -300,6 +528,7 @@ impl Module for CredentialsModule {
             Op::Approve(op) => approve(ctx, op),
             Op::Veto(op) => veto(ctx, op),
             Op::Revoke(op) => revoke(ctx, op),
+            Op::ClaimElected(op) => claim_elected(ctx, op),
         }
     }
 }

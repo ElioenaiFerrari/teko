@@ -32,6 +32,9 @@ teko-ballot-crypto.workspace = true
 rand.workspace = true
 teko-chain.workspace = true
 teko-node.workspace = true
+teko-credentials.workspace = true
+teko-ledger.workspace = true
+teko-assets.workspace = true
 issuer-cli = { workspace = true, optional = true }
 prost.workspace = true
 thiserror = { workspace = true, features = ["std"] }

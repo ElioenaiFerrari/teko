@@ -20,6 +20,20 @@ pub struct TypeRec {
     /// commitment, the claims stay with the holder.
     #[prost(bool, tag = "5")]
     pub public: bool,
+    /// A SYSTEM type has no organ: its credentials are created by the module's own rules (the
+    /// `eleito` credential, from an outcome certified by the vote chain's institutions, ADR-0040).
+    #[prost(bool, tag = "6")]
+    pub system: bool,
+}
+
+/// The institutions of the VOTE chain whose signed outcomes this ledger accepts (ADR-0040).
+#[derive(Clone, PartialEq, Eq, Message)]
+pub struct VoteSet {
+    #[prost(string, tag = "1")]
+    pub chain_id: String,
+    /// SEC1 consensus keys, equal power: more than 2/3 must sign an outcome.
+    #[prost(bytes = "vec", repeated, tag = "2")]
+    pub validators: Vec<Vec<u8>>,
 }
 
 #[derive(Clone, PartialEq, Eq, Message)]
@@ -65,6 +79,7 @@ pub(crate) const STATE_PROPOSED: u32 = 0;
 pub(crate) const STATE_APPROVED: u32 = 1;
 pub(crate) const STATE_VETOED: u32 = 2;
 pub(crate) const STATE_REVOKED: u32 = 3;
+pub(crate) const STATE_SUPERSEDED: u32 = 4;
 
 /// What a credential is worth at a given block time.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -78,6 +93,8 @@ pub enum Status {
     Expired,
     Vetoed,
     Revoked,
+    /// Replaced by a newer `eleito` of the same office and jurisdiction (the history stays).
+    Superseded,
 }
 
 impl CredRec {
@@ -85,6 +102,7 @@ impl CredRec {
         match self.state {
             STATE_VETOED => Status::Vetoed,
             STATE_REVOKED => Status::Revoked,
+            STATE_SUPERSEDED => Status::Superseded,
             STATE_APPROVED => {
                 if self.valid_until != 0 && time >= self.valid_until {
                     Status::Expired
@@ -128,12 +146,25 @@ pub struct VoteOp {
     pub reason: String,
 }
 
+/// Anyone claims the credential of the contest's winner: the outcome (an encoded
+/// `ElectionOutcome`) and the signatures of the vote chain's institutions.
+#[derive(Clone, PartialEq, Eq, Message)]
+pub struct ClaimElectedOp {
+    #[prost(bytes = "vec", tag = "1")]
+    pub outcome: Vec<u8>,
+    #[prost(bytes = "vec", repeated, tag = "2")]
+    pub signers: Vec<Vec<u8>>,
+    #[prost(bytes = "vec", repeated, tag = "3")]
+    pub signatures: Vec<Vec<u8>>,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Op {
     Propose(ProposeOp),
     Approve(VoteOp),
     Veto(VoteOp),
     Revoke(VoteOp),
+    ClaimElected(ClaimElectedOp),
 }
 
 impl Op {
@@ -143,6 +174,7 @@ impl Op {
             Op::Approve(m) => (2, m.encode_to_vec()),
             Op::Veto(m) => (3, m.encode_to_vec()),
             Op::Revoke(m) => (4, m.encode_to_vec()),
+            Op::ClaimElected(m) => (5, m.encode_to_vec()),
         };
         let mut out = vec![tag];
         out.extend_from_slice(&body);
@@ -157,6 +189,7 @@ impl Op {
             2 => Op::Approve(VoteOp::decode(body).ok()?),
             3 => Op::Veto(VoteOp::decode(body).ok()?),
             4 => Op::Revoke(VoteOp::decode(body).ok()?),
+            5 => Op::ClaimElected(ClaimElectedOp::decode(body).ok()?),
             _ => return None,
         };
         (op.encode() == bytes).then_some(op)

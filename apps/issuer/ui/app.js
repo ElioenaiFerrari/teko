@@ -37,6 +37,8 @@
     civicFile: '',
     civicForm: { name: '', birth: '', nat: 'BR', uf: 'SP', mun: '3550308', reg: '', days: 3650 },
     delivered: '',
+    candForm: { eleicao: 'geral-2026', days: 120, cargo: 'governador', uf: 'SP', mun: '', numero: '', nome: '', holder: '', batch: '' },
+    candResult: [],
   };
 
   const PROMPTS = {
@@ -53,6 +55,7 @@
     expired: ['Expirada', 'bad'],
     vetoed: ['Vetada', 'bad'],
     revoked: ['Revogada', 'bad'],
+    superseded: ['Sucedida', 'warn'],
   };
   const chip = (t, k = '') => `<span class="chip ${k ? `chip--${k}` : ''}">${esc(t)}</span>`;
 
@@ -140,6 +143,24 @@
       try { S.delivered = await call('civic_deliver', { id: el.dataset.id }); toast('Pacote entregue ao titular (dev/inbox).', 'ok'); }
       catch (e) { toast(asErr(e).message); }
       render();
+    },
+    async candissue() {
+      const f = { eleicao: $('#k-eleicao').value.trim(), days: Number($('#k-days').value), cargo: $('#k-cargo').value, uf: $('#k-uf').value.trim(), mun: $('#k-mun').value.trim(), numero: $('#k-numero').value.trim(), nome: $('#k-nome').value.trim(), holder: $('#k-holder').value.trim(), batch: $('#k-batch').value };
+      S.candForm = f;
+      // one candidate from the fields, plus one per line of the batch: cargo|uf|municipio|numero|nome|chave
+      const items = [];
+      if (f.nome || f.numero || f.holder) items.push({ cargo: f.cargo, uf: f.uf, municipio: f.mun, numero: f.numero, nome: f.nome, eleicao: f.eleicao, holder_key: f.holder, valid_days: f.days });
+      for (const line of f.batch.split('\n').map((l) => l.trim()).filter(Boolean)) {
+        const [cargo, uf, municipio, numero, nome, holder] = line.split('|').map((x) => (x || '').trim());
+        items.push({ cargo, uf, municipio, numero, nome, eleicao: f.eleicao, holder_key: holder, valid_days: f.days });
+      }
+      if (!items.length) { toast('Preencha uma candidatura ou o lote.'); return; }
+      try {
+        S.candResult = await call('candidacies_issue', { items });
+        const ok = S.candResult.filter((r) => !r.error).length;
+        toast(`${ok} de ${S.candResult.length} candidaturas propostas. Faltam as aprovações dos outros membros.`, ok ? 'ok' : 'bad');
+      } catch (e) { toast(asErr(e).message); }
+      await refreshOverview(); render();
     },
     filter(el) { S.filter = el.dataset.id; render(); },
     async copy(el) { try { await navigator.clipboard.writeText($(el.dataset.target).textContent); toast('Copiado.', 'ok'); } catch { toast('Não consegui copiar.'); } },
@@ -242,6 +263,28 @@
       </div></article>${res}${del}`;
   }
 
+  function vCand() {
+    const g = gate();
+    const org = myOrgs().find((o) => o.ctype === 'candidato');
+    if (g || !org) return `${head('Candidaturas', 'Emitir candidaturas', '')}${g || callout('info', 'Sem órgão.', 'Sua carteira não é membro do órgão de candidaturas (tipo <code>candidato</code>).')}`;
+    const f = S.candForm;
+    const res = S.candResult.length ? `<article class="card"><h3>Resultado</h3>${S.candResult.map((r) => `<p>${r.error ? chip('erro', 'bad') : chip('proposta', 'ok')} <strong>${esc(r.numero)} · ${esc(r.nome)}</strong> ${r.error ? esc(r.error) : `<span class="mono muted">${esc(short(r.id, 10, 6))}</span>`}</p>`).join('')}</article>` : '';
+    return `${head('Candidaturas', 'Emitir candidaturas', 'Cada candidatura é uma credencial pública na chain. Os candidatos da eleição são as candidaturas ATIVAS do cargo, da jurisdição e da eleição. A validade é até o fim da eleição mais os dias de apuração (no máximo ' + Math.floor(org.validity_secs / 86400) + ' dias).')}
+      <article class="card"><div class="issue-form">
+        <label class="field"><span>Eleição (id)</span><input class="input mono" id="k-eleicao" value="${esc(f.eleicao)}"></label>
+        <label class="field"><span>Validade (dias a partir de agora)</span><input class="input" id="k-days" type="number" min="1" value="${f.days}"></label>
+        <label class="field"><span>Cargo</span><select class="input" id="k-cargo">${['presidente', 'governador', 'prefeito'].map((c) => `<option ${c === f.cargo ? 'selected' : ''}>${c}</option>`).join('')}</select></label>
+        <label class="field"><span>UF (governador e prefeito)</span><input class="input" id="k-uf" maxlength="2" value="${esc(f.uf)}"></label>
+        <label class="field"><span>Município IBGE (prefeito)</span><input class="input" id="k-mun" maxlength="7" value="${esc(f.mun)}"></label>
+        <label class="field"><span>Número</span><input class="input" id="k-numero" value="${esc(f.numero)}"></label>
+        <label class="field"><span>Nome</span><input class="input" id="k-nome" value="${esc(f.nome)}"></label>
+        <label class="field"><span>Chave de credencial do candidato (hex)</span><input class="input mono" id="k-holder" value="${esc(f.holder)}" autocomplete="off" spellcheck="false"></label>
+        <label class="field"><span>Lote (uma por linha: cargo|uf|município|número|nome|chave)</span><textarea class="input mono" id="k-batch" rows="4" placeholder="governador|SP||13|Ana Souza|02ab…">${esc(f.batch)}</textarea></label>
+        ${callout('info', 'Cada candidatura é um pedido no dispositivo.', 'O dispositivo mostra o cargo, os dados e a validade, e pede o botão para cada uma. Em teste: <code>make candidates</code> emite candidaturas de exemplo.')}
+        <p><button class="btn" data-act="candissue">Propor no dispositivo</button></p>
+      </div></article>${res}`;
+  }
+
   function credRow(c, now) {
     const [label, kind] = STATUS[c.status] || [c.status, ''];
     const when = c.status === 'pending' ? ` · vale a partir de ${fmtDate(c.active_at)} (${fmtLeft(c.active_at, now)})`
@@ -284,7 +327,7 @@
     $('#devcard').innerHTML = `<div class="devcard__row"><div><div class="devcard__title">${ok ? 'Dispositivo conectado' : 'Sem dispositivo'}</div>
       <div class="devcard__sub">${ok ? (d.status.locked ? 'bloqueado' : 'desbloqueado') : esc((d && d.error) || 'procurando…')}</div></div></div>
       <div class="devcard__chips">${ok ? chip(d.status.wallet_ready ? 'Carteira pronta' : 'Sem carteira', d.status.wallet_ready ? 'ok' : 'warn') : ''}</div>`;
-    const items = [['orgs', 'Órgãos'], ['civic', 'ID cívico'], ['issue', 'Emitir'], ['creds', 'Credenciais']];
+    const items = [['orgs', 'Órgãos'], ['civic', 'ID cívico'], ['cand', 'Candidaturas'], ['issue', 'Emitir'], ['creds', 'Credenciais']];
     $('#nav').innerHTML = items.map(([id, l]) => `<button class="nav__item" data-act="nav" data-id="${id}" ${S.route === id ? 'aria-current="page"' : ''}><span>${l}</span></button>`).join('');
     $('#addr').textContent = d && d.addr ? `emulador ${d.addr}` : '';
   }
@@ -300,7 +343,7 @@
 
   function render() {
     renderDevice();
-    const views = { orgs: vOrgs, civic: vCivic, issue: vIssue, creds: vCreds };
+    const views = { orgs: vOrgs, civic: vCivic, cand: vCand, issue: vIssue, creds: vCreds };
     const focus = document.activeElement && document.activeElement.id;
     $('#main').innerHTML = `<div class="view">${(views[S.route] || vOrgs)()}</div>`;
     if (focus) { const e = document.getElementById(focus); if (e) e.focus(); }

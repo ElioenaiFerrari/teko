@@ -158,7 +158,7 @@ pub const DEVNET_CRED_TYPES: [(&str, bool, u64, u64); 4] = [
     ("civic", false, 1_200, 315_360_000),
     ("cnh-a", false, 1_200, 315_360_000),
     ("cnh-b", false, 1_200, 315_360_000),
-    ("candidato", true, 1_200, 31_536_000),
+    ("candidato", true, 120, 31_536_000),
 ];
 
 /// File of the simulated organ member `i` of a credential type (TEST key).
@@ -252,8 +252,18 @@ pub fn init_economy_with_issuer(
             contest_secs,
             validity_secs,
             public,
+            ..Default::default()
         });
     }
+    // the elected: a SYSTEM credential (no organ) created from an outcome that more than 2/3 of the
+    // vote chain's institutions signed (ADR-0040)
+    g.credtypes.push(teko_economy::CredTypeSpec {
+        name: "eleito".into(),
+        public: true,
+        system: true,
+        ..Default::default()
+    });
+    g.vote_validators = net.profile.validators.clone();
     fs::write(&path, g.to_text())?;
     sync_civic_trust(dir, &g)?;
     Ok(g)

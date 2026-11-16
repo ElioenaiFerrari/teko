@@ -1,5 +1,7 @@
 # ADR-0034 — Rede de votos em BFT institucional e economia sem blocos vazios
 
+> **Complemento (ADR-0040):** a chain de votos continua só **ordenando**; o resultado de cada pleito é **assinado por cada instituição** e publicado no quadro (`EntryKind::OUTCOME`), e a economia o aceita com **mais de 2/3** das assinaturas.
+
 **Status:** Aceito provisoriamente (2026-11-15, dono do produto: "faça tudo o que você recomendou") · **Decisão:** poder igual e conjunto fixo no genesis; o validador só ordena; tolerância de relógio de 60 s · Atualiza o [ADR-0014](0014-quadro-de-avisos-e-blockchain.md) (quadro de avisos em PoA) para a rede de **votos**; não muda o log Merkle, o `Tallier` nem as cédulas cifradas ([ADR-0019](0019-cedulas-cifradas-elgamal-de-limiar.md)).
 
 ## Contexto

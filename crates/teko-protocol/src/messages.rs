@@ -573,6 +573,12 @@ pub struct ContestInfo {
     /// The contest requires an anonymous registration before voting (ADR-0008).
     #[prost(bool, tag = "11")]
     pub registration_required: bool,
+    /// The ballot number of each option (empty when it has none), in ballot order (ADR-0040).
+    #[prost(string, repeated, tag = "12")]
+    pub option_numbers: Vec<String>,
+    /// This is a SECOND ROUND (the first-round contest it continues), or empty.
+    #[prost(string, tag = "13")]
+    pub parent: String,
 }
 #[derive(Clone, PartialEq, prost::Message)]
 pub struct ElectionLoaded {

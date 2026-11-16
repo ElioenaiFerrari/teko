@@ -87,6 +87,9 @@ make docs-check                        # confere links, imagens e crates no READ
 make fund ADDR=tekow1… AMOUNT=1000    # TEKO de TESTE na carteira (devnet local; decimais ok; 1 TEKO = 1.000.000 ypy, ADR-0029)
 make diagrams                         # regenera os diagramas (docs/diagrams)
 make devnet FOUNDER=tekow1… [NODES=4]  # (1ª vez; NODES = instituições, padrão 4) FOUNDER = sua carteira: recebe as recompensas do fundador (ADR-0028)
+make candidates                        # SIMULA o órgão emitindo candidaturas (ADR-0040); só dev
+make claim                             # resultados assinados pelas instituições -> credencial vitalícia `eleito`
+make runoff CONTEST=governador-sp      # abre o 2º turno
 make issuer                            # app Emissor: órgãos emitem credenciais na chain (ADR-0037)
 make devnet-cosign                     # SIMULA membros de teste dos órgãos aprovando credenciais; só dev
 make devnet-veto CLASS=imovel ASSET=<id>  # SIMULA o órgão vetando uma negociação de bem pendente (ADR-0036); só dev

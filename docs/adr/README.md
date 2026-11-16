@@ -44,5 +44,6 @@ Regra: decisões de produto/segurança só passam a `Aceito` pela aprovação do
 | [0037](0037-credenciais-na-chain-emitidas-por-orgaos.md) | Credenciais na chain, emitidas por órgãos com janela de contestação e validade | Aceito provisoriamente (etapa A implementada) | confirmar |
 | [0038](0038-id-civico-como-credencial-na-chain.md) | ID cívico como credencial na chain, emitida pelo órgão | Aceito provisoriamente (etapa D implementada); supera em parte o 0005 | confirmar |
 | [0039](0039-recuperar-tudo-pela-carteira.md) | Recuperar pela carteira: chaves de credencial da seed e atributos cifrados na chain | Aceito provisoriamente (etapa E implementada); emenda 0037 e 0023 | confirmar |
+| [0040](0040-candidatos-por-credencial-resultado-certificado-e-eleito.md) | Candidatos por credencial, resultado certificado, 2º turno e a credencial `eleito` | Aceito provisoriamente (etapa B implementada) | confirmar |
 | [0031](0031-explorador-da-chain.md) | Explorador da chain: somente leitura, verificado no cliente | Aceito (controles de dev pendentes) | decidir faucet/controles de dev |
 | [0030](0030-slash-automatico-e-bloqueio-persistido.md) | Penalidade automática e lock do BFT persistido | Aceito | — |

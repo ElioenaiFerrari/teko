@@ -49,4 +49,4 @@ make suite                                      # Credenciais: sua chave por tip
 ```
 
 ## Limites honestos
-Sem validade jurídica; sem auditoria; só devnet. A **credencial de identidade cívica** é o tipo `civic` ([fluxo 03](03-credentials-and-reissue.md), [ADR-0038](../adr/0038-id-civico-como-credencial-na-chain.md)). As **candidaturas na eleição** e o **registro de eleitos** são a etapa B (planejado).
+Sem validade jurídica; sem auditoria; só devnet. A **credencial de identidade cívica** é o tipo `civic` ([fluxo 03](03-credentials-and-reissue.md), [ADR-0038](../adr/0038-id-civico-como-credencial-na-chain.md)). As **candidaturas** (tipo público `candidato`) e o **eleito** (tipo de sistema `eleito`, vitalício, criado do resultado certificado pelas instituições) estão no [ADR-0040](../adr/0040-candidatos-por-credencial-resultado-certificado-e-eleito.md) e no [fluxo 07](07-tally-and-results.md).

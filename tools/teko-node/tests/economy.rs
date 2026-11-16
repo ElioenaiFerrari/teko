@@ -609,8 +609,9 @@ fn a_trade_between_wallets_waits_in_the_veto_window_in_real_nodes_and_completes_
     std::thread::sleep(Duration::from_secs(1));
     assert_eq!(heights(&c)[0].unwrap(), h);
 
-    // after the window (block time moves with the real clock) anyone completes it
-    std::thread::sleep(Duration::from_secs(9));
+    // after the window (block time moves with the real clock) anyone completes it; a loaded machine
+    // runs block time a little behind, so wait with margin
+    std::thread::sleep(Duration::from_secs(13));
     devnet::finalize_pending(&mut world, &cast, "veiculo", &id).unwrap();
     wait("the trade is final on the verified chain", 30, || {
         pending(&net).is_ok_and(|(o, owner)| o.is_none() && owner == buyer_addr.to_vec())

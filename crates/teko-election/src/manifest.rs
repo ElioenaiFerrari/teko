@@ -15,7 +15,9 @@ use crate::text::sanitize_text;
 /// product owner decides otherwise; kept as data so the format can evolve.
 pub const BALLOT_KIND_PUBLIC: &str = "public";
 
-const FORMAT_VERSION: u32 = 2;
+/// 3: options may reference the candidate's on-chain credential, contests may allow or be a runoff
+/// (ADR-0040). Firmware of version 2 re-encodes without the new fields and refuses the signature.
+pub const FORMAT_VERSION: u32 = 3;
 const MAX_OPTIONS: usize = 64;
 const MAX_CONTESTS: usize = 32;
 
@@ -63,6 +65,12 @@ impl Office {
             Office::Other | Office::Unspecified => None,
         }
     }
+
+    /// One seat filled by majority: only these can be ELECTED automatically and have a runoff
+    /// (ADR-0040). Senator and the deputies and councillors (several seats, proportional) are PENDING.
+    pub fn is_single_seat(self) -> bool {
+        matches!(self, Office::President | Office::Governor | Office::Mayor)
+    }
 }
 
 #[derive(Clone, PartialEq, Message)]
@@ -75,6 +83,10 @@ pub struct ElectionOption {
     /// Ballot number (e.g. "13"); may be empty.
     #[prost(string, tag = "3")]
     pub number: String,
+    /// The candidate's on-chain `candidato` credential id (32 bytes), or empty (ADR-0040). The
+    /// governance signature covers it, so the option is bound to the credential.
+    #[prost(bytes = "vec", tag = "4")]
+    pub credential_id: Vec<u8>,
 }
 
 /// Unix seconds. `registration_opens < voting_opens < voting_closes`.
@@ -112,6 +124,13 @@ pub struct Contest {
     /// may vote. One key per contest, so a registration is never valid elsewhere.
     #[prost(bytes = "vec", tag = "7")]
     pub registration_key: Vec<u8>,
+    /// This contest may need a second round when nobody has an absolute majority (ADR-0040).
+    #[prost(bool, tag = "8")]
+    pub runoff: bool,
+    /// Set on a SECOND ROUND: the `contest_id` of the first-round contest it continues. A second
+    /// round has exactly the two finalists.
+    #[prost(string, tag = "9")]
+    pub parent: String,
 }
 
 impl Contest {
@@ -197,12 +216,30 @@ fn validate_contest(c: &Contest) -> Result<(), ElectionError> {
     if c.options.len() < 2 || c.options.len() > MAX_OPTIONS {
         return Err(bad("need 2..=64 options per contest"));
     }
+    // rounds (ADR-0040): only single-seat offices have a runoff; a second round has the two finalists
+    if (c.runoff || !c.parent.is_empty()) && !office.is_single_seat() {
+        return Err(bad("only a single-seat office has a runoff"));
+    }
+    if !c.parent.is_empty() {
+        if !valid_id(&c.parent) || c.parent == c.contest_id {
+            return Err(bad("invalid parent contest"));
+        }
+        if c.runoff {
+            return Err(bad("a second round has no further round"));
+        }
+        if c.options.len() != 2 {
+            return Err(bad("a second round has exactly two candidates"));
+        }
+    }
     for (i, o) in c.options.iter().enumerate() {
         if o.index as usize != i {
             return Err(bad("option indices must be contiguous from 0, in order"));
         }
         if sanitize_text(&o.name, 80).is_none() {
             return Err(bad("invalid option name"));
+        }
+        if !o.credential_id.is_empty() && o.credential_id.len() != 32 {
+            return Err(bad("option credential_id must be 32 bytes"));
         }
         if !o.number.is_empty() && sanitize_text(&o.number, 8).is_none() {
             return Err(bad("invalid option number"));
@@ -411,7 +448,7 @@ pub(crate) mod fixtures {
         GovernancePolicy::new(keys.iter().map(public_key_bytes).collect(), m).unwrap()
     }
 
-    fn options(names: &[&str], first_number: u32) -> Vec<ElectionOption> {
+    pub fn options(names: &[&str], first_number: u32) -> Vec<ElectionOption> {
         names
             .iter()
             .enumerate()
@@ -419,6 +456,7 @@ pub(crate) mod fixtures {
                 index: i as u32,
                 name: (*n).into(),
                 number: alloc::format!("{}", first_number + i as u32),
+                ..Default::default()
             })
             .collect()
     }
@@ -442,6 +480,7 @@ pub(crate) mod fixtures {
                         voting_opens: 2_000,
                         voting_closes: 3_000
                     }),
+                    ..Default::default()
                 },
                 Contest {
                     contest_id: GOVERNOR_SP.into(),
@@ -455,6 +494,7 @@ pub(crate) mod fixtures {
                         voting_opens: 2_500,
                         voting_closes: 3_500
                     }),
+                    ..Default::default()
                 },
                 Contest {
                     contest_id: MAYOR_SP.into(),
@@ -468,6 +508,7 @@ pub(crate) mod fixtures {
                         voting_opens: 4_000,
                         voting_closes: 5_000
                     }),
+                    ..Default::default()
                 },
             ],
             ballot_kind: BALLOT_KIND_PUBLIC.into(),
@@ -501,6 +542,50 @@ mod tests {
         assert_eq!(gov.option_name(1), Some("Candidata Vitória-Régia"));
         assert_eq!(gov.option_name(2), None);
         assert!(m.contest("nao-existe").is_none());
+    }
+
+    #[test]
+    fn candidates_reference_their_credentials_and_rounds_follow_the_office() {
+        // a credential id is 32 bytes (or empty), and it is covered by the contest hash
+        let mut m = manifest();
+        let before = contest_hash(&m.contests[0]);
+        m.contests[0].options[0].credential_id = alloc::vec![7; 32];
+        assert!(validate_manifest(&m).is_ok());
+        assert_ne!(before, contest_hash(&m.contests[0]));
+        m.contests[0].options[0].credential_id = alloc::vec![7; 5];
+        assert!(validate_manifest(&m).is_err());
+        // a contest that does not use the new fields keeps the hash of the old encoding
+        let plain = manifest();
+        assert_eq!(
+            contest_hash(&plain.contests[1]),
+            contest_hash(&manifest().contests[1])
+        );
+
+        // a runoff is for single-seat offices only
+        let mut m = manifest();
+        m.contests[0].runoff = true; // President
+        assert!(validate_manifest(&m).is_ok());
+        m.contests[0].office = Office::Senator as i32;
+        m.contests[0].scope = Some(Scope::state("SP"));
+        assert!(validate_manifest(&m).is_err());
+
+        // a second round: parent set, exactly the two finalists, no further round
+        let mut m = manifest();
+        let mut second = m.contests[1].clone();
+        second.contest_id = alloc::format!("{GOVERNOR_SP}-2t");
+        second.parent = GOVERNOR_SP.into();
+        assert!(validate_contest(&second).is_ok());
+        let mut three = second.clone();
+        three.options = fixtures::options(&["A", "B", "C"], 1);
+        assert!(validate_contest(&three).is_err());
+        let mut again = second.clone();
+        again.runoff = true;
+        assert!(validate_contest(&again).is_err());
+        let mut selfref = second.clone();
+        selfref.parent = second.contest_id.clone();
+        assert!(validate_contest(&selfref).is_err());
+        m.contests.push(second);
+        assert!(validate_manifest(&m).is_ok());
     }
 
     #[test]
@@ -598,6 +683,7 @@ mod tests {
                 voting_opens: 7_000,
                 voting_closes: 8_000,
             }),
+            ..Default::default()
         };
         let mut next = prev.clone();
         next.revision = 2;

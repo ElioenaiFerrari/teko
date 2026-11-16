@@ -365,3 +365,21 @@ Legenda: **P** = `proptest` (muitos casos), **U** = unitário, **E** = ponta a p
 | Bem registrado para alguém aparece no histórico dele, não só no de quem assinou | explorer: `an_asset_registered_to_someone_shows_in_their_history_not_only_the_signers` |
 | **Em nós reais:** emitir, "perder" o dispositivo, restaurar pelas 24 palavras num novo, reencontrar a credencial pela chave derivada e abrir os atributos; os outros tipos não têm nada | devnet-sim: `restoring_the_wallet_on_a_new_device_recovers_the_credentials_from_the_chain_and_opens_them` |
 
+## Candidatos, resultado certificado, 2º turno e eleito (ADR-0040)
+
+| Garantia | Teste |
+|---|---|
+| Claims da candidatura canônicos; jurisdição conforme o cargo | credentials: `candidate::tests::claims_round_trip...`, `the_jurisdiction_follows_the_office` |
+| Entram só candidaturas ativas, do cargo, jurisdição e eleição, que duram além da votação; ordenadas por número | credentials: `a_contest_takes_the_active_matching_candidates...`, `inactive_expiring_or_foreign_candidacies_do_not_enter` |
+| Número ou titular repetido recusa o pleito | credentials: `a_repeated_number_or_holder_refuses_the_contest` |
+| Manifesto v3: opção com credencial (32 bytes, coberta pelo hash), `runoff` só em vaga única, 2º turno com 2 opções | election: `candidates_reference_their_credentials_and_rounds_follow_the_office` |
+| Maioria absoluta elege; sem ela, 2º turno entre os dois mais votados; empates que a regra não resolve = sem eleito; vaga única só | election: `outcome::tests::*` (incl. proptest: nunca dois vencedores) |
+| Mais de 2/3 das instituições têm de assinar os mesmos bytes | election: `more_than_two_thirds_of_the_institutions_must_sign_the_same_bytes`; credentials: `the_winner_gets_a_lifetime_credential...`, `three_institutions_need_all_three` |
+| Assinatura sobre outros bytes, estranhos, outra chain, resultado não decidido, candidatura de outro pleito, revogada ou cargo de várias vagas: recusados | credentials: `a_signature_over_other_bytes...`, `only_a_decided_contest...`, `a_revoked_or_vetoed_candidacy...` |
+| O mesmo resultado não é reivindicado duas vezes | credentials: `the_winner_gets_a_lifetime_credential...` |
+| O eleito seguinte do mesmo cargo sucede o anterior; outro estado não interfere; reeleição cria registro novo | credentials: `the_next_elected_of_the_same_office_supersedes...`, `a_reelected_person_gets_a_new_credential...` |
+| O tipo `eleito` não tem órgão: ninguém o propõe | credentials: `the_elected_type_has_no_organ_so_nobody_can_propose_it` |
+| Gênese com as instituições da chain de votos e o tipo de sistema ida e volta | economy: `the_vote_institutions_and_the_system_type_survive_the_genesis_text_round_trip` |
+| Eleição com candidatos da chain (credencial ligada a cada opção) e 2º turno como revisão assinada que replica | issuer: `candidates_from_the_chain_replace_the_example_list...`, `a_second_round_is_a_signed_revision...` |
+| **Em nós reais:** candidaturas emitidas, eleição montada da chain, votos cifrados, fechamento, resultados certificados pelas instituições, `ClaimElected`, credenciais `eleito` ativas e vitalícias, (2º turno se houver) | devnet-sim: `candidates_on_the_chain_become_an_election_whose_certified_results_elect_people_with_lifetime_credentials` |
+

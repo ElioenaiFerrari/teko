@@ -830,6 +830,7 @@ name = "devnet-sim"
 version = "0.1.0"
 dependencies = [
  "device-emulator",
+ "election-admin-cli",
  "issuer-cli",
  "p256",
  "prost",
@@ -844,6 +845,7 @@ dependencies = [
  "teko-crypto",
  "teko-device-core",
  "teko-economy",
+ "teko-election",
  "teko-ledger",
  "teko-node",
  "teko-protocol",
@@ -1035,12 +1037,15 @@ dependencies = [
  "issuer-cli",
  "prost",
  "rand",
+ "teko-assets",
  "teko-attestation",
  "teko-ballot-crypto",
  "teko-bulletin",
  "teko-chain",
+ "teko-credentials",
  "teko-crypto",
  "teko-election",
+ "teko-ledger",
  "teko-node",
  "teko-registration",
  "thiserror 2.0.21",
@@ -4317,7 +4322,9 @@ dependencies = [
  "proptest",
  "prost",
  "rand",
+ "teko-attestation",
  "teko-crypto",
+ "teko-election",
  "teko-ledger",
 ]
 

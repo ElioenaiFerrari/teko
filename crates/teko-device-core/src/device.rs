@@ -1820,6 +1820,8 @@ impl<H: Hal, R: Rng + CryptoRng> Device<H, R> {
                     voting_opens: sched.voting_opens,
                     voting_closes: sched.voting_closes,
                     registration_required: !c.registration_key.is_empty(),
+                    option_numbers: c.options.iter().map(|o| o.number.clone()).collect(),
+                    parent: c.parent.clone(),
                 }
             })
             .collect()

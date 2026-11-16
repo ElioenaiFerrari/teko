@@ -15,7 +15,7 @@ pub struct ClassSpec {
 }
 
 /// A credential type governed by an M-of-N issuing organ (ADR-0037).
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct CredTypeSpec {
     pub name: String,
     pub threshold: u32,
@@ -27,6 +27,8 @@ pub struct CredTypeSpec {
     pub validity_secs: u64,
     /// Public types keep their claims in clear on the chain.
     pub public: bool,
+    /// A SYSTEM type has no organ (the `eleito` credential, ADR-0040).
+    pub system: bool,
 }
 
 /// Everything that defines the first state. Public data, no secrets.
@@ -59,6 +61,8 @@ pub struct EconomyGenesis {
     pub founders: Vec<(Vec<u8>, Address)>,
     pub classes: Vec<ClassSpec>,
     pub credtypes: Vec<CredTypeSpec>,
+    /// The vote chain's institutions (SEC1 consensus keys) whose signed outcomes elect (ADR-0040).
+    pub vote_validators: Vec<Vec<u8>>,
     pub allocations: Vec<(Address, u64)>,
 }
 
@@ -90,6 +94,7 @@ impl EconomyGenesis {
             founders: vec![(founder_key, owner)],
             classes: Vec::new(),
             credtypes: Vec::new(),
+            vote_validators: Vec::new(),
             allocations: Vec::new(),
         }
     }
@@ -123,7 +128,18 @@ impl EconomyGenesis {
                 c.window_secs,
             )?;
         }
+        if !self.vote_validators.is_empty() {
+            teko_credentials::genesis_vote_set(
+                &mut l,
+                &self.coin.vote_chain_id,
+                &self.vote_validators,
+            )?;
+        }
         for c in &self.credtypes {
+            if c.system {
+                teko_credentials::genesis_system_type(&mut l, c.name.as_bytes(), c.public)?;
+                continue;
+            }
             let members: Vec<Vec<u8>> = c.members.iter().map(|a| a.to_vec()).collect();
             teko_credentials::genesis_type(
                 &mut l,
@@ -174,7 +190,23 @@ impl EconomyGenesis {
                 keys.join(" ")
             ));
         }
+        if !self.vote_validators.is_empty() {
+            let keys: Vec<String> = self
+                .vote_validators
+                .iter()
+                .map(|k| hex::encode(k))
+                .collect();
+            s.push_str(&format!("vote_validators={}\n", keys.join(" ")));
+        }
         for c in &self.credtypes {
+            if c.system {
+                s.push_str(&format!(
+                    "credtype={} system public={}\n",
+                    c.name,
+                    u8::from(c.public)
+                ));
+                continue;
+            }
             let keys: Vec<String> = c
                 .members
                 .iter()
@@ -206,6 +238,7 @@ impl EconomyGenesis {
             founders: Vec::new(),
             classes: Vec::new(),
             credtypes: Vec::new(),
+            vote_validators: Vec::new(),
             allocations: Vec::new(),
         };
         let mut saw_units = false;
@@ -275,6 +308,14 @@ impl EconomyGenesis {
                         window_secs,
                     });
                 }
+                "vote_validators" => {
+                    for tok in v.split_whitespace() {
+                        g.vote_validators.push(
+                            hex::decode(tok)
+                                .map_err(|_| format!("linha {}: chave inválida", n + 1))?,
+                        );
+                    }
+                }
                 "credtype" => {
                     let mut it = v.split_whitespace();
                     let (Some(name), Some(th)) = (it.next(), it.next()) else {
@@ -283,17 +324,28 @@ impl EconomyGenesis {
                     let bad = |what: &str| format!("linha {}: {what} inválido", n + 1);
                     let mut spec = CredTypeSpec {
                         name: name.to_string(),
-                        threshold: th.parse().map_err(|_| bad("M"))?,
+                        threshold: if th == "system" {
+                            0
+                        } else {
+                            th.parse().map_err(|_| bad("M"))?
+                        },
                         members: Vec::new(),
-                        contest_secs: teko_credentials::DEFAULT_CONTEST_SECS,
+                        contest_secs: if th == "system" {
+                            0
+                        } else {
+                            teko_credentials::DEFAULT_CONTEST_SECS
+                        },
                         validity_secs: 0,
                         public: false,
+                        system: th == "system",
                     };
                     for tok in it {
                         if let Some(x) = tok.strip_prefix("contest=") {
                             spec.contest_secs = x.parse().map_err(|_| bad("contest"))?;
                         } else if let Some(x) = tok.strip_prefix("validity=") {
                             spec.validity_secs = x.parse().map_err(|_| bad("validity"))?;
+                        } else if tok == "system" {
+                            spec.system = true;
                         } else if let Some(x) = tok.strip_prefix("public=") {
                             spec.public = match x {
                                 "0" => false,

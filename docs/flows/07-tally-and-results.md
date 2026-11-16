@@ -10,6 +10,8 @@ Quadro, apurador (`Tallier`), validadores com suas partes da chave, Suite.
 
 ## Diagramas
 
+![Da candidatura ao eleito: as candidaturas são credenciais, as instituições assinam o resultado e a economia emite a credencial vitalícia do eleito](../diagrams/election-to-elected.png)
+
 ![Fluxo da apuração: o quadro alimenta o apurador; só com o pleito encerrado há soma homomórfica e decifração por limiar; o resultado vai para a Suite](../diagrams/tally.png)
 
 ## Passo a passo
@@ -41,3 +43,7 @@ Testes de apuração em `teko-election`, `tools/election-admin-cli/tests`, simul
 
 ## Limites honestos
 Dados simulados sempre rotulados. A privacidade perante M validadores desonestos depende da confiança no limiar.
+
+## Resultado certificado e o eleito (ADR-0040)
+Depois da decifração, cada instituição calcula o **resultado** do pleito com uma regra pura (maioria absoluta no 1º turno; senão 2º turno entre os dois mais votados; empate sem decisão automática = **sem eleito**, PENDENTE), **assina** e publica no quadro (`OUTCOME`). `make claim` leva à economia os resultados assinados por **mais de 2/3** das instituições; o eleito recebe a credencial **vitalícia** `eleito` e o anterior do mesmo cargo e jurisdição é **sucedido**. Só cargos de vaga única (Presidente, Governador, Prefeito); `election-admin outcomes` mostra quantas instituições assinaram.
+

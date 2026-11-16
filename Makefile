@@ -1,6 +1,6 @@
 # Teko — atalhos. Rode `make` (ou `make help`) para ver tudo.
 .DEFAULT_GOAL := help
-.PHONY: issuer devnet-cosign help setup emulator suite reset demo issuer-help preview fmt lint test check build clean-dev verify-fw release-check repro fund docs-check diagrams coin-demo assets-demo devnet close devnet-dkg devnet-economy explorer devnet-equivocate devnet-veto tally-time devnet-founder devnet-stop devnet-status devnet-reset devnet-blocks testnet-help election publish simulate simulate-live tally reset-board
+.PHONY: candidates claim runoff issuer devnet-cosign help setup emulator suite reset demo issuer-help preview fmt lint test check build clean-dev verify-fw release-check repro fund docs-check diagrams coin-demo assets-demo devnet close devnet-dkg devnet-economy explorer devnet-equivocate devnet-veto tally-time devnet-founder devnet-stop devnet-status devnet-reset devnet-blocks testnet-help election publish simulate simulate-live tally reset-board
 
 CARGO ?= cargo
 PIN   ?= 482913
@@ -58,6 +58,15 @@ devnet-equivocate: ## SIMULAÇÃO (só dev): o validador de teste assina 2 votos
 devnet-cosign: ## SIMULA os membros de teste dos órgãos aprovando credenciais pendentes (TYPE=cnh-b opcional); só dev
 	@$(CARGO) run -q -p devnet-sim -- cosign --dir $(NET) $(if $(TYPE),--type $(TYPE))
 
+candidates: ## SIMULA o órgão emitindo as candidaturas de exemplo na chain (ELECTION=geral-2026); depois: make election (só dev)
+	@$(CARGO) run -q -p devnet-sim -- seed-candidates --dir $(NET) $(if $(ELECTION),--election $(ELECTION))
+
+claim: ## Leva à chain os resultados assinados pelas instituições: o eleito recebe a credencial vitalícia (ADR-0040)
+	@$(CARGO) run -q -p election-admin-cli -- claim-elected
+
+runoff: ## Abre o 2º turno de um pleito (CONTEST=governador-sp); depois: make publish
+	@$(CARGO) run -q -p election-admin-cli -- runoff --contest $(CONTEST)
+
 devnet-veto: ## SIMULAÇÃO (só dev): o órgão simulado veta uma negociação de bem pendente (janela de veto). Uso: make devnet-veto CLASS=imovel ASSET=<id>
 	$(CARGO) run -q -p devnet-sim -- veto --dir $(NET) --class $(CLASS) --asset $(ASSET)
 
@@ -81,8 +90,8 @@ testnet-help: ## Como montar uma testnet em várias máquinas (a mainnet está T
 	@echo "edite peers.txt com os endereços reais. Por padrão o nó só escuta em loopback (de propósito)."
 	@echo "Mainnet: travada nesta fase (docs/NETWORKS.md)."
 
-election: ## Recria a eleição de exemplo (7 pleitos, datas novas). Apaga o quadro e o marcador de simulação
-	$(CARGO) run -q -p issuer-cli -- dev-election
+election: ## Recria a eleição de exemplo (7 pleitos, datas novas), com os candidatos das credenciais ativas da chain (ELECTION=geral-2026); sem rede, usa a lista de exemplo. Apaga o quadro e o marcador de simulação
+	@$(CARGO) run -q -p election-admin-cli -- build-election --election $(or $(ELECTION),geral-2026) 2>/tmp/teko-election.err || { echo "(sem rede ou sem candidaturas na chain: lista de exemplo)"; $(CARGO) run -q -p issuer-cli -- dev-election; }
 
 publish: ## Publica a eleição de exemplo no quadro de avisos (dev/board.log). Idempotente
 	$(CARGO) run -q -p election-admin-cli -- publish

@@ -13,10 +13,11 @@ Cada pleito (cargo e jurisdição) passa por fases fixas. O **manifesto** da ele
 ![Ciclo de vida do pleito: rascunho, candidaturas, registro, votação aberta, encerrada, apurada, auditada e cancelada](../diagrams/election-lifecycle.png)
 
 ## Passo a passo
-1. `make election` cria o manifesto de exemplo (7 pleitos); `make publish` o publica no quadro.
+1. **Candidatos:** o órgão emite as **candidaturas** (credenciais `candidato`, aba Candidaturas do Emissor; em teste, `make candidates`). `make election` monta o manifesto de exemplo (7 pleitos) com as candidaturas **ativas** da chain (cada opção leva o id da credencial; pleito sem candidaturas usa a lista de exemplo); `make publish` o publica no quadro.
 2. Os órgãos avançam as fases com M-de-N assinaturas.
 3. A votação só aceita cédulas em `VotingOpen`; o prazo é conferido **pelo dispositivo** e por `election-admin close-due`.
 4. Após o prazo o pleito é encerrado e a apuração libera o resultado ([fluxo 07](07-tally-and-results.md)).
+5. **2º turno:** sem maioria absoluta, a governança abre `<pleito>-2t` entre os dois mais votados (`make runoff CONTEST=…`), como uma **revisão do manifesto** que só acrescenta o pleito; os eleitores se registram de novo e votam ([ADR-0040](../adr/0040-candidatos-por-credencial-resultado-certificado-e-eleito.md)).
 
 ## O que é verificado e por quem
 O dispositivo recusa histórico mais antigo que o que já viu (`LoadElection` confere M-de-N e o histórico). `results_visibility` precisa estar declarado no manifesto.

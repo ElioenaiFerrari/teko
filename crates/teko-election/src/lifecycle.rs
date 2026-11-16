@@ -712,6 +712,7 @@ mod tests {
                 voting_opens: 7_000,
                 voting_closes: 8_000,
             }),
+            ..Default::default()
         });
         validate_manifest(&rev2).unwrap();
         rev2.signatures = [0usize, 1]

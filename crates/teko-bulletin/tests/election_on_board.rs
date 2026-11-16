@@ -31,6 +31,7 @@ fn options(names: &[&str]) -> Vec<ElectionOption> {
             index: i as u32,
             name: (*n).into(),
             number: format!("{}", 10 + i),
+            ..Default::default()
         })
         .collect()
 }
@@ -40,7 +41,7 @@ fn world() -> World {
     let gov: Vec<SigningKey> = (0..3).map(|_| generate_signing_key(&mut rng)).collect();
     let policy = GovernancePolicy::new(gov.iter().map(public_key_bytes).collect(), 2).unwrap();
     let mut manifest = ElectionManifest {
-        format_version: 2,
+        format_version: teko_election::FORMAT_VERSION,
         election_id: "eleicoes-2026".into(),
         title: "Eleições de exemplo".into(),
         contests: vec![
@@ -56,6 +57,7 @@ fn world() -> World {
                     voting_opens: 200,
                     voting_closes: 300,
                 }),
+                ..Default::default()
             },
             Contest {
                 contest_id: "governador-sp".into(),
@@ -69,6 +71,7 @@ fn world() -> World {
                     voting_opens: 250,
                     voting_closes: 350,
                 }),
+                ..Default::default()
             },
         ],
         ballot_kind: BALLOT_KIND_PUBLIC.into(),

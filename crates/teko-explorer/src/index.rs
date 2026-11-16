@@ -145,6 +145,10 @@ fn kind_of(tx: &Tx) -> TxKind {
             Some(Op::Approve(m)) => Some(("approve", m.ctype)),
             Some(Op::Veto(m)) => Some(("veto", m.ctype)),
             Some(Op::Revoke(m)) => Some(("revoke", m.ctype)),
+            Some(Op::ClaimElected(_)) => Some((
+                "claim_elected",
+                teko_credentials::ELECTED_TYPE.as_bytes().to_vec(),
+            )),
             None => None,
         };
         if let Some((op, ctype)) = parsed {

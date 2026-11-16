@@ -869,9 +869,14 @@
     const why = !c.eligible ? 'Fora do seu domicílio eleitoral: o dispositivo recusa.'
       : c.voted ? 'Este dispositivo já votou neste pleito.'
       : c.phase !== 'voting_open' ? `Ainda não dá para votar: ${phaseLabel.toLowerCase()}.` : '';
+    const checks = ((S.candChecks || []).find((x) => x.contest_id === c.contest_id) || { options: [] }).options;
+    const badge = (i) => {
+      const st = (checks.find((o) => o.index === i) || {}).state;
+      return { verified: chip('candidatura conferida na chain', 'ok', 'check'), pending: chip('candidatura em contestação', 'warn'), expired: chip('candidatura expirada', 'bad'), revoked: chip('candidatura REVOGADA', 'bad', 'alert'), mismatch: chip('não confere com a chain', 'bad', 'alert'), unknown: chip('candidatura não está na chain', 'warn') }[st] || '';
+    };
     const opts = c.option_names.map((n, i) => `
       <label class="option"><input type="radio" name="cand-${esc(c.contest_id)}" value="${i}" ${S.picks[c.contest_id] === i ? 'checked' : ''} ${canVote ? '' : 'disabled'}>
-        <span>${esc(n)}</span></label>`).join('');
+        <span>${(c.option_numbers || [])[i] ? `<strong>${esc(c.option_numbers[i])}</strong> – ` : ''}${esc(n)} ${badge(i)}</span></label>`).join('');
     return `<article class="card" ${c.eligible ? '' : 'style="opacity:.82"'}>
       <div class="card__head"><div class="card__ico card__ico--${c.scope === 'national' ? 'arara' : c.scope === 'state' ? 'onca' : 'boto'}">${ico(c.scope === 'national' ? 'globe' : 'ballot')}</div>
         <div><h2>${esc(c.title)}</h2>
@@ -1211,6 +1216,7 @@
       if (id === 'stake') { S.stakeTried = false; S.stake = null; }
       if (id === 'assets') { S.assetsTried = false; S.assets = null; }
       if (id === 'credentials') { S.credsTried = false; S.creds = null; }
+      if (id === 'vote') S.candTried = false;
       if (id === 'wallet') { S.walletTried = false; S.walletAddr = null; S.balance = null; S.history = null; }
       if (id === 'identity') loadId();
       render();
@@ -1605,7 +1611,7 @@
     S.lastKey = ''; render();
   }
 
-  const CRED_STATUS = { proposed: ['Aguardando aprovações do órgão', 'warn'], pending: ['Em contestação', 'info'], active: ['Ativa', 'ok'], expired: ['Expirada', 'bad'], vetoed: ['Vetada pelo órgão', 'bad'], revoked: ['Revogada', 'bad'] };
+  const CRED_STATUS = { proposed: ['Aguardando aprovações do órgão', 'warn'], pending: ['Em contestação', 'info'], active: ['Ativa', 'ok'], expired: ['Expirada', 'bad'], vetoed: ['Vetada pelo órgão', 'bad'], revoked: ['Revogada', 'bad'], superseded: ['Sucedida por outro eleito', 'warn'] };
   const credDur = (s) => (s >= 172800 ? `${Math.round(s / 86400)} dias` : s >= 7200 ? `${Math.round(s / 3600)} h` : s >= 120 ? `${Math.round(s / 60)} min` : `${s} s`);
   const credDate = (t) => (t ? new Date(t * 1000).toLocaleDateString('pt-BR') : 'sem prazo');
 
@@ -1756,6 +1762,7 @@
     if (S.route === 'identity') loadId();
     if (S.route === 'wallet') loadWallet();
     if (S.route === 'credentials') loadCreds();
+    if (S.route === 'vote' && S.election && !S.candTried) { S.candTried = true; invoke('candidate_checks').then((r) => { S.candChecks = r; S.lastKey = ''; render(); }).catch(() => { S.candChecks = []; }); }
     if (S.route === 'assets') {
       loadAssets();
       if (!S.reg.form && !S.reg.loading && S.assets && S.assets.available) loadRegForm(S.reg.class);

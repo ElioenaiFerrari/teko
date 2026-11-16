@@ -1,5 +1,7 @@
 # ADR-0017 — Cargos, jurisdição e elegibilidade (vários pleitos por eleição)
 
+> **Atualização (ADR-0040):** os candidatos de Presidente, Governador e Prefeito vêm de **credenciais `candidato`**; só esses cargos (vaga única) geram resultado e eleito automáticos. Senador, deputados e vereadores seguem PENDENTES.
+
 **Status:** Proposto · **Decisão: PENDENTE (dono do produto)** · Fase 2 (`PHASE-2-VOTING.md` §3.1) · **modelo de dados já implementado** em `teko-election`
 
 ## Contexto

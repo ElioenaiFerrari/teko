@@ -9,6 +9,8 @@ description = "Credential module for teko-ledger: types governed by an M-of-N is
 [dependencies]
 teko-crypto.workspace = true
 teko-ledger.workspace = true
+teko-election.workspace = true
+teko-attestation.workspace = true
 prost.workspace = true
 
 [dev-dependencies]

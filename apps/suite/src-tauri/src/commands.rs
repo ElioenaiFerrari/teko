@@ -1601,6 +1601,7 @@ pub async fn civic_status() -> Result<CivicStatusInfo, UiError> {
                 teko_credentials::Status::Expired => "expired",
                 teko_credentials::Status::Vetoed => "vetoed",
                 teko_credentials::Status::Revoked => "revoked",
+                teko_credentials::Status::Superseded => "superseded",
             };
             info.active_at = rec.active_at;
             info.valid_until = rec.valid_until;
@@ -2618,6 +2619,7 @@ fn status_name(s: teko_credentials::Status) -> &'static str {
         Status::Expired => "expired",
         Status::Vetoed => "vetoed",
         Status::Revoked => "revoked",
+        Status::Superseded => "superseded",
     }
 }
 
@@ -2662,7 +2664,14 @@ pub async fn credentials_view(suite: State<'_, Suite>) -> Result<CredsView, UiEr
         view.chain_id = world.genesis().chain_id.clone();
         for (name, t) in teko_credentials::types(ledger) {
             let ctype = String::from_utf8_lossy(&name).to_string();
-            let key = keys.get(&ctype).cloned();
+            // the elected credential is issued to the winner's CANDIDACY key (ADR-0040)
+            let key = keys
+                .get(if ctype == "eleito" {
+                    "candidato"
+                } else {
+                    &ctype
+                })
+                .cloned();
             if let Some(k) = key.as_deref().and_then(|k| hex::decode(k).ok()) {
                 for (id, rec) in teko_credentials::credentials_of_type(ledger, &name) {
                     if rec.subject != k {
@@ -2787,7 +2796,11 @@ pub async fn recover_all(app: AppHandle, suite: State<'_, Suite>) -> Result<Reco
             .collect()
     };
     // 1) the wallet and its credential keys: the device derives them from the seed
-    let ctypes: Vec<String> = types.iter().map(|(n, _)| n.clone()).collect();
+    let ctypes: Vec<String> = types
+        .iter()
+        .filter(|(n, _)| n != "eleito")
+        .map(|(n, _)| n.clone())
+        .collect();
     let (addr, keys) = with_device(app.clone(), inner.clone(), move |c| {
         let addr = c.wallet_address()?;
         let keys = if ctypes.is_empty() {
@@ -2829,20 +2842,23 @@ pub async fn recover_all(app: AppHandle, suite: State<'_, Suite>) -> Result<Reco
         rec.stake = teko_coin::stake_of(ledger, &me);
         rec.assets = teko_assets::assets_of(ledger, &me).len();
         for (ctype, key) in &keys {
-            let public = types.iter().any(|(n, p)| n == ctype && *p);
             for (t, id) in teko_credentials::credentials_of(ledger, key) {
                 let Some(cr) = teko_credentials::credential(ledger, &t, &id) else {
                     continue;
                 };
-                if t != ctype.as_bytes() {
+                // what the wallet's key holds: its own type, and the `eleito` credential a candidate
+                // key receives when it wins (ADR-0040)
+                let held = String::from_utf8_lossy(&t).to_string();
+                if held != *ctype && !(ctype == "candidato" && held == "eleito") {
                     continue;
                 }
+                let public = types.iter().any(|(n, p)| *n == held && *p);
                 if !public && recovered_claims(&id).is_none() {
                     if cr.sealed.is_empty() {
                         rec.unopened += 1;
                     } else {
                         to_open.push((
-                            ctype.clone(),
+                            held.clone(),
                             id.clone(),
                             key.clone(),
                             cr.sealed.clone(),
@@ -2851,7 +2867,7 @@ pub async fn recover_all(app: AppHandle, suite: State<'_, Suite>) -> Result<Reco
                     }
                 }
                 rec.credentials.push(RecoveredCred {
-                    ctype: ctype.clone(),
+                    ctype: held.clone(),
                     id: hex::encode(&id),
                     status: status_name(cr.status_at(now)),
                     claims: if public {
@@ -2905,4 +2921,102 @@ pub async fn recover_all(app: AppHandle, suite: State<'_, Suite>) -> Result<Reco
         }
     }
     Ok(rec)
+}
+
+// ───────────────────────── candidacies on the chain (ADR-0040) ─────────────────────────
+
+#[derive(Serialize)]
+pub struct OptionCheck {
+    index: u32,
+    /// `none` (no credential bound), `verified`, `mismatch`, `pending`, `expired`, `revoked`, `unknown`.
+    state: &'static str,
+}
+
+#[derive(Serialize)]
+pub struct ContestChecks {
+    contest_id: String,
+    options: Vec<OptionCheck>,
+}
+
+/// Checks each candidate of the election against the chain: its candidacy credential exists, is
+/// ACTIVE and its claims (name, number, office, jurisdiction, election) are what the signed
+/// manifest says. The manifest is verified (governance M-of-N) here; a contest already signed
+/// cannot change, so a candidacy revoked later shows up here as a warning.
+#[tauri::command]
+pub async fn candidate_checks() -> Result<Vec<ContestChecks>, UiError> {
+    tauri::async_runtime::spawn_blocking(|| {
+        use prost::Message as _;
+        use teko_credentials::candidate::{Cargo, parse_candidate};
+        let trust = load_trust()?;
+        let policy =
+            teko_election::GovernancePolicy::new(trust.gov_signers.clone(), trust.gov_threshold)
+                .map_err(|_| ui_err("NoElection", "sem governança no trust.txt"))?;
+        let bundle = teko_election::ElectionBundle::decode(read_bundle()?.as_slice())
+            .map_err(|_| ui_err("NoElection", "pacote de eleição malformado"))?;
+        let manifest = teko_election::ElectionManifest::decode(bundle.manifest.as_slice())
+            .map_err(|_| ui_err("NoElection", "manifesto malformado"))?;
+        teko_election::verify_manifest(&policy, &manifest)
+            .map_err(|e| ui_err("NoElection", format!("manifesto recusado: {e}")))?;
+        let net = resolve_dev_dir().join("net");
+        if !net.join(teko_node::ECONOMY_FILE).exists() {
+            return Ok(Vec::new());
+        }
+        let world = teko_node::NodeWorld::open(&net)
+            .map_err(|e| ui_err("NoNetwork", format!("rede indisponível: {e}")))?;
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_or(0, |d| d.as_secs());
+        let ledger = world.ledger_ref();
+        let mut out = Vec::new();
+        for c in &manifest.contests {
+            let scope = c.scope.clone().unwrap_or_default();
+            let cargo = match c.office() {
+                teko_election::Office::President => Some(Cargo::Presidente),
+                teko_election::Office::Governor => Some(Cargo::Governador),
+                teko_election::Office::Mayor => Some(Cargo::Prefeito),
+                _ => None,
+            };
+            let options = c
+                .options
+                .iter()
+                .map(|o| {
+                    let state = if o.credential_id.is_empty() {
+                        "none"
+                    } else if let Some(rec) =
+                        teko_credentials::credential(ledger, b"candidato", &o.credential_id)
+                    {
+                        match rec.status_at(now) {
+                            teko_credentials::Status::Active => {
+                                let ok = parse_candidate(&rec.claims).is_some_and(|k| {
+                                    Some(k.cargo) == cargo
+                                        && k.scope_code() == scope.code
+                                        && k.eleicao == manifest.election_id
+                                        && k.nome == o.name
+                                        && k.numero == o.number
+                                });
+                                if ok { "verified" } else { "mismatch" }
+                            }
+                            teko_credentials::Status::Proposed
+                            | teko_credentials::Status::Pending => "pending",
+                            teko_credentials::Status::Expired => "expired",
+                            _ => "revoked",
+                        }
+                    } else {
+                        "unknown"
+                    };
+                    OptionCheck {
+                        index: o.index,
+                        state,
+                    }
+                })
+                .collect();
+            out.push(ContestChecks {
+                contest_id: c.contest_id.clone(),
+                options,
+            });
+        }
+        Ok(out)
+    })
+    .await
+    .map_err(|e| ui_err("Internal", e))?
 }

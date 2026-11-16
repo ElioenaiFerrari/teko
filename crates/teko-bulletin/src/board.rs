@@ -22,6 +22,8 @@ impl EntryKind {
     pub const RESULT: EntryKind = EntryKind(5);
     /// Key ceremony record (public commitments of the election key).
     pub const DKG: EntryKind = EntryKind(6);
+    /// One institution's signed RESULT of a contest (ADR-0040); the tally ignores it.
+    pub const OUTCOME: EntryKind = EntryKind(7);
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]

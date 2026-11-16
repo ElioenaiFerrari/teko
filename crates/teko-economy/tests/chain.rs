@@ -486,6 +486,7 @@ fn credential_types_in_the_genesis_survive_the_text_round_trip_and_build_the_mod
         contest_secs: 604_800,
         validity_secs: 315_360_000,
         public: false,
+        ..Default::default()
     });
     g.credtypes.push(teko_economy::CredTypeSpec {
         name: "candidato".into(),
@@ -494,6 +495,7 @@ fn credential_types_in_the_genesis_survive_the_text_round_trip_and_build_the_mod
         contest_secs: 86_400,
         validity_secs: 31_536_000,
         public: true,
+        ..Default::default()
     });
     let back = EconomyGenesis::parse(&g.to_text()).unwrap();
     assert_eq!(back, g);
@@ -504,5 +506,34 @@ fn credential_types_in_the_genesis_survive_the_text_round_trip_and_build_the_mod
     assert_eq!(teko_credentials::types(chain.ledger()).len(), 2);
     // a bad type is refused when the genesis is parsed
     let bad = g.to_text().replace("cnh-b 2", "cnh-b 9");
+    assert!(EconomyGenesis::parse(&bad).is_err());
+}
+
+#[test]
+fn the_vote_institutions_and_the_system_type_survive_the_genesis_text_round_trip() {
+    let node = key(1);
+    let owner = addr(&key(2));
+    let mut g = genesis(&node, &owner, 3_000);
+    g.coin.vote_chain_id = "teko-devnet-1".into();
+    g.vote_validators = (50..54).map(|i| public_key_bytes(&key(i))).collect();
+    g.credtypes.push(teko_economy::CredTypeSpec {
+        name: "eleito".into(),
+        public: true,
+        system: true,
+        ..Default::default()
+    });
+    let back = EconomyGenesis::parse(&g.to_text()).unwrap();
+    assert_eq!(back, g);
+    let chain = EconomyChain::new(back).unwrap();
+    let t = teko_credentials::type_info(chain.ledger(), b"eleito").unwrap();
+    assert!(t.system && t.public && t.members.is_empty());
+    // a duplicated institution key is refused when the genesis is parsed
+    let bad = g.to_text().replace(
+        "vote_validators=",
+        &format!(
+            "vote_validators={} ",
+            teko_crypto::hex::encode(&public_key_bytes(&key(50)))
+        ),
+    );
     assert!(EconomyGenesis::parse(&bad).is_err());
 }

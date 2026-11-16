@@ -1,5 +1,7 @@
 # ADR-0016 — Manifesto de eleição, ciclo de vida e governança
 
+> **Atualização (ADR-0040):** o manifesto passou ao **formato 3**: cada opção pode levar o `credential_id` da candidatura na chain, o pleito pode admitir **2º turno** (`runoff`) e um pleito de 2º turno aponta o de origem (`parent`). Revisões continuam só **acrescentando** pleitos (é como o 2º turno entra).
+
 **Status:** Proposto · **Decisão: PENDENTE (dono do produto)** · Fase 2 (§7)
 
 ## Contexto

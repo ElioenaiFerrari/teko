@@ -23,6 +23,16 @@ USO:
       Governança SIMULADA: fecha (assinado 2 de 3) os pleitos cujo prazo venceu; depois disso o quadro não conta mais cédulas deles.
   election-admin reset-board [--dir dev]
       Apaga o quadro e o marcador de simulação.
+  election-admin build-election [--dir dev] [--election geral-2026] [--margin-days 30]
+      Recria dev/election.bundle com os candidatos das CREDENCIAIS `candidato` ativas na chain (ADR-0040);
+      pleitos sem candidaturas ficam com a lista de exemplo.
+  election-admin outcomes [--dir dev]
+      Mostra os resultados que as instituições assinaram no quadro (quantas assinaturas de quantas).
+  election-admin claim-elected [--dir dev]
+      Leva à chain de economia o resultado de cada pleito assinado por mais de 2/3 das instituições:
+      o eleito recebe a credencial vitalícia `eleito` (e o anterior do mesmo cargo é sucedido).
+  election-admin runoff --contest ID [--dir dev]
+      Abre o 2º turno (ID-2t) de um pleito cujo resultado foi 'segundo turno'; depois rode `publish`.
 ";
 
 fn flags(args: &[String]) -> Result<HashMap<String, String>, String> {
@@ -75,6 +85,57 @@ fn run(args: Vec<String>) -> Result<(), String> {
 
     match cmd {
         "help" | "--help" | "-h" => print!("{HELP}"),
+        "build-election" => {
+            let election = f.get("election").map_or("geral-2026", String::as_str);
+            let days = num(&f, "margin-days")?.unwrap_or(30);
+            let now = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map_or(0, |d| d.as_secs());
+            for l in election_admin::elected::build_election(&dir, election, days * 86_400, now)? {
+                println!("  {l}");
+            }
+            println!(
+                "Eleição `{election}` gravada em {}/election.bundle. Rode: make publish",
+                dir.display()
+            );
+        }
+        "outcomes" => {
+            let a = admin()?;
+            let list = election_admin::elected::outcomes(&a)?;
+            if list.is_empty() {
+                println!("Nenhum resultado assinado no quadro ainda.");
+            }
+            for c in list {
+                let o = &c.outcome;
+                println!(
+                    "{} (turno {}): {:?} · {} de {} instituições assinaram{} · votos {:?}",
+                    o.contest_id,
+                    o.round,
+                    o.kind(),
+                    c.signers,
+                    c.institutions,
+                    if c.is_certified() {
+                        " (CERTIFICADO)"
+                    } else {
+                        ""
+                    },
+                    o.totals
+                );
+            }
+        }
+        "claim-elected" => {
+            for l in election_admin::elected::claim_elected(&dir)? {
+                println!("  {l}");
+            }
+        }
+        "runoff" => {
+            let contest = f.get("contest").ok_or("faltou --contest")?;
+            let now = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map_or(0, |d| d.as_secs());
+            let id = election_admin::elected::start_runoff(&dir, contest, now)?;
+            println!("2º turno `{id}` criado (revisão do manifesto assinada). Rode: make publish");
+        }
         "publish" => {
             let r = admin()?.publish().map_err(e)?;
             println!(

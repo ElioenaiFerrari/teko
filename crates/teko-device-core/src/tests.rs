@@ -995,6 +995,7 @@ fn options(names: &[&str], first: u32) -> Vec<ElectionOption> {
             index: i as u32,
             name: (*n).into(),
             number: format!("{}", first + i as u32),
+            ..Default::default()
         })
         .collect()
 }
@@ -1020,6 +1021,7 @@ fn contest(
             voting_opens: sched.1,
             voting_closes: sched.2,
         }),
+        ..Default::default()
     }
 }
 
@@ -1027,7 +1029,7 @@ fn contest(
 /// (municipal): each with ITS OWN dates. The voter lives in SP / 3550308.
 fn election_manifest(w: &World) -> ElectionManifest {
     let mut m = ElectionManifest {
-        format_version: 2,
+        format_version: teko_election::FORMAT_VERSION,
         election_id: "eleicoes-2026".into(),
         title: "Eleições de exemplo 2026".into(),
         contests: vec![
@@ -2014,6 +2016,7 @@ mod encrypted {
                 index: 100 + i,
                 name: format!("X{i}"),
                 number: format!("{}", 900 + i),
+                ..Default::default()
             });
         }
         sign(&mut m);

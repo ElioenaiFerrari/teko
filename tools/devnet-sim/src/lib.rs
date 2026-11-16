@@ -275,3 +275,138 @@ pub fn cosign(dir: &Path, ctype: Option<&str>) -> Result<String, String> {
     }
     Ok(lines.join("\n"))
 }
+
+/// The sample candidacies: a name and a number per contest (the numbers are the ballot numbers).
+fn sample_candidates(contest: &str) -> &'static [(&'static str, &'static str)] {
+    match contest {
+        "presidente" => &[
+            ("Candidata Onça-Pintada", "10"),
+            ("Candidato Boto-Cor-de-Rosa", "11"),
+            ("Candidata Arara-Azul", "12"),
+        ],
+        "governador-sp" => &[
+            ("Candidato Guará", "20"),
+            ("Candidata Vitória-Régia", "21"),
+            ("Candidato Lobo-Guará", "22"),
+        ],
+        "governador-rj" => &[
+            ("Candidato Mico-Leão-Dourado", "40"),
+            ("Candidata Capivara", "41"),
+            ("Candidato Boto-Tucuxi", "42"),
+        ],
+        "governador-mg" => &[
+            ("Candidato Lobo-Guará", "50"),
+            ("Candidata Onça-Parda", "51"),
+        ],
+        "governador-ba" => &[
+            ("Candidata Arara-Vermelha", "60"),
+            ("Candidato Tartaruga-Marinha", "61"),
+        ],
+        "governador-rs" => &[("Candidato Quero-Quero", "70"), ("Candidata Graxaim", "71")],
+        "prefeito-3550308" => &[("Candidata Jaguatirica", "30"), ("Candidato Tucano", "31")],
+        _ => &[],
+    }
+}
+
+/// Simulates the ORGAN of `candidato` (its simulated members) issuing the sample candidacies of
+/// `election_id` (ADR-0040): one proposal and one approval each, valid for 200 days. The holders'
+/// credential keys are derived from fixed seeds (a real candidate gives their own). Returns what it did.
+pub fn seed_candidates(dir: &Path, election_id: &str) -> Result<String, String> {
+    use rand::SeedableRng;
+    use teko_assets::devnet::World;
+    use teko_credentials::candidate::{Candidacy, Cargo, candidate_claims};
+    use teko_credentials::{
+        CREDENTIALS_MODULE, Op, ProposeOp, VoteOp, credential_id, public_commitment,
+    };
+    let net = load_network(dir).map_err(|e| e.to_string())?;
+    if net.profile.kind.name() == "mainnet" {
+        return Err("a mainnet está travada: simulações só em devnet e testnet".into());
+    }
+    let sims = teko_node::load_orgmember_keys(dir, "candidato");
+    if sims.len() < 2 {
+        return Err("faltam os membros simulados do órgão `candidato` (recrie a rede)".into());
+    }
+    let mut world = teko_node::NodeWorld::open(dir).map_err(|e| e.to_string())?;
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |d| d.as_secs());
+    let valid_until = now + 200 * 86_400;
+    let mut n = 0;
+    for p in issuer_cli::dev_contest_plan(now) {
+        let cargo = Cargo::parse(p.cargo).ok_or("cargo")?;
+        for (i, (nome, numero)) in sample_candidates(p.id).iter().enumerate() {
+            let uf = if p.cargo == "governador" {
+                p.scope_code
+            } else {
+                ""
+            };
+            let mun = if p.cargo == "prefeito" {
+                p.scope_code
+            } else {
+                ""
+            };
+            let claims = candidate_claims(&Candidacy {
+                cargo,
+                uf: uf.into(),
+                municipio: mun.into(),
+                numero: (*numero).into(),
+                nome: (*nome).into(),
+                eleicao: election_id.into(),
+            })?
+            .into_bytes();
+            // the candidate's credential key: fixed per (election, contest, number)
+            let seed = u64::from_be_bytes(
+                teko_crypto::tagged_hash(
+                    "teko/sim/candidate",
+                    &[election_id.as_bytes(), p.id.as_bytes(), &[i as u8]],
+                )[..8]
+                    .try_into()
+                    .map_err(|_| "seed")?,
+            );
+            let holder = teko_crypto::public_key_bytes(&teko_crypto::generate_signing_key(
+                &mut rand::rngs::StdRng::seed_from_u64(seed),
+            ));
+            let commitment = public_commitment(&claims);
+            let id = credential_id(b"candidato", &holder, &commitment, &claims, valid_until);
+            let send = |world: &mut teko_node::NodeWorld,
+                        k: &teko_crypto::SigningKey,
+                        op: Op|
+             -> Result<(), String> {
+                let me = teko_ledger::address_of(&teko_crypto::public_key_bytes(k));
+                let tx = teko_ledger::Tx::new_signed(
+                    k,
+                    World::chain_id(world),
+                    world.nonce(&me),
+                    CREDENTIALS_MODULE,
+                    op.encode(),
+                );
+                world.submit(tx)
+            };
+            send(
+                &mut world,
+                &sims[0],
+                Op::Propose(ProposeOp {
+                    ctype: b"candidato".to_vec(),
+                    subject: holder,
+                    commitment: commitment.to_vec(),
+                    claims,
+                    valid_until,
+                    sealed: vec![],
+                }),
+            )?;
+            send(
+                &mut world,
+                &sims[1],
+                Op::Approve(VoteOp {
+                    ctype: b"candidato".to_vec(),
+                    id: id.to_vec(),
+                    reason: String::new(),
+                }),
+            )?;
+            n += 1;
+        }
+    }
+    Ok(format!(
+        "{n} candidaturas emitidas para a eleição `{election_id}` (vigentes em ~2 min, a janela de contestação de teste); depois rode: make election"
+    ))
+}

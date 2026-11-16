@@ -5,6 +5,8 @@
 //! NOT trustworthy against fraud (ADR-0008/0018).
 
 mod backend;
+#[cfg(feature = "operator")]
+pub mod elected;
 
 use std::fs;
 use std::io;

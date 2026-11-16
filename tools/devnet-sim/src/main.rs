@@ -17,6 +17,10 @@ USO:
     O órgão SIMULADO da classe veta, dentro da janela, a negociação pendente do bem (ADR-0036): o
     preço volta ao comprador e o bem continua com o dono. O motivo é público na cadeia.
 
+  devnet-sim seed-candidates [--election geral-2026] [--dir dev/net]
+    Os membros SIMULADOS do órgão `candidato` emitem as candidaturas de exemplo da eleição (ADR-0040);
+    depois rode `make election` para montar a eleição com elas.
+
   devnet-sim cosign [--type cnh-b] [--dir dev/net]
     Os membros SIMULADOS dos órgãos de credenciais (ADR-0037) aprovam as credenciais que esperam
     aprovação, até completar o quórum. Sua carteira é um dos membros: a sua aprovação vem do app Emissor.
@@ -81,6 +85,28 @@ fn run() -> Result<(), String> {
     }
     if args.first().map(String::as_str) == Some("cosign") {
         return run_cosign(&args);
+    }
+    if args.first().map(String::as_str) == Some("seed-candidates") {
+        let mut dir = PathBuf::from("dev/net");
+        let mut election = String::from("geral-2026");
+        let mut i = 1;
+        while i < args.len() {
+            let v = args
+                .get(i + 1)
+                .ok_or("faltou o valor de uma opção")?
+                .clone();
+            match args.get(i).map(String::as_str) {
+                Some("--dir") => dir = PathBuf::from(v),
+                Some("--election") => election = v,
+                _ => return Err("opção desconhecida (veja --help)".into()),
+            }
+            i += 2;
+        }
+        println!(
+            "SIMULAÇÃO (rede de teste): o órgão de candidaturas (membros simulados) emite candidaturas de exemplo."
+        );
+        println!("{}", devnet_sim::seed_candidates(&dir, &election)?);
+        return Ok(());
     }
     if args.first().map(String::as_str) != Some("equivocate") {
         print!("{HELP}");

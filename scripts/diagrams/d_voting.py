@@ -63,6 +63,21 @@ def tally():
     d.legend([(MUTED, "fluxo", False), (GREEN, "caminho feliz", False), (RED, "bloqueio", False), (BOTO, "decifração", False)])
     return d
 
+def election_to_elected():
+    d = D("election-to-elected", 1100, 0, "Da candidatura ao eleito", "Candidatos vêm de credenciais; as instituições certificam o resultado; a economia emite a credencial vitalícia", "ELEIÇÕES")
+    A = [("o", "Órgão", "candidaturas", "plain", 100), ("e", "Chain de economia", "credenciais", "focal", 380), ("v", "Chain de votos", "instituições (BFT)", "boto", 690), ("x", "Qualquer um", "envia o resultado", "link", 970)]
+    M = [("o", "e", "candidato: credencial pública (cargo, número, nome)", "default", False),
+         ("e", "v", "make election: opções ligadas às credenciais ativas", "link", False),
+         ("v", "v", "voto cifrado, fechamento, decifração por limiar", "accent", False),
+         ("v", "v", "cada instituição assina o MESMO resultado", "accent", False),
+         ("x", "e", "ClaimElected: resultado + assinaturas (> 2/3)", "default", False),
+         ("e", "e", "eleito: credencial vitalícia; o anterior é sucedido", "ok", True),
+         ("v", "o", "sem maioria: 2º turno entre os dois mais votados", "bad", False)]
+    N = [(1, "e", "Pleito assinado pela governança: não muda depois", 330), (4, "e", "A economia confere as chaves das instituições (gênese)", 330)]
+    d.sequence(A, M, notas=N, passo=34)
+    d.legend([(MUTED, "transação ou entrada", False), (GREEN, "efeito", True), (RED, "2º turno", False)])
+    return d
+
 def dkg_ceremony():
     d = D("dkg-ceremony", 1100, 0, "Cerimônia de chave (DKG)", "A chave de decifração nasce dividida: ninguém a possui inteira", "CERIMÔNIA")
     A = [("a", "Validador A", "teko-node", "boto", 130), ("b", "Validador B", "teko-node", "boto", 400), ("c", "Validador C", "teko-node", "boto", 670), ("q", "Quadro", "público", "plain", 950)]

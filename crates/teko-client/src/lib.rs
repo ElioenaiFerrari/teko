@@ -1186,6 +1186,10 @@ pub struct ContestSummary {
     pub scope: String,
     pub scope_code: String,
     pub option_names: Vec<String>,
+    /// The ballot number of each option (ADR-0040); empty strings when an option has none.
+    pub option_numbers: Vec<String>,
+    /// Set on a SECOND ROUND: the first-round contest it continues.
+    pub parent: String,
     pub eligible: bool,
     pub voted: bool,
     pub voting_opens: u64,
@@ -1254,6 +1258,8 @@ fn summarize(l: &ElectionLoaded) -> ElectionSummary {
                 .to_string(),
                 scope_code: c.scope_code.clone(),
                 option_names: c.option_names.clone(),
+                option_numbers: c.option_numbers.clone(),
+                parent: c.parent.clone(),
                 eligible: c.eligible,
                 voted: c.voted,
                 voting_opens: c.voting_opens,

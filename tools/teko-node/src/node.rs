@@ -50,6 +50,8 @@ struct State {
     fed: u64,
     /// contest id -> when this node published its decryption shares.
     results_sent: HashMap<String, Instant>,
+    /// Contests whose signed OUTCOME this validator already published (ADR-0040).
+    outcomes_sent: HashMap<String, Instant>,
 }
 
 pub(crate) struct Shared {
@@ -116,6 +118,7 @@ impl Node {
                 tallier: None,
                 fed: 0,
                 results_sent: HashMap::new(),
+                outcomes_sent: HashMap::new(),
             }),
             cfg,
             stop: AtomicBool::new(false),
@@ -265,6 +268,7 @@ fn results_loop(s: &Arc<Shared>) {
     while !s.stop.load(Ordering::SeqCst) {
         thread::sleep(tick);
         decrypt_closed_contests(s, interval);
+        publish_outcomes(s, interval);
         punish_vote_equivocations(s);
     }
 }
@@ -282,6 +286,57 @@ fn punish_vote_equivocations(s: &Arc<Shared>) {
         (msgs, e.peers.clone(), e.index)
     };
     lane::send_all(&peers, index, msgs);
+}
+
+/// The OUTCOME service (ADR-0040): once a contest is CLOSED and its totals are final (revealed, if
+/// encrypted), this validator decides the result by the pure rule from ITS OWN verified tally,
+/// signs it with its consensus key and publishes the signature on the board. The vote chain does
+/// not judge it: what makes it count is that more than 2/3 of the institutions sign the SAME bytes.
+fn publish_outcomes(s: &Arc<Shared>, interval: Duration) {
+    use teko_election::{SignedOutcome, contest_hash, decide, sign_outcome};
+    let list: Vec<(String, Vec<u8>)> = {
+        let st = lock(s);
+        let Some(t) = st.tallier.as_ref() else {
+            return;
+        };
+        let Some(m) = t.manifest() else {
+            return;
+        };
+        let snap = t.snapshot();
+        let retry = interval * 40;
+        let mut out = Vec::new();
+        for c in &snap.contests {
+            if st
+                .outcomes_sent
+                .get(&c.contest_id)
+                .is_some_and(|at| at.elapsed() <= retry)
+            {
+                continue;
+            }
+            let Some(contest) = m.contest(&c.contest_id) else {
+                continue;
+            };
+            let h = contest_hash(contest);
+            if let Some(o) = decide(&s.cfg.profile.chain_id, &m.election_id, contest, &h, c) {
+                let sig = sign_outcome(&s.cfg.key, &o);
+                out.push((
+                    c.contest_id.clone(),
+                    prost::Message::encode_to_vec(&SignedOutcome::new(&o, &sig)),
+                ));
+            }
+        }
+        out
+    };
+    for (contest_id, payload) in list {
+        let body = SubmitEntries {
+            entries: vec![teko_chain::BlockEntry {
+                kind: u32::from(EntryKind::OUTCOME.0),
+                payload,
+            }],
+        };
+        lock(s).outcomes_sent.insert(contest_id, Instant::now());
+        let _ = crate::votes::submit(s, &body, true);
+    }
 }
 
 /// The RESULT service: when this node's own verified replica shows an encrypted contest

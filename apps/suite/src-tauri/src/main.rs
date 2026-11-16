@@ -64,6 +64,7 @@ fn main() {
             commands::prove_attribute,
             commands::election_load,
             commands::election_get,
+            commands::candidate_checks,
             commands::election_vote,
             commands::results_snapshot,
             commands::explorer_snapshot,

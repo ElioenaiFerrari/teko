@@ -242,6 +242,7 @@ fn status_name(s: Status) -> &'static str {
         Status::Expired => "expired",
         Status::Vetoed => "vetoed",
         Status::Revoked => "revoked",
+        Status::Superseded => "superseded",
     }
 }
 
@@ -885,4 +886,94 @@ pub async fn civic_deliver(id: String) -> Result<String, UiError> {
     })
     .await
     .map_err(|e| ui_err("Internal", e))?
+}
+
+// ───────────────────────── candidacies (ADR-0040) ─────────────────────────
+
+#[derive(Deserialize, Clone)]
+pub struct CandidacyForm {
+    /// `presidente`, `governador` or `prefeito`.
+    cargo: String,
+    uf: String,
+    municipio: String,
+    numero: String,
+    nome: String,
+    eleicao: String,
+    /// Hex of the candidate's credential key (from `GetCredentialKey("candidato")` on THEIR device).
+    holder_key: String,
+    /// The validity, in days from now: the end of the election plus the days the candidacy still has
+    /// to count (bounded by the type's maximum).
+    valid_days: u64,
+}
+
+#[derive(Serialize)]
+pub struct CandidacyResult {
+    nome: String,
+    numero: String,
+    id: String,
+    error: String,
+}
+
+/// The organ issues one or more candidacies. The claims are built and validated from the fields
+/// (nobody types the `name=value` text), and each one is a proposal signed on the member's device,
+/// with its own confirmation. A failure does not stop the others.
+#[tauri::command]
+pub async fn candidacies_issue(
+    app: AppHandle,
+    issuer: State<'_, Issuer>,
+    items: Vec<CandidacyForm>,
+) -> Result<Vec<CandidacyResult>, UiError> {
+    use teko_credentials::candidate::{Candidacy, Cargo, candidate_claims};
+    if items.is_empty() || items.len() > 64 {
+        return Err(ui_err("InvalidArgument", "de 1 a 64 candidaturas por vez"));
+    }
+    let mut out = Vec::new();
+    for f in items {
+        let attempt = async {
+            let cargo = Cargo::parse(f.cargo.trim()).ok_or_else(|| {
+                ui_err(
+                    "InvalidArgument",
+                    "cargo: presidente, governador ou prefeito",
+                )
+            })?;
+            let claims = candidate_claims(&Candidacy {
+                cargo,
+                uf: f.uf.trim().to_string(),
+                municipio: f.municipio.trim().to_string(),
+                numero: f.numero.trim().to_string(),
+                nome: f.nome.trim().to_string(),
+                eleicao: f.eleicao.trim().to_string(),
+            })
+            .map_err(|m| ui_err("InvalidArgument", m))?;
+            let holder = hex::decode(f.holder_key.trim())
+                .ok()
+                .filter(|k| k.len() == 33 || k.len() == 65)
+                .ok_or_else(|| ui_err("InvalidArgument", "chave do candidato inválida (hex)"))?;
+            let r = issue_inner(
+                app.clone(),
+                issuer.inner().clone(),
+                teko_credentials::CANDIDATE_TYPE.to_string(),
+                holder,
+                claims,
+                f.valid_days,
+            )
+            .await?;
+            Ok::<String, UiError>(r.id)
+        };
+        out.push(match attempt.await {
+            Ok(id) => CandidacyResult {
+                nome: f.nome,
+                numero: f.numero,
+                id,
+                error: String::new(),
+            },
+            Err(e) => CandidacyResult {
+                nome: f.nome,
+                numero: f.numero,
+                id: String::new(),
+                error: e.message,
+            },
+        });
+    }
+    Ok(out)
 }

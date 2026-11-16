@@ -15,14 +15,15 @@
 //! that what they attested is true. NOT AUDITED; no legal validity.
 #![cfg_attr(test, allow(clippy::unwrap_used, clippy::expect_used, clippy::panic))]
 
+pub mod candidate;
 pub mod civic;
 mod module;
 mod query;
 mod types;
 
 pub use module::{
-    CREDENTIALS_MODULE, CredentialsModule, DEFAULT_CONTEST_SECS, credential_id, genesis_type,
-    module, public_commitment,
+    CANDIDATE_TYPE, CREDENTIALS_MODULE, CredentialsModule, DEFAULT_CONTEST_SECS, ELECTED_TYPE,
+    credential_id, genesis_system_type, genesis_type, genesis_vote_set, module, public_commitment,
 };
 pub use query::{credential, credentials_of, credentials_of_type, status, type_info, types};
-pub use types::{CredRec, Op, ProposeOp, Status, TypeRec, VoteOp};
+pub use types::{ClaimElectedOp, CredRec, Op, ProposeOp, Status, TypeRec, VoteOp, VoteSet};

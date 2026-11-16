@@ -20,6 +20,7 @@ mod eligibility;
 mod error;
 mod lifecycle;
 mod manifest;
+mod outcome;
 mod policy;
 mod registration;
 mod result;
@@ -36,9 +37,13 @@ pub use lifecycle::{
     transition_hash, verify_transition,
 };
 pub use manifest::{
-    BALLOT_KIND_PUBLIC, Contest, ElectionManifest, ElectionOption, Office, ResultsVisibility,
-    Schedule, contest_hash, manifest_hash, sign_manifest, validate_manifest, validate_revision,
-    verify_manifest, verify_manifest_chain,
+    BALLOT_KIND_PUBLIC, Contest, ElectionManifest, ElectionOption, FORMAT_VERSION, Office,
+    ResultsVisibility, Schedule, contest_hash, manifest_hash, sign_manifest, validate_manifest,
+    validate_revision, verify_manifest, verify_manifest_chain,
+};
+pub use outcome::{
+    ElectionOutcome, OutcomeKind, SignedOutcome, count_outcome_signers, decide, outcome_bytes,
+    sign_outcome,
 };
 pub use policy::GovernancePolicy;
 pub use registration::{

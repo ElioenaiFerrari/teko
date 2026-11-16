@@ -20,6 +20,8 @@ pub const ISSUE_ATTEST: &str = "teko/v1/issue-attest";
 pub const FW_BLOB: &str = "teko/v1/fw-blob";
 pub const ELECTION_MANIFEST: &str = "teko/v2/election-manifest";
 pub const ELECTION_TRANSITION: &str = "teko/v2/election-transition";
+/// What the institutions of the vote chain sign about the result of one contest (ADR-0040).
+pub const ELECTION_OUTCOME: &str = "teko/v2/election-outcome";
 pub const BULLETIN_LEAF: &str = "teko/v2/bulletin-leaf";
 pub const BULLETIN_NODE: &str = "teko/v2/bulletin-node";
 pub const BULLETIN_HEAD: &str = "teko/v2/bulletin-head";

@@ -71,7 +71,7 @@ fn boot(tag: &str, owner: &Address, tweak: impl Fn(&mut EconomyGenesis)) -> Net 
     ));
     let _ = std::fs::remove_dir_all(&dir);
     init_network(&dir, NetworkKind::Devnet, 3, free_port_base(), false).unwrap();
-    let mut g = init_economy(&dir, Some(*owner), None, false).unwrap();
+    let mut g = init_economy(&dir, Some(*owner), None, None, false).unwrap();
     g.coin.fee_per_byte = 0;
     g.coin.initial_reward = 1_000;
     g.coin.halving_interval = 100_000;
@@ -142,6 +142,61 @@ fn bump(client: &NodeClient, chain_id: &str, times: u64) {
 
 fn tx(sk: &SigningKey, chain: &str, nonce: u64, op: Op) -> Tx {
     Tx::new_signed(sk, chain, nonce, teko_coin::COIN_MODULE, op.encode())
+}
+
+#[test]
+fn the_genesis_gives_the_founder_the_first_coins_so_the_network_can_start_with_no_block_at_all() {
+    let owner = key(3);
+    let owner_addr = address_of(&public_key_bytes(&owner));
+    let dir = std::env::temp_dir().join(format!(
+        "teko-econ-alloc-{}-{}",
+        std::process::id(),
+        free_port_base()
+    ));
+    let _ = std::fs::remove_dir_all(&dir);
+    init_network(&dir, NetworkKind::Devnet, 3, free_port_base(), false).unwrap();
+    // `--alloc 5000`: the first coins of the network go to the founder's wallet, in the GENESIS
+    let mut g = init_economy(&dir, Some(owner_addr), None, Some(5_000), false).unwrap();
+    assert_eq!(g.allocations, vec![(owner_addr, 5_000)]);
+    g.coin.fee_per_byte = 0;
+    g.coin.initial_reward = 1_000;
+    g.coin.halving_interval = 100_000;
+    g.coin.unbonding_period = 5;
+    g.coin.min_total_stake = 1;
+    g.coin.min_validator_stake = 100;
+    std::fs::write(dir.join(ECONOMY_FILE), g.to_text()).unwrap();
+    let ec = load_economy(&dir).unwrap().unwrap();
+    let nodes: Vec<_> = (0..3).map(|i| Some(start_node(&dir, i, &ec))).collect();
+    let net = Net {
+        dir,
+        nodes,
+        genesis: ec.genesis,
+    };
+    let c = client(&net);
+
+    // height 0, and a client that replays the genesis already sees the founder's coins
+    assert!(heights(&c).iter().all(|h| *h == Some(0)));
+    let chain = c.econ_sync(&net.genesis).unwrap();
+    assert_eq!(chain.height(), 0);
+    assert_eq!(teko_coin::balance(chain.ledger(), &owner_addr), 5_000);
+    assert_eq!(teko_coin::minted(chain.ledger()), 5_000);
+    teko_coin::audit(chain.ledger()).unwrap();
+
+    // with those coins the founder can act at once: stake 3.000 makes the first block
+    let chain_id = net.genesis.chain_id.clone();
+    c.econ_submit(&[tx(&owner, &chain_id, 0, Op::Stake { amount: 3_000 })])
+        .unwrap();
+    wait("the stake block", 20, || {
+        heights(&c).iter().all(|h| h.is_some_and(|h| h >= 1))
+    });
+    let chain = c.econ_sync(&net.genesis).unwrap();
+    assert_eq!(teko_coin::stake_of(chain.ledger(), &owner_addr), 3_000);
+    // minted = genesis allocation + the one block reward the founder earned
+    assert_eq!(teko_coin::minted(chain.ledger()), 5_000 + 1_000);
+    teko_coin::audit(chain.ledger()).unwrap();
+    for n in net.nodes.into_iter().flatten() {
+        n.stop();
+    }
 }
 
 #[test]

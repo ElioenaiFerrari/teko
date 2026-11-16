@@ -50,12 +50,17 @@ Pré-requisitos: Rust (o `rust-toolchain.toml` fixa a versão) e, para a Suite, 
 make clean-dev      # opcional: apaga o estado local de testes
 make check          # opcional: formato + clippy + testes + docs
 make setup          # 1x: chaves de teste, firmware assinado e "fábrica" (pasta dev/)
-make devnet FOUNDER=tekow1…   # rede de TESTE: votos e economia em BFT (a cadeia só cresce com voto ou transação) (FOUNDER = endereço da aba Carteira; recebe as recompensas)
+
+# 1) O dispositivo e a Suite PRIMEIRO: a carteira do fundador (a sua) nasce no dispositivo.
+make emulator       # terminal 1: tela e botões do dispositivo (PIN aqui)
+make suite          # terminal 2: onboarding (PIN, carteira com frase de 24 palavras, ID Cívico); copie o endereço tekow1… da aba Carteira
+
+# 2) Só então a rede, com a SUA carteira como fundadora (ela recebe as recompensas)
+make devnet FOUNDER=tekow1… [ALLOC=1000]   # rede de TESTE: votos e economia em BFT (a cadeia só cresce com voto ou transação); a sua carteira recebe as primeiras moedas (ALLOC TEKO, padrão 1.000) já na gênese, para poder agir sem nenhum bloco antes
 make devnet-dkg     # cerimônia de chave entre os validadores (cédulas cifradas)
-make election       # cria a eleição de exemplo (7 pleitos)
-make emulator       # terminal 1: tela e botões do dispositivo (PIN aqui). Reinicie após make election
+make election       # cria a eleição de exemplo (7 pleitos) e a liga à rede
+                    # → reinicie o emulador (terminal 1): ele lê o trust.txt só na partida
 make publish        # publica a eleição no quadro
-make suite          # terminal 2: onboarding (PIN, carteira com frase de 24 palavras, ID Cívico) e votar
 make simulate N=200 # opcional: eleitores SINTÉTICOS (sempre rotulados)
 make devnet-status  # estado da rede     |  make devnet-blocks  # blocos
 make tally          # apuração no terminal

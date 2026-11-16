@@ -292,3 +292,4 @@ Legenda: **P** = `proptest` (muitos casos), **U** = unitário, **E** = ponta a p
 - **`no_std` em alvo embarcado real:** o CI compila o núcleo para `thumbv7em-none-eabihf` (passou em 2026-11-14); não há teste de execução em hardware.
 - **Quadro de avisos de operador único:** sem testemunhas independentes, um operador pode mostrar logs diferentes a pessoas diferentes (*split view*). Só um head fixado e comparado por terceiros detecta isso; não há essa comparação implementada.
 - **Fuzzing contínuo do parser:** só `proptest`; sem `cargo-fuzz`.
+| A gênese dá as primeiras moedas à carteira do fundador (`--alloc`): altura 0 já mostra o saldo, a oferta fecha, e o fundador consegue travar stake sem nenhum bloco antes | node: `the_genesis_gives_the_founder_the_first_coins_so_the_network_can_start_with_no_block_at_all` |

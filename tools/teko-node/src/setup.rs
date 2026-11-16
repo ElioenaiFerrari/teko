@@ -131,12 +131,14 @@ pub const ECONOMY_FILE: &str = "economy.txt";
 /// validator 0 (its consensus key is the node key) and the rewards go to `founder_owner`
 /// (the wallet address of the product owner). Without an owner the rewards go to the
 /// node's own account, which nobody can spend from (a warning for the caller).
-/// `founder_target` (ypy) overrides N (local devnet default: 1.000 TEKO).
+/// `founder_target` (ypy) overrides N (local devnet default: 1.000 TEKO). `founder_alloc` (ypy) puts the
+/// first coins of the network in the founder wallet, in the genesis (only with a `founder_owner`).
 /// Also creates the TEST registrar keys of the asset classes `imovel` and `veiculo` (2 of 3 each).
 pub fn init_economy(
     dir: &Path,
     founder_owner: Option<teko_ledger::Address>,
     founder_target: Option<u64>,
+    founder_alloc: Option<u64>,
     force: bool,
 ) -> Result<teko_economy::EconomyGenesis, NodeError> {
     let path = dir.join(ECONOMY_FILE);
@@ -161,6 +163,11 @@ pub fn init_economy(
     );
     if let Some(n) = founder_target {
         g.coin.founder_target = n;
+    }
+    // The first coins of the network, in the GENESIS, to the founder's wallet (ADR-0034: with no
+    // block made on a timer, the network needs coins before the first transaction).
+    if let (Some(n), Some(wallet)) = (founder_alloc.filter(|n| *n > 0), founder_owner) {
+        g.allocations.push((wallet, n));
     }
     let mut rng = UnwrapErr(rand::rngs::SysRng);
     // one órgão (2-of-3, TEST keys) per asset class (ADR-0032)

@@ -25,9 +25,13 @@ Cada rede tem um `chain_id` (`teko-devnet-1`, `teko-testnet-1`). Ele entra no **
 - **Persistência:** `dev/net/node-<i>/votes.blocks` (blocos finais, reverificados no boot) e `votes.wal` (rodada e *lock* do BFT, gravados antes de cada voto sair, ADR-0030). Redes criadas antes do ADR-0034 (`blocks.log`) precisam ser recriadas: `make devnet-reset`.
 
 ## Economia sobre BFT (M6a, ADR-0028)
+**Primeiras moedas.** Como nenhum bloco nasce sozinho (ADR-0034), a rede precisa de moeda antes da primeira transação. O `teko-node init --founder tekow1… --alloc TEKO` (`make devnet FOUNDER=… ALLOC=…`, padrão 1.000 TEKO de teste) grava essa alocação **na gênese**, na carteira do fundador; todo nó e todo cliente a reproduz do arquivo `economy.txt` (`alloc=…`), no estado de altura 0. Ela conta para o teto e para a auditoria de oferta (`criadas = saldos + stakes + queimadas`), é rotulada como TESTE e só existe em redes de teste (a mainnet está travada). `--alloc 0` não dá moedas; outras carteiras podem receber alocações editando as linhas `alloc=` do `economy.txt` antes de subir. Sem `--founder` não há alocação (a conta do nó não é movimentada por ninguém).
+
 Ao lado da cadeia de votos, cada nó roda o **livro de economia** (moeda, bens, stake) em consenso **BFT** ponderado por stake. Só o **validador fundador** (nó 0) vota no começo; os nós 1 e 2 **replicam**. As recompensas de bloco vão para a **carteira do fundador** (`make devnet FOUNDER=tekow1…`, o endereço da tela Carteira da Suite). Quando o stake total chega a N (1.000 TEKO na devnet local; `make devnet FOUNDER=… FOUNDER_TARGET=…` muda, em TEKO; ADR-0029), os validadores passam a ser os que têm stake. `make devnet-economy` mostra altura, fase e validadores e **verifica a cadeia**; `make devnet-founder FOUNDER=…` troca o fundador e zera a economia. Blocos vazios a cada 3 s (`TEKO_EMPTY_BLOCK_MS`) pagam as recompensas. Detalhes: [fluxo 12](flows/12-ledger-coin-and-assets.md).
 
 ## Rodando
+
+**Ordem importa:** o fundador é a **sua carteira**, que só existe depois do onboarding no dispositivo e na Suite (`make emulator` e `make suite`; o endereço `tekow1…` está na aba Carteira). Só então suba a rede com `make devnet FOUNDER=tekow1…`. Se subiu a rede antes, `make devnet-stop && make devnet-founder FOUNDER=tekow1…` troca o fundador e zera a economia.
 
 ```
 make devnet            # sobe 3 validadores (cria dev/net na 1ª vez; nenhum bloco nasce até haver transação ou voto)

@@ -105,7 +105,7 @@ fn the_simulated_equivocation_burns_a_tenth_of_the_owners_stake_each_time() {
     ));
     let _ = std::fs::remove_dir_all(&dir);
     init_network(&dir, NetworkKind::Devnet, 3, free_port_base(), false).unwrap();
-    let mut g = init_economy(&dir, Some(owner), None, false).unwrap();
+    let mut g = init_economy(&dir, Some(owner), None, None, false).unwrap();
     g.coin.fee_per_byte = 0;
     g.coin.initial_reward = 1_000;
     g.coin.halving_interval = 100_000;

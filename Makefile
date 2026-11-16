@@ -25,9 +25,9 @@ suite: ## Abre a Teko Suite (janela desktop)
 NET ?= dev/net
 NODE = target/debug/teko-node
 
-devnet: ## Sobe a rede de TESTE local (votos e economia em BFT; nenhum bloco nasce sozinho). Primeira vez: make devnet FOUNDER=tekow1… (sua carteira)
+devnet: ## Sobe a rede de TESTE local (votos e economia em BFT; nenhum bloco nasce sozinho). Primeira vez: make devnet FOUNDER=tekow1… [ALLOC=1000] (sua carteira recebe as primeiras moedas, na gênese)
 	$(CARGO) build -q -p teko-node
-	@test -f $(NET)/network.txt || $(NODE) init --dir $(NET) --network devnet $(if $(FOUNDER),--founder $(FOUNDER)) $(if $(FOUNDER_TARGET),--founder-target $(FOUNDER_TARGET))
+	@test -f $(NET)/network.txt || $(NODE) init --dir $(NET) --network devnet $(if $(FOUNDER),--founder $(FOUNDER)) $(if $(FOUNDER_TARGET),--founder-target $(FOUNDER_TARGET)) $(if $(ALLOC),--alloc $(ALLOC))
 	@$(NODE) stop --dir $(NET) >/dev/null 2>&1; \
 	for i in 0 1 2; do $(NODE) run --dir $(NET) --index $$i >$(NET)/node-$$i/node.log 2>&1 & done; \
 	sleep 1; $(NODE) status --dir $(NET)
@@ -43,7 +43,7 @@ devnet-stop: ## Para os 3 validadores (os blocos ficam em dev/net/node-*/votes.b
 
 devnet-founder: ## Define a carteira do fundador (recebe as recompensas) e zera a economia. Uso: make devnet-founder FOUNDER=tekow1…
 	@test -n "$(FOUNDER)" || { echo 'Uso: make devnet-founder FOUNDER=tekow1… (endereço da aba Carteira da Suite)'; exit 1; }
-	@$(NODE) stop --dir $(NET) >/dev/null 2>&1; $(NODE) founder --dir $(NET) --address $(FOUNDER)
+	@$(NODE) stop --dir $(NET) >/dev/null 2>&1; $(NODE) founder --dir $(NET) --address $(FOUNDER) $(if $(ALLOC),--alloc $(ALLOC))
 
 devnet-equivocate: ## SIMULAÇÃO (só dev): o validador de teste assina 2 votos conflitantes e leva Slash. Uso: make devnet-equivocate [VALIDATOR=0]. Antes, trave stake na Suite (Validadores)
 	$(CARGO) run -q -p devnet-sim -- equivocate --dir $(NET) --validator $(or $(VALIDATOR),0)

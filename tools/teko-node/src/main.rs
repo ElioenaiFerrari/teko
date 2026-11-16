@@ -14,7 +14,7 @@ const HELP: &str = "\
 teko-node: rede de teste federada (PoA). PROTÓTIPO, só chaves de teste.
 
 USO:
-  teko-node init   [--dir dev/net] [--network devnet|testnet] [--nodes 3] [--port 7901] [--founder tekow1…] [--founder-target TEKO] [--force]
+  teko-node init   [--dir dev/net] [--network devnet|testnet] [--nodes 3] [--port 7901] [--founder tekow1…] [--alloc TEKO] [--founder-target TEKO] [--force]
                    --founder: endereço da CARTEIRA (do dispositivo) que recebe as recompensas do fundador (opção B, ADR-0028)
   teko-node run    [--dir dev/net] --index I        sobe o validador I (só loopback)
   teko-node stop   [--dir dev/net]                  para os validadores iniciados com `run` (pelos arquivos .pid)
@@ -85,25 +85,33 @@ fn run(args: Vec<String>) -> Result<(), String> {
                 ),
                 None => None,
             };
-            let g =
-                teko_node::init_economy(&dir, owner, target, f.contains_key("force")).map_err(e)?;
+            let alloc = founder_alloc(&f, owner.is_some())?;
+            let g = teko_node::init_economy(&dir, owner, target, alloc, f.contains_key("force"))
+                .map_err(e)?;
             match owner {
-                Some(a) => println!(
-                    "Economia {}: o fundador (validador 0) manda as recompensas para a carteira {} · a fase de fundador termina com {} de stake total",
-                    g.chain_id,
-                    teko_crypto::wallet_address(&a).unwrap_or_default(),
-                    teko_crypto::amount::format_amount(g.coin.founder_target)
-                ),
+                Some(a) => {
+                    println!(
+                        "Economia {}: o fundador (validador 0) manda as recompensas para a carteira {} · a fase de fundador termina com {} de stake total",
+                        g.chain_id,
+                        teko_crypto::wallet_address(&a).unwrap_or_default(),
+                        teko_crypto::amount::format_amount(g.coin.founder_target)
+                    );
+                    let first: u64 = g.allocations.iter().map(|(_, n)| *n).sum();
+                    println!(
+                        "Primeiras moedas da rede (TESTE, na gênese): {} para a carteira do fundador",
+                        teko_crypto::amount::format_amount(first)
+                    );
+                }
                 None => println!(
                     "AVISO: sem --founder, as recompensas vão para uma conta do nó que ninguém movimenta. Use: make devnet-founder FOUNDER=<seu endereço tekow1…> e make devnet."
                 ),
             }
             println!(
-                "Rede {} criada em {}: {} validadores, {} de {} assinam cada bloco, chain_id={}",
+                "Rede {} criada em {}: {} validadores (o bloco é final com mais de 2/3: {} de {}), chain_id={}",
                 n.profile.kind.name(),
                 dir.display(),
                 n.profile.validators.len(),
-                n.profile.threshold,
+                n.profile.validators.len() * 2 / 3 + 1,
                 n.profile.validators.len(),
                 n.profile.chain_id
             );
@@ -224,7 +232,8 @@ fn run(args: Vec<String>) -> Result<(), String> {
             let a = f.get("address").ok_or("faltou --address")?;
             let owner = teko_crypto::parse_wallet_address(a)
                 .map_err(|_| "endereço tekow1… inválido (confira o checksum)")?;
-            teko_node::init_economy(&dir, Some(owner), None, true).map_err(e)?;
+            let alloc = founder_alloc(&f, true)?;
+            teko_node::init_economy(&dir, Some(owner), None, alloc, true).map_err(e)?;
             for i in 0..net.peers.len() {
                 let nd = teko_node::node_dir(&dir, i);
                 let _ = std::fs::remove_file(nd.join("economy.blocks"));
@@ -306,6 +315,25 @@ fn run(args: Vec<String>) -> Result<(), String> {
         _ => print!("{HELP}"),
     }
     Ok(())
+}
+
+/// Default first coins of a TEST network for the founder wallet (1.000 TEKO, the founder-phase target).
+const DEFAULT_FOUNDER_ALLOC: u64 = 1_000 * 1_000_000;
+
+/// `--alloc TEKO`: the first coins of the network, in the genesis, to the founder wallet. Without
+/// the flag a founder wallet gets the default (a test network needs coins before any transaction
+/// because no block is made on a timer); `--alloc 0` means none.
+fn founder_alloc(
+    f: &std::collections::HashMap<String, String>,
+    has_founder: bool,
+) -> Result<Option<u64>, String> {
+    match f.get("alloc") {
+        Some(v) => teko_crypto::amount::parse_amount(v)
+            .map(Some)
+            .map_err(|x| format!("--alloc: {x}")),
+        None if has_founder => Ok(Some(DEFAULT_FOUNDER_ALLOC)),
+        None => Ok(None),
+    }
 }
 
 fn main() -> ExitCode {

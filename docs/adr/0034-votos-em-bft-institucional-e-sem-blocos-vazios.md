@@ -50,4 +50,5 @@ Aceita provisoriamente com as três recomendações (1: poder igual e conjunto f
 - Explorador e Suite mostram precommits e quórum no lugar de assinaturas M-de-N.
 - Redes de teste antigas (`blocks.log`) precisam ser recriadas (`make devnet-reset`).
 - Testes: ver `docs/TEST-MATRIX.md` (etapa 6 e "Economia sem blocos vazios").
+- **Primeiras moedas na gênese:** sem blocos vazios o fundador não tem como ganhar a primeira recompensa, então `teko-node init --founder … --alloc TEKO` (padrão 1.000 TEKO de teste) põe as primeiras moedas **na gênese**, na carteira dele (decisão do dono do produto: "alloc como argumento ao subir a gênese"). A fundadora é a carteira do dono, criada no dispositivo e na Suite **antes** de subir a rede (README).
 

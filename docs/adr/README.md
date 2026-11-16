@@ -39,5 +39,6 @@ Regra: decisões de produto/segurança só passam a `Aceito` pela aprovação do
 | [0033](0033-verificacao-do-quadro-em-paralelo-e-em-passos.md) | Verificação do quadro em paralelo, em passos e com estado compartilhado | Aceito | — |
 | [0032](0032-classes-de-bens-e-metadados-amarrados.md) | Classes de bens (imóvel e veículo) e metadados amarrados ao consentimento | Aceito | — |
 | [0034](0034-votos-em-bft-institucional-e-sem-blocos-vazios.md) | Rede de votos em BFT institucional e economia sem blocos vazios | Aceito provisoriamente | confirmar |
+| [0035](0035-caucao-das-instituicoes-e-penalidade-na-rede-de-votos.md) | Caução das instituições e penalidade na rede de votos | Proposto | Itens 1-4 aceitos (10% queimado); recompensa de disponibilidade PENDENTE |
 | [0031](0031-explorador-da-chain.md) | Explorador da chain: somente leitura, verificado no cliente | Aceito (controles de dev pendentes) | decidir faucet/controles de dev |
 | [0030](0030-slash-automatico-e-bloqueio-persistido.md) | Penalidade automática e lock do BFT persistido | Aceito | — |

@@ -113,7 +113,7 @@ fn the_explorer_verifies_the_chain_of_three_real_nodes_and_decodes_a_transfer() 
     ));
     let _ = std::fs::remove_dir_all(&dir);
     init_network(&dir, NetworkKind::Devnet, 3, free_port_base(), false).unwrap();
-    let mut g: EconomyGenesis = init_economy(&dir, Some(owner), None, false).unwrap();
+    let mut g: EconomyGenesis = init_economy(&dir, Some(owner), None, None, false).unwrap();
     g.coin.fee_per_byte = 0;
     g.coin.initial_reward = 1_000;
     g.coin.halving_interval = 100_000;

@@ -14,6 +14,21 @@ pub struct ClassSpec {
     pub window_secs: u64,
 }
 
+/// A credential type governed by an M-of-N issuing organ (ADR-0037).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CredTypeSpec {
+    pub name: String,
+    pub threshold: u32,
+    /// Members: the `tekow1…` addresses of their device wallets.
+    pub members: Vec<Address>,
+    /// Contest window in seconds (a veto is possible inside it).
+    pub contest_secs: u64,
+    /// 0 = never expires; otherwise the longest validity in seconds.
+    pub validity_secs: u64,
+    /// Public types keep their claims in clear on the chain.
+    pub public: bool,
+}
+
 /// Everything that defines the first state. Public data, no secrets.
 ///
 /// Text format (`economy.txt`), one `key=value` per line, `#` comments:
@@ -33,6 +48,8 @@ pub struct ClassSpec {
 /// vote_chain_id=teko-devnet-1                       (the vote chain whose institutions bond here, ADR-0035)
 /// founder=<hex consensus key> tekow1…        (the OWNER address gets the rewards)
 /// class=imovel 2 window=1200 <hex key> <hex key> <hex key>   (`window=` optional: default 1200 s)
+/// credtype=cnh-b 2 contest=604800 validity=157680000 public=0 tekow1… tekow1… tekow1…
+///                                                   (credential type, ADR-0037; all options optional)
 /// alloc=tekow1… 5000000000                          (TEST networks only; normally absent)
 /// ```
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -41,6 +58,7 @@ pub struct EconomyGenesis {
     pub coin: CoinConfig,
     pub founders: Vec<(Vec<u8>, Address)>,
     pub classes: Vec<ClassSpec>,
+    pub credtypes: Vec<CredTypeSpec>,
     pub allocations: Vec<(Address, u64)>,
 }
 
@@ -71,6 +89,7 @@ impl EconomyGenesis {
             },
             founders: vec![(founder_key, owner)],
             classes: Vec::new(),
+            credtypes: Vec::new(),
             allocations: Vec::new(),
         }
     }
@@ -80,7 +99,11 @@ impl EconomyGenesis {
     pub fn build_ledger(&self) -> Result<Ledger, String> {
         let mut l = Ledger::new(
             &self.chain_id,
-            vec![teko_coin::module(), teko_assets::module()],
+            vec![
+                teko_coin::module(),
+                teko_assets::module(),
+                teko_credentials::module(),
+            ],
         )
         .map_err(|e| format!("{e:?}"))?
         .with_fee_module(teko_coin::COIN_MODULE)
@@ -98,6 +121,18 @@ impl EconomyGenesis {
                 &c.registrars,
                 c.threshold,
                 c.window_secs,
+            )?;
+        }
+        for c in &self.credtypes {
+            let members: Vec<Vec<u8>> = c.members.iter().map(|a| a.to_vec()).collect();
+            teko_credentials::genesis_type(
+                &mut l,
+                c.name.as_bytes(),
+                &members,
+                c.threshold,
+                c.contest_secs,
+                c.validity_secs,
+                c.public,
             )?;
         }
         Ok(l)
@@ -139,6 +174,22 @@ impl EconomyGenesis {
                 keys.join(" ")
             ));
         }
+        for c in &self.credtypes {
+            let keys: Vec<String> = c
+                .members
+                .iter()
+                .map(|a| wallet_address(a).unwrap_or_default())
+                .collect();
+            s.push_str(&format!(
+                "credtype={} {} contest={} validity={} public={} {}\n",
+                c.name,
+                c.threshold,
+                c.contest_secs,
+                c.validity_secs,
+                u8::from(c.public),
+                keys.join(" ")
+            ));
+        }
         for (a, n) in &self.allocations {
             s.push_str(&format!(
                 "alloc={} {n}\n",
@@ -154,6 +205,7 @@ impl EconomyGenesis {
             coin: CoinConfig::default(),
             founders: Vec::new(),
             classes: Vec::new(),
+            credtypes: Vec::new(),
             allocations: Vec::new(),
         };
         let mut saw_units = false;
@@ -222,6 +274,38 @@ impl EconomyGenesis {
                         registrars,
                         window_secs,
                     });
+                }
+                "credtype" => {
+                    let mut it = v.split_whitespace();
+                    let (Some(name), Some(th)) = (it.next(), it.next()) else {
+                        return Err(format!("linha {}: credtype=<nome> <M> <chaves…>", n + 1));
+                    };
+                    let bad = |what: &str| format!("linha {}: {what} inválido", n + 1);
+                    let mut spec = CredTypeSpec {
+                        name: name.to_string(),
+                        threshold: th.parse().map_err(|_| bad("M"))?,
+                        members: Vec::new(),
+                        contest_secs: teko_credentials::DEFAULT_CONTEST_SECS,
+                        validity_secs: 0,
+                        public: false,
+                    };
+                    for tok in it {
+                        if let Some(x) = tok.strip_prefix("contest=") {
+                            spec.contest_secs = x.parse().map_err(|_| bad("contest"))?;
+                        } else if let Some(x) = tok.strip_prefix("validity=") {
+                            spec.validity_secs = x.parse().map_err(|_| bad("validity"))?;
+                        } else if let Some(x) = tok.strip_prefix("public=") {
+                            spec.public = match x {
+                                "0" => false,
+                                "1" => true,
+                                _ => return Err(bad("public")),
+                            };
+                        } else {
+                            spec.members
+                                .push(parse_wallet_address(tok).map_err(|_| bad("endereço"))?);
+                        }
+                    }
+                    g.credtypes.push(spec);
                 }
                 "alloc" => {
                     let mut it = v.split_whitespace();

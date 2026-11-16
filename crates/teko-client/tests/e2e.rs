@@ -1253,3 +1253,107 @@ fn staking_is_signed_on_the_device_and_the_wallet_becomes_a_validator_in_the_dev
     let r = c.wallet_sign_stake(CHAIN_ID, 1, 100, fee_for(100), nonce);
     assert_eq!(device_code(r.unwrap_err()), ErrorCode::UserRejected);
 }
+
+#[test]
+fn credential_keys_and_organ_transactions_are_signed_on_the_real_device_and_run_in_the_ledger() {
+    use teko_client::{CredentialOpArgs, CredentialOpKind};
+    use teko_credentials::{CREDENTIALS_MODULE, Status, credential_id, genesis_type, module};
+    use teko_ledger::{Ledger, Tx, address_of};
+
+    let rig = start();
+    let mut c = connect(&rig);
+    let (m, b) = firmware(&rig, 1);
+    c.install_firmware(&rig.trust, &m, &b, &mut |_, _| {})
+        .unwrap();
+    c.setup_pin().unwrap();
+    c.wallet_setup().unwrap();
+    let me = teko_crypto::hex::decode(&c.wallet_address().unwrap().public_key).unwrap();
+    let prompts = Arc::new(AtomicUsize::new(0));
+    let p2 = prompts.clone();
+    c.set_on_button(move |k| {
+        if matches!(
+            k,
+            teko_protocol::ButtonKind::CredentialKey | teko_protocol::ButtonKind::SignCredentialOp
+        ) {
+            p2.fetch_add(1, Ordering::SeqCst);
+        }
+    });
+
+    // the holder gets ITS key for the type (one confirmation on the device)
+    let holder = c.credential_key("cnh-b").unwrap();
+    assert_eq!(holder, c.credential_key("cnh-b").unwrap());
+    assert_ne!(holder, c.credential_key("cnh-a").unwrap());
+    assert_ne!(holder, me);
+    assert_eq!(prompts.load(Ordering::SeqCst), 3);
+
+    // the device wallet is 1 of 1 member of an organ in a real ledger
+    let mut l = Ledger::new("teko-devnet", vec![module()]).unwrap();
+    genesis_type(
+        &mut l,
+        b"cnh-b",
+        &[address_of(&me).to_vec()],
+        1,
+        600,
+        100_000_000,
+        false,
+    )
+    .unwrap();
+    let claims = b"nome=Ana Souza;categoria=B".to_vec();
+    let salt = [3u8; 16];
+    let until = 1_700_000_000 + 50_000_000;
+    let tx = c
+        .wallet_sign_credential_op(&CredentialOpArgs {
+            chain_id: "teko-devnet",
+            kind: CredentialOpKind::Propose,
+            ctype: "cnh-b",
+            subject: &holder,
+            claims: &claims,
+            public: false,
+            salt: Some(&salt),
+            commitment: None,
+            valid_until: until,
+            reason: "",
+            contest_secs: 600,
+            fee: 0,
+            nonce: 0,
+        })
+        .unwrap();
+    assert_eq!(prompts.load(Ordering::SeqCst), 4);
+    assert_eq!(tx.module, CREDENTIALS_MODULE);
+    assert_eq!(address_of(&tx.sender), address_of(&me)); // the wallet's OWN transaction
+    assert!(rig.hal.screens().iter().any(|s| {
+        s.title == "EMITIR CREDENCIAL" && s.lines.iter().any(|l| l.contains("categoria=B"))
+    }));
+    l.apply_block_at(1, 1_700_000_000, &[9; 32], &[Tx::clone(&tx)])
+        .unwrap();
+    let commitment = teko_crypto::ledger::cred_private_commitment(&salt, &claims);
+    let id = credential_id(b"cnh-b", &holder, &commitment, &[], until);
+    // 1 of 1: approved at once, pending in the window, active after it
+    assert_eq!(
+        teko_credentials::status(&l, b"cnh-b", &id, 1_700_000_001),
+        Some(Status::Pending)
+    );
+    assert_eq!(
+        teko_credentials::status(&l, b"cnh-b", &id, 1_700_000_000 + 600),
+        Some(Status::Active)
+    );
+
+    // the user refuses on the device: nothing is signed
+    rig.hal.push_decision(Decision::Reject);
+    let r = c.wallet_sign_credential_op(&CredentialOpArgs {
+        chain_id: "teko-devnet",
+        kind: CredentialOpKind::Revoke,
+        ctype: "cnh-b",
+        subject: &holder,
+        claims: &claims,
+        public: false,
+        salt: Some(&salt),
+        commitment: None,
+        valid_until: until,
+        reason: "cassada",
+        contest_secs: 600,
+        fee: 0,
+        nonce: 1,
+    });
+    assert_eq!(device_code(r.unwrap_err()), ErrorCode::UserRejected);
+}

@@ -32,6 +32,8 @@ pub struct SuiteInner {
     /// board it was built from, so a different chain/election (reset, new network) never
     /// reuses stale state.
     pub board: Mutex<Option<BoardState>>,
+    /// Credential keys this session exported (type -> hex), to list what was issued to them.
+    pub cred_keys: Mutex<std::collections::BTreeMap<String, String>>,
 }
 
 pub struct BoardState {
@@ -175,6 +177,8 @@ fn prompt_name(kind: ButtonKind) -> &'static str {
         ButtonKind::SignAssetOffer => "sign_asset_offer",
         ButtonKind::SignAssetAccept => "sign_asset_accept",
         ButtonKind::SignStake => "sign_stake",
+        ButtonKind::CredentialKey => "credential_key",
+        ButtonKind::SignCredentialOp => "sign_credential_op",
         ButtonKind::Unspecified => "unknown",
     }
 }
@@ -2487,4 +2491,141 @@ pub fn board_publish() -> Result<u64, UiError> {
 #[tauri::command]
 pub async fn wipe(app: AppHandle, suite: State<'_, Suite>) -> Result<(), UiError> {
     with_device(app, suite.inner().clone(), |c| c.wipe()).await
+}
+
+// ───────────────────────── credentials on the chain (ADR-0037) ─────────────────────────
+
+#[derive(Serialize)]
+pub struct CredTypeView {
+    ctype: String,
+    public: bool,
+    contest_secs: u64,
+    validity_secs: u64,
+    /// The credential key exported on this session (hex), if any.
+    key: Option<String>,
+}
+
+#[derive(Serialize)]
+pub struct MyCredView {
+    ctype: String,
+    id: String,
+    status: &'static str,
+    claims: Option<String>,
+    valid_until: u64,
+    active_at: u64,
+    reason: String,
+}
+
+#[derive(Serialize)]
+pub struct CredsView {
+    available: bool,
+    reason: String,
+    chain_id: String,
+    now: u64,
+    types: Vec<CredTypeView>,
+    mine: Vec<MyCredView>,
+}
+
+fn status_name(s: teko_credentials::Status) -> &'static str {
+    use teko_credentials::Status;
+    match s {
+        Status::Proposed => "proposed",
+        Status::Pending => "pending",
+        Status::Active => "active",
+        Status::Expired => "expired",
+        Status::Vetoed => "vetoed",
+        Status::Revoked => "revoked",
+    }
+}
+
+/// What the chain says about the credentials issued to the keys this session exported. READ-ONLY:
+/// credentials are issued by the organs in the separate issuer app, never by this Suite.
+#[tauri::command]
+pub async fn credentials_view(suite: State<'_, Suite>) -> Result<CredsView, UiError> {
+    let suite = suite.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let mut view = CredsView {
+            available: false,
+            reason: String::new(),
+            chain_id: String::new(),
+            now: std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map_or(0, |d| d.as_secs()),
+            types: Vec::new(),
+            mine: Vec::new(),
+        };
+        let net = resolve_dev_dir().join("net");
+        if !net.join(teko_node::ECONOMY_FILE).exists() {
+            view.reason = "Sem rede: rode make devnet (as credenciais ficam na chain).".into();
+            return Ok(view);
+        }
+        let world = match teko_node::NodeWorld::open(&net) {
+            Ok(w) => w,
+            Err(e) => {
+                view.reason = format!("rede indisponível: {e}");
+                return Ok(view);
+            }
+        };
+        let keys = suite
+            .cred_keys
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone();
+        let ledger = world.ledger_ref();
+        view.available = true;
+        view.chain_id = world.genesis().chain_id.clone();
+        for (name, t) in teko_credentials::types(ledger) {
+            let ctype = String::from_utf8_lossy(&name).to_string();
+            let key = keys.get(&ctype).cloned();
+            if let Some(k) = key.as_deref().and_then(|k| hex::decode(k).ok()) {
+                for (id, rec) in teko_credentials::credentials_of_type(ledger, &name) {
+                    if rec.subject != k {
+                        continue;
+                    }
+                    view.mine.push(MyCredView {
+                        ctype: ctype.clone(),
+                        id: hex::encode(&id),
+                        status: status_name(rec.status_at(view.now)),
+                        claims: t
+                            .public
+                            .then(|| String::from_utf8(rec.claims.clone()).ok())
+                            .flatten(),
+                        valid_until: rec.valid_until,
+                        active_at: rec.active_at,
+                        reason: rec.reason.clone(),
+                    });
+                }
+            }
+            view.types.push(CredTypeView {
+                ctype,
+                public: t.public,
+                contest_secs: t.contest_secs,
+                validity_secs: t.validity_secs,
+                key,
+            });
+        }
+        Ok(view)
+    })
+    .await
+    .map_err(|e| ui_err("Internal", e))?
+}
+
+/// The PUBLIC credential key of this holder for one type, confirmed on the device. The holder
+/// hands it to the issuing organ; it is unlinkable to the identity, wallet and voter keys.
+#[tauri::command]
+pub async fn credential_key(
+    app: AppHandle,
+    suite: State<'_, Suite>,
+    ctype: String,
+) -> Result<String, UiError> {
+    let inner = suite.inner().clone();
+    let t2 = ctype.clone();
+    let key = with_device(app, inner.clone(), move |c| c.credential_key(&t2)).await?;
+    let key = hex::encode(&key);
+    inner
+        .cred_keys
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .insert(ctype, key.clone());
+    Ok(key)
 }

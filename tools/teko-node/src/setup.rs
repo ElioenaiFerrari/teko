@@ -141,6 +141,41 @@ pub fn init_economy(
     founder_alloc: Option<u64>,
     force: bool,
 ) -> Result<teko_economy::EconomyGenesis, NodeError> {
+    init_economy_with_issuer(
+        dir,
+        founder_owner,
+        founder_owner,
+        founder_target,
+        founder_alloc,
+        force,
+    )
+}
+
+/// The credential types of the local test network (ADR-0037): name, public claims, contest
+/// window (s) and validity (s). Each has an organ of 3 members, 2-of-3: the `issuer` wallet (when
+/// given) and simulated test members whose keys live in `orgmember-<type>-<i>.key`.
+pub const DEVNET_CRED_TYPES: [(&str, bool, u64, u64); 3] = [
+    ("cnh-a", false, 1_200, 157_680_000),
+    ("cnh-b", false, 1_200, 157_680_000),
+    ("candidato", true, 1_200, 31_536_000),
+];
+
+/// File of the simulated organ member `i` of a credential type (TEST key).
+pub fn orgmember_file(ctype: &str, i: usize) -> String {
+    format!("orgmember-{ctype}-{i}.key")
+}
+
+/// Like `init_economy`, with the wallet that is a MEMBER of the test credential organs (`issuer`;
+/// the app that issues credentials signs with it, on the device). Without it all 3 members are
+/// simulated.
+pub fn init_economy_with_issuer(
+    dir: &Path,
+    founder_owner: Option<teko_ledger::Address>,
+    issuer: Option<teko_ledger::Address>,
+    founder_target: Option<u64>,
+    founder_alloc: Option<u64>,
+    force: bool,
+) -> Result<teko_economy::EconomyGenesis, NodeError> {
     let path = dir.join(ECONOMY_FILE);
     if path.exists() && !force {
         return Err(NodeError::Refused(format!(
@@ -194,8 +229,39 @@ pub fn init_economy(
             window_secs: 1_200,
         });
     }
+    // one organ per credential type (ADR-0037): the issuer wallet + simulated members
+    for (name, public, contest_secs, validity_secs) in DEVNET_CRED_TYPES {
+        let sim = if issuer.is_some() { 2 } else { 3 };
+        let mut members: Vec<teko_ledger::Address> = issuer.into_iter().collect();
+        for i in 0..sim {
+            let p = dir.join(orgmember_file(name, i));
+            let k = if p.exists() {
+                load_key(&p)?
+            } else {
+                let k = generate_signing_key(&mut rng);
+                write_private(&p, &hex::encode(&k.to_bytes()))?;
+                k
+            };
+            members.push(teko_ledger::address_of(&public_key_bytes(&k)));
+        }
+        g.credtypes.push(teko_economy::CredTypeSpec {
+            name: name.into(),
+            threshold: 2,
+            members,
+            contest_secs,
+            validity_secs,
+            public,
+        });
+    }
     fs::write(&path, g.to_text())?;
     Ok(g)
+}
+
+/// The simulated members of a credential organ (TEST keys), in file order.
+pub fn load_orgmember_keys(dir: &Path, ctype: &str) -> Vec<SigningKey> {
+    (0..3)
+        .filter_map(|i| load_key(&dir.join(orgmember_file(ctype, i))).ok())
+        .collect()
 }
 
 /// Loads the economy configuration of the network, if it has one.

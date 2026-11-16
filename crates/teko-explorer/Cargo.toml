@@ -11,6 +11,7 @@ teko-crypto.workspace = true
 teko-ledger.workspace = true
 teko-coin.workspace = true
 teko-assets.workspace = true
+teko-credentials.workspace = true
 teko-economy.workspace = true
 teko-bft.workspace = true
 prost.workspace = true

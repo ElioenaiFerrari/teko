@@ -59,6 +59,9 @@ pub fn coin_stake_payload(action: u8, amount: u64) -> Vec<u8> {
 /// Module id of the assets module in `Tx::module`.
 pub const MODULE_ASSETS: u32 = 2;
 
+/// Module id of the credentials module in `Tx::module` (ADR-0037).
+pub const MODULE_CREDENTIALS: u32 = 3;
+
 fn put_varint(out: &mut Vec<u8>, mut v: u64) {
     while v >= 0x80 {
         out.push((v as u8 & 0x7F) | 0x80);
@@ -121,6 +124,76 @@ pub fn asset_accept_payload(
     put_u64(&mut p, 4, version);
     put_bytes(&mut p, 5, metadata_hash);
     p
+}
+
+/// Op bytes of the credentials module (`teko-credentials`), shared with the device.
+pub const CRED_OP_PROPOSE: u8 = 1;
+pub const CRED_OP_APPROVE: u8 = 2;
+pub const CRED_OP_VETO: u8 = 3;
+pub const CRED_OP_REVOKE: u8 = 4;
+
+/// A protobuf `string` field has the same wire format as `bytes`.
+fn put_str(out: &mut Vec<u8>, tag: u8, v: &str) {
+    put_bytes(out, tag, v.as_bytes());
+}
+
+/// Payload of a credentials `Propose` (op 1 ‖ protobuf `ProposeOp`), byte for byte what
+/// `teko-credentials` encodes (ADR-0037). The DEVICE builds it from the fields it shows.
+pub fn cred_propose_payload(
+    ctype: &[u8],
+    subject: &[u8],
+    commitment: &[u8; 32],
+    claims: &[u8],
+    valid_until: u64,
+) -> Vec<u8> {
+    let mut p = Vec::from([CRED_OP_PROPOSE]);
+    put_bytes(&mut p, 1, ctype);
+    put_bytes(&mut p, 2, subject);
+    put_bytes(&mut p, 3, commitment);
+    put_bytes(&mut p, 4, claims);
+    put_u64(&mut p, 5, valid_until);
+    p
+}
+
+/// Payload of a credentials `Approve`, `Veto` or `Revoke` (`op` is one of the `CRED_OP_*` bytes
+/// 2..=4 ‖ protobuf `VoteOp`).
+pub fn cred_vote_payload(op: u8, ctype: &[u8], id: &[u8; 32], reason: &str) -> Vec<u8> {
+    let mut p = Vec::from([op]);
+    put_bytes(&mut p, 1, ctype);
+    put_bytes(&mut p, 2, id);
+    put_str(&mut p, 3, reason);
+    p
+}
+
+/// Identifier of a credential: a hash of everything the organ proposed.
+pub fn cred_id(
+    ctype: &[u8],
+    subject: &[u8],
+    commitment: &[u8],
+    claims: &[u8],
+    valid_until: u64,
+) -> [u8; 32] {
+    crate::keys::tagged_hash(
+        crate::tags::CRED_ID,
+        &[
+            ctype,
+            subject,
+            commitment,
+            claims,
+            &valid_until.to_be_bytes(),
+        ],
+    )
+}
+
+/// Commitment of a PUBLIC credential: a hash of its claims in clear.
+pub fn cred_public_commitment(claims: &[u8]) -> [u8; 32] {
+    crate::keys::tagged_hash(crate::tags::CRED_CLAIMS, &[claims])
+}
+
+/// Commitment of a PRIVATE credential: a salted hash. The holder keeps the claims and the salt,
+/// the chain only the commitment.
+pub fn cred_private_commitment(salt: &[u8; 16], claims: &[u8]) -> [u8; 32] {
+    crate::keys::tagged_hash(crate::tags::CRED_CLAIMS, &[salt, claims])
 }
 
 /// Hash that a registrar QUORUM approval signs: network, action, class, asset, parties, price and

@@ -209,6 +209,7 @@
     { id: 'identity', label: 'Minha identidade', icon: 'id', need: 'ready' },
     { id: 'wallet', label: 'Carteira', icon: 'wallet', need: 'ready' },
     { id: 'assets', label: 'Bens', icon: 'home', need: 'ready' },
+    { id: 'credentials', label: 'Credenciais', icon: 'badge', need: 'ready' },
     { id: 'stake', label: 'Validadores', icon: 'stake', need: 'ready' },
     { id: 'sign', label: 'Assinar documento', icon: 'pen', need: 'ready' },
     { id: 'prove', label: 'Provar atributo', icon: 'badge', need: 'ready' },
@@ -265,6 +266,8 @@
     sign_stake: ['Confirme o stake no dispositivo', 'Confira a ação, o valor e a taxa que o dispositivo mostra. Quem trava stake pode ser penalizado se votar duas vezes.'],
     sign_asset_offer: ['Confirme a sua OFERTA no dispositivo', 'Confira o BEM, o comprador, o preço, a janela de veto e a versão que o dispositivo mostra. Esta é a SUA transação, assinada na sua carteira. Só confirme se for exatamente o negócio combinado.'],
     sign_asset_accept: ['Confirme o ACEITE no dispositivo', 'Confira o BEM, o vendedor, o preço e a janela de veto. O preço sai da sua carteira para um escrow e só volta se o órgão vetar. Só confirme se for exatamente o negócio combinado.'],
+    credential_key: ['Confirme a CHAVE DE CREDENCIAL no dispositivo', 'Só a chave pública deste tipo de credencial será mostrada ao órgão que vai emitir. Ela não se liga à sua identidade, carteira ou voto.'],
+    sign_credential_op: ['Confirme a operação do ÓRGÃO no dispositivo', 'Confira o tipo, o titular, os atributos, a validade e o motivo na tela do dispositivo.'],
     sign_transfer: ['Confirme o envio no dispositivo', 'Confira o ENDEREÇO de destino, o valor e a taxa que o dispositivo mostra. Só confirme se for exatamente o que você quer enviar.'],
     wallet_check: ['Verifique o backup no dispositivo', 'Digite a frase do seu papel no dispositivo. Ele só diz se confere ou não.'],
     unknown: ['Aguardando o dispositivo', 'Olhe a tela do dispositivo.'],
@@ -425,7 +428,7 @@
 
   function renderMain() {
     const m = $('#main');
-    const views = { home: vHome, results: vResults, explorer: vExplorer, onboarding: vOnboarding, unlock: vUnlock, identity: vIdentity, wallet: vWallet, assets: vAssets, stake: vStake, sign: vSign, prove: vProve, vote: vVote };
+    const views = { home: vHome, results: vResults, explorer: vExplorer, onboarding: vOnboarding, unlock: vUnlock, identity: vIdentity, wallet: vWallet, assets: vAssets, credentials: vCreds, stake: vStake, sign: vSign, prove: vProve, vote: vVote };
     m.innerHTML = `<div class="view">${(views[S.route] || vExplorer)()}</div>`;
     afterRender();
   }
@@ -1207,6 +1210,7 @@
       if (id === 'home') { S.homeTried = false; S.home = null; }
       if (id === 'stake') { S.stakeTried = false; S.stake = null; }
       if (id === 'assets') { S.assetsTried = false; S.assets = null; }
+      if (id === 'credentials') { S.credsTried = false; S.creds = null; }
       if (id === 'wallet') { S.walletTried = false; S.walletAddr = null; S.balance = null; S.history = null; }
       if (id === 'identity') loadId();
       render();
@@ -1284,6 +1288,11 @@
         S.reg.error = asErr(e).message; S.lastKey = ''; render();
       }
     },
+    async credkey(b) {
+      await guarded(async () => { await call('credential_key', { ctype: b.dataset.ctype }); toast('Chave de credencial gerada no dispositivo. Entregue-a ao órgão.', 'ok'); });
+      S.credsTried = false; S.lastKey = ''; render(); loadCreds();
+    },
+    async credrefresh() { S.credsTried = false; S.lastKey = ''; render(); loadCreds(); },
     async assetlien(b) {
       await guarded(async () => { await call('asset_lien', { class: b.dataset.class, asset: b.dataset.id, on: b.dataset.on === '1' }); toast(b.dataset.on === '1' ? 'Órgão simulado registrou a penhora.' : 'Órgão simulado liberou o gravame.', 'ok'); });
       S.assetsTried = false; S.lastKey = ''; render(); loadAssets();
@@ -1588,6 +1597,41 @@
     S.lastKey = ''; render();
   }
 
+  async function loadCreds() {
+    if (S.credsTried || phase() !== 'ready') return;
+    S.credsTried = true;
+    try { S.creds = await invoke('credentials_view'); } catch (e) { S.creds = { available: false, reason: asErr(e).message, types: [], mine: [] }; }
+    S.lastKey = ''; render();
+  }
+
+  const CRED_STATUS = { proposed: ['Aguardando aprovações do órgão', 'warn'], pending: ['Em contestação', 'info'], active: ['Ativa', 'ok'], expired: ['Expirada', 'bad'], vetoed: ['Vetada pelo órgão', 'bad'], revoked: ['Revogada', 'bad'] };
+  const credDur = (s) => (s >= 172800 ? `${Math.round(s / 86400)} dias` : s >= 7200 ? `${Math.round(s / 3600)} h` : s >= 120 ? `${Math.round(s / 60)} min` : `${s} s`);
+  const credDate = (t) => (t ? new Date(t * 1000).toLocaleDateString('pt-BR') : 'sem prazo');
+
+  function vCreds() {
+    const c = S.creds;
+    const head0 = head('Credenciais', 'Minhas credenciais', 'Permissões e cargos emitidos para você, na chain, por órgãos e comunidades autorizados. A Suite só LÊ: quem emite é o app Teko Emissor, com o dispositivo do membro do órgão.');
+    if (!c) return `${head0}<article class="card"><div class="row">${ico('spin', 'spin')}<span>Lendo a chain…</span></div></article>`;
+    if (!c.available) return `${head0}<article class="card">${callout('info', 'shield', 'Indisponível', `<p>${esc(c.reason)}</p>`)}</article>`;
+    const mine = c.mine.length ? c.mine.map((m) => {
+      const [label, kind] = CRED_STATUS[m.status] || [m.status, ''];
+      const when = m.status === 'pending' ? `vale a partir de ${credDate(m.active_at)}` : m.status === 'active' ? (m.valid_until ? `até ${credDate(m.valid_until)}` : 'vitalícia') : '';
+      return `<article class="card card--flat"><div class="card__head"><h3>${esc(m.ctype)}</h3>${chip(label, kind)}</div>
+        <p class="muted">${esc(when)}${m.reason ? ` · motivo: ${esc(m.reason)}` : ''}</p>
+        ${m.claims ? `<p class="mono">${esc(m.claims)}</p>` : '<p class="muted">Os atributos ficam com você (a chain só guarda o compromisso).</p>'}</article>`;
+    }).join('') : '<p class="muted">Nada emitido para as chaves exportadas nesta sessão. Gere a chave de um tipo e entregue-a ao órgão.</p>';
+    const types = c.types.map((t) => `<article class="card card--flat">
+        <div class="card__head"><h3>${esc(t.ctype)}</h3>${chip(t.public ? 'dados públicos' : 'dados só com você', t.public ? 'info' : 'ok')}</div>
+        <p class="muted">Contestação ${credDur(t.contest_secs)} · validade ${t.validity_secs ? credDur(t.validity_secs) : 'vitalícia'}</p>
+        ${t.key ? `<div class="codeblock mono">${esc(t.key)}</div>` : ''}
+        <button class="btn btn--sm" data-act="credkey" data-ctype="${esc(t.ctype)}">${ico('key')}${t.key ? 'Mostrar a chave de novo' : 'Gerar minha chave deste tipo'}</button></article>`).join('');
+    return `${head0}
+      <article class="card"><div class="card__head"><div class="card__ico card__ico--arara">${ico('badge')}</div><h2>Emitidas para mim</h2>
+        <button class="btn btn--sm btn--ghost" data-act="credrefresh">Atualizar</button></div>${mine}</article>
+      <article class="card"><div class="card__head"><div class="card__ico card__ico--onca">${ico('key')}</div><h2>Tipos de credencial da rede</h2></div>
+        <p class="muted">A chave de credencial é <strong>por tipo</strong> e não se liga à sua identidade, carteira ou voto. Rede <span class="mono">${esc(c.chain_id)}</span>.</p>${types}</article>`;
+  }
+
   const CLASS_LABEL = { veiculo: 'Veículo', imovel: 'Imóvel' };
 
   async function loadRegForm(cls) {
@@ -1705,6 +1749,7 @@
     if (S.route === 'home') loadHome();
     if (S.route === 'identity') loadId();
     if (S.route === 'wallet') loadWallet();
+    if (S.route === 'credentials') loadCreds();
     if (S.route === 'assets') {
       loadAssets();
       if (!S.reg.form && !S.reg.loading && S.assets && S.assets.available) loadRegForm(S.reg.class);

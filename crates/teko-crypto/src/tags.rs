@@ -52,5 +52,11 @@ pub const ASSET_INTENT: &str = "teko/v2/asset-intent";
 pub const ASSET_APPROVAL: &str = "teko/v2/asset-approval";
 /// Address of the escrow that holds the price of a pending asset trade (ADR-0036); nobody holds its key.
 pub const ASSET_ESCROW: &str = "teko/v2/asset-escrow";
+/// Key a device derives per credential type (ADR-0037); unlinkable to identity, wallet and voter keys.
+pub const CRED_KEY: &str = "teko/v2/credential-key";
+/// Identifier of an on-chain credential (ADR-0037).
+pub const CRED_ID: &str = "teko/v2/credential-id";
+/// Commitment to the PUBLIC claims of an on-chain credential (ADR-0037).
+pub const CRED_CLAIMS: &str = "teko/v2/credential-claims";
 /// Hash of the off-chain metadata record of an asset (ADR-0032).
 pub const ASSET_METADATA: &str = "teko/v2/asset-metadata";

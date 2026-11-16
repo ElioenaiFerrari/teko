@@ -207,3 +207,71 @@ pub fn veto(dir: &Path, class: &str, asset: &str, reason: &str) -> Result<String
         "O órgão simulado de {class} vetou a negociação de {asset}: o preço voltou ao comprador e o bem continua com o dono."
     ))
 }
+
+/// Simulates the SIMULATED members of the credential organs (ADR-0037) APPROVING every credential
+/// still waiting for approvals (of `ctype`, or of every type), until the quorum is reached. The
+/// member keys are the TEST keys of the network folder. Returns what it did, in Portuguese.
+pub fn cosign(dir: &Path, ctype: Option<&str>) -> Result<String, String> {
+    use teko_assets::devnet::World;
+    use teko_credentials::{CREDENTIALS_MODULE, Op, Status, VoteOp};
+    let net = load_network(dir).map_err(|e| e.to_string())?;
+    if net.profile.kind.name() == "mainnet" {
+        return Err("a mainnet está travada: simulações só em devnet e testnet".into());
+    }
+    let mut world = teko_node::NodeWorld::open(dir).map_err(|e| e.to_string())?;
+    let mut lines = Vec::new();
+    let types = teko_credentials::types(World::ledger(&world));
+    for (name, t) in types {
+        if ctype.is_some_and(|c| c.as_bytes() != name.as_slice()) {
+            continue;
+        }
+        let tname = String::from_utf8_lossy(&name).to_string();
+        let sims = teko_node::load_orgmember_keys(dir, &tname);
+        for (id, rec) in teko_credentials::credentials_of_type(World::ledger(&world), &name) {
+            if rec.status_at(0) != Status::Proposed {
+                continue;
+            }
+            let mut approvals = rec.approvals.clone();
+            let mut done = 0;
+            for k in &sims {
+                if approvals.len() >= t.threshold as usize {
+                    break;
+                }
+                let me = teko_ledger::address_of(&teko_crypto::public_key_bytes(k));
+                if !t.members.iter().any(|m| m.as_slice() == me) || approvals.contains(&me.to_vec())
+                {
+                    continue;
+                }
+                let tx = teko_ledger::Tx::new_signed(
+                    k,
+                    world.chain_id(),
+                    world.nonce(&me),
+                    CREDENTIALS_MODULE,
+                    Op::Approve(VoteOp {
+                        ctype: name.clone(),
+                        id: id.clone(),
+                        reason: String::new(),
+                    })
+                    .encode(),
+                );
+                world.submit(tx)?;
+                approvals.push(me.to_vec());
+                done += 1;
+            }
+            if done > 0 {
+                lines.push(format!(
+                    "{tname}: {done} membro(s) simulado(s) aprovou(aram) {}… ({}/{} aprovações)",
+                    teko_crypto::hex::encode(&id[..4.min(id.len())]),
+                    approvals.len(),
+                    t.threshold
+                ));
+            }
+        }
+    }
+    if lines.is_empty() {
+        return Err(
+            "nenhuma credencial esperando aprovação (ou os membros simulados já aprovaram)".into(),
+        );
+    }
+    Ok(lines.join("\n"))
+}

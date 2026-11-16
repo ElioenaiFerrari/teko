@@ -56,6 +56,10 @@ pub enum ButtonKind {
     SignStake = 23,
     /// "Accept the offer of asset X for P?" prompt (the buyer's own transaction, ADR-0036).
     SignAssetAccept = 24,
+    /// "Export the credential key for type X?" prompt (ADR-0037).
+    CredentialKey = 25,
+    /// "Issue / approve / veto / revoke credential?" prompt: the organ member's own transaction.
+    SignCredentialOp = 26,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, prost::Enumeration)]
@@ -202,6 +206,58 @@ pub struct SignAssetOffer {
     pub fee: u64,
     /// Number of transactions the account already executed.
     #[prost(uint64, tag = "10")]
+    pub nonce: u64,
+}
+/// The PUBLIC credential key of this holder for one credential TYPE (ADR-0037): derived on the
+/// device per type, unlinkable to the identity, wallet and voter keys. The holder shows it to the
+/// issuing organ, which attaches the credential to it.
+#[derive(Clone, PartialEq, prost::Message)]
+pub struct GetCredentialKey {
+    #[prost(string, tag = "1")]
+    pub ctype: String,
+}
+/// Asks the device to build, show and sign THIS wallet's own transaction in the credentials
+/// module (ADR-0037): an organ member PROPOSES, APPROVES, VETOES or REVOKES a credential. The
+/// host supplies only fields; the device recomputes the commitment and the credential id from
+/// the claims it shows, so the computer cannot change what is signed.
+#[derive(Clone, PartialEq, prost::Message)]
+pub struct SignCredentialOp {
+    #[prost(string, tag = "1")]
+    pub chain_id: String,
+    /// 1 = propose, 2 = approve, 3 = veto, 4 = revoke.
+    #[prost(uint32, tag = "2")]
+    pub op: u32,
+    #[prost(string, tag = "3")]
+    pub ctype: String,
+    /// SEC1 credential key of the holder (from `GetCredentialKey` on the HOLDER's device).
+    #[prost(bytes = "vec", tag = "4")]
+    pub subject: Vec<u8>,
+    /// The claims in clear, `name=value;name=value`: always shown by the device.
+    #[prost(bytes = "vec", tag = "5")]
+    pub claims: Vec<u8>,
+    /// PUBLIC types (candidate, elected) keep the claims on the chain; the others only a salted
+    /// commitment, computed here from the `salt`.
+    #[prost(bool, tag = "6")]
+    pub public: bool,
+    /// 16 random bytes (private types).
+    #[prost(bytes = "vec", tag = "7")]
+    pub salt: Vec<u8>,
+    /// A vote on a private credential whose claims this member was not given: the commitment as
+    /// found on the chain (the screen says the attributes were NOT checked).
+    #[prost(bytes = "vec", tag = "8")]
+    pub commitment: Vec<u8>,
+    /// Unix seconds; 0 = never expires.
+    #[prost(uint64, tag = "9")]
+    pub valid_until: u64,
+    /// PUBLIC reason (veto and revoke).
+    #[prost(string, tag = "10")]
+    pub reason: String,
+    /// Contest window of the type, informed by the host and shown as such.
+    #[prost(uint64, tag = "11")]
+    pub contest_secs: u64,
+    #[prost(uint64, tag = "12")]
+    pub fee: u64,
+    #[prost(uint64, tag = "13")]
     pub nonce: u64,
 }
 /// Asks the device to build, show and sign the BUYER's `Accept` of an offer, on exactly the terms
@@ -530,6 +586,12 @@ pub struct VoterKey {
     #[prost(bytes = "vec", tag = "1")]
     pub voter_key: Vec<u8>,
 }
+/// PUBLIC credential key for one type.
+#[derive(Clone, PartialEq, prost::Message)]
+pub struct CredentialKey {
+    #[prost(bytes = "vec", tag = "1")]
+    pub public_key: Vec<u8>,
+}
 #[derive(Clone, PartialEq, prost::Message)]
 pub struct BallotSignature {
     #[prost(bytes = "vec", tag = "1")]
@@ -647,6 +709,8 @@ define_messages! {
         SignAssetOffer(SignAssetOffer) = 0x001E,
         SignStake(SignStake) = 0x001F,
         SignAssetAccept(SignAssetAccept) = 0x0020,
+        SignCredentialOp(SignCredentialOp) = 0x0021,
+        GetCredentialKey(GetCredentialKey) = 0x0022,
     }
 }
 
@@ -678,6 +742,7 @@ define_messages! {
         Address(Address) = 0x0117,
         WalletBackupOk(WalletBackupOk) = 0x0118,
         TransferSigned(TransferSigned) = 0x0119,
+        CredentialKey(CredentialKey) = 0x011A,
     }
 }
 

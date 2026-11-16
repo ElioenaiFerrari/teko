@@ -1,0 +1,7 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "default",
+  "description": "Mínimo necessário: só eventos (o Emissor escuta device-prompt). Os comandos do app são próprios e não dão acesso a arquivos/shell ao JS.",
+  "windows": ["main"],
+  "permissions": ["core:event:default"]
+}

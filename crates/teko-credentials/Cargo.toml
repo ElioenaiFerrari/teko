@@ -1,0 +1,19 @@
+[package]
+name = "teko-credentials"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+description = "Credential module for teko-ledger: types governed by an M-of-N issuing organ, issuance by per-member transactions, contest window, validity, veto and revocation, all on the chain (ADR-0037)"
+
+[dependencies]
+teko-crypto.workspace = true
+teko-ledger.workspace = true
+prost.workspace = true
+
+[dev-dependencies]
+proptest.workspace = true
+rand.workspace = true
+
+[lints]
+workspace = true

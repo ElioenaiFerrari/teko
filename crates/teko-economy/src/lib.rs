@@ -20,4 +20,4 @@ mod genesis;
 
 pub use app::EconApp;
 pub use chain::{DecidedBlock, EconBlock, EconError, EconomyChain, quantize};
-pub use genesis::{ClassSpec, EconomyGenesis};
+pub use genesis::{ClassSpec, CredTypeSpec, EconomyGenesis};

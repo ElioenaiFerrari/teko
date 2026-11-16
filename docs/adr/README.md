@@ -41,5 +41,6 @@ Regra: decisões de produto/segurança só passam a `Aceito` pela aprovação do
 | [0034](0034-votos-em-bft-institucional-e-sem-blocos-vazios.md) | Rede de votos em BFT institucional e economia sem blocos vazios | Aceito provisoriamente | confirmar |
 | [0035](0035-caucao-das-instituicoes-e-penalidade-na-rede-de-votos.md) | Caução das instituições e penalidade na rede de votos | Aceito provisoriamente (implementado) | 10% queimado; recompensa de disponibilidade PENDENTE |
 | [0036](0036-bens-negociacao-direta-com-janela-de-veto.md) | Bens: negociação direta com janela de veto do órgão | Aceito provisoriamente (implementado) | substitui a venda com 3 consentimentos |
+| [0037](0037-credenciais-na-chain-emitidas-por-orgaos.md) | Credenciais na chain, emitidas por órgãos com janela de contestação e validade | Aceito provisoriamente (etapa A implementada) | confirmar |
 | [0031](0031-explorador-da-chain.md) | Explorador da chain: somente leitura, verificado no cliente | Aceito (controles de dev pendentes) | decidir faucet/controles de dev |
 | [0030](0030-slash-automatico-e-bloqueio-persistido.md) | Penalidade automática e lock do BFT persistido | Aceito | — |

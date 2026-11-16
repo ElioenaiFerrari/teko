@@ -423,6 +423,8 @@ impl<H: Hal, R: Rng + CryptoRng> Device<H, R> {
                 fee: m.fee,
                 nonce: m.nonce,
             }),
+            Request::GetCredentialKey(m) => self.get_credential_key(&m.ctype),
+            Request::SignCredentialOp(m) => self.sign_credential_op(&m),
             Request::SignStake(m) => {
                 self.sign_stake(&m.chain_id, m.action, m.amount, m.fee, m.nonce)
             }
@@ -1109,6 +1111,178 @@ impl<H: Hal, R: Rng + CryptoRng> Device<H, R> {
             )
         };
         let msg = tx_signing_bytes(&chain, t.nonce, t.fee, MODULE_ASSETS, &payload, &pk);
+        let signature = sign_tagged(&sk, tags::LEDGER_TX, &msg);
+        Ok(Response::TransferSigned(TransferSigned {
+            signature,
+            public_key: pk,
+        }))
+    }
+
+    /// Exports the PUBLIC credential key of one type (ADR-0037), after the physical confirmation.
+    fn get_credential_key(&mut self, ctype: &str) -> Result<Response, Failure> {
+        self.require_unlocked_initialized()?;
+        let ctype = clean_ctype(ctype)?;
+        let mut lines = Vec::from([String::from("Tipo de credencial:")]);
+        lines.extend(wrap(&ctype, 28));
+        lines.push(String::from("Exportar a chave PÚBLICA"));
+        lines.push(String::from("deste tipo (para o órgão"));
+        lines.push(String::from("que vai emitir)."));
+        self.confirm(
+            ButtonKind::CredentialKey,
+            Screen::new("CHAVE DE CREDENCIAL", lines),
+        )?;
+        let root = self.root()?;
+        let key = voter::derive_credential_key(&root, &ctype)
+            .map_err(|_| fail(ErrorCode::Internal, "chave de credencial"))?;
+        Ok(Response::CredentialKey(teko_protocol::CredentialKey {
+            public_key: public_key_bytes(&key),
+        }))
+    }
+
+    /// Builds, SHOWS and signs this wallet's OWN transaction in the credentials module
+    /// (ADR-0037): an organ member proposes, approves, vetoes or revokes a credential. The
+    /// commitment and the credential id are recomputed HERE from the claims on the screen.
+    fn sign_credential_op(
+        &mut self,
+        m: &teko_protocol::SignCredentialOp,
+    ) -> Result<Response, Failure> {
+        use teko_crypto::ledger::{
+            CRED_OP_APPROVE, CRED_OP_PROPOSE, CRED_OP_REVOKE, CRED_OP_VETO, MODULE_CREDENTIALS,
+            cred_id, cred_private_commitment, cred_propose_payload, cred_public_commitment,
+            cred_vote_payload, tx_signing_bytes,
+        };
+        self.require_unlocked_initialized()?;
+        self.require_wallet()?;
+        let bad = |msg: &str| fail(ErrorCode::InvalidArgument, msg);
+        let chain = sanitize(&m.chain_id, 48)
+            .filter(|c| !c.trim().is_empty() && c.as_str() == m.chain_id)
+            .ok_or_else(|| bad("rede inválida"))?;
+        let ctype = clean_ctype(&m.ctype)?;
+        let op = u8::try_from(m.op).map_err(|_| bad("operação inválida"))?;
+        let title = match op {
+            CRED_OP_PROPOSE => "EMITIR CREDENCIAL",
+            CRED_OP_APPROVE => "APROVAR EMISSÃO",
+            CRED_OP_VETO => "VETAR CREDENCIAL",
+            CRED_OP_REVOKE => "REVOGAR CREDENCIAL",
+            _ => return Err(bad("operação inválida")),
+        };
+        if m.subject.len() != 33 && m.subject.len() != 65 {
+            return Err(bad("chave do titular inválida"));
+        }
+        if m.claims.len() > 2_048 {
+            return Err(bad("atributos longos demais"));
+        }
+        let claims_text = core::str::from_utf8(&m.claims)
+            .ok()
+            .and_then(|t| sanitize(t, 2_048).filter(|c| c.as_str() == t))
+            .ok_or_else(|| bad("atributos inválidos"))?;
+        // the commitment: recomputed here whenever the claims are given
+        let (commitment, claims_shown): ([u8; 32], bool) = if m.public {
+            if m.claims.is_empty() || !m.commitment.is_empty() {
+                return Err(bad("credencial pública leva os atributos"));
+            }
+            (cred_public_commitment(&m.claims), true)
+        } else if !m.claims.is_empty() {
+            let salt: [u8; 16] = m
+                .salt
+                .as_slice()
+                .try_into()
+                .map_err(|_| bad("sal deve ter 16 bytes"))?;
+            (cred_private_commitment(&salt, &m.claims), true)
+        } else if op == CRED_OP_PROPOSE {
+            return Err(bad("ao emitir, o emissor confere os atributos"));
+        } else {
+            let c: [u8; 32] = m
+                .commitment
+                .as_slice()
+                .try_into()
+                .map_err(|_| bad("compromisso deve ter 32 bytes"))?;
+            (c, false)
+        };
+        let reason = if op == CRED_OP_VETO || op == CRED_OP_REVOKE {
+            sanitize(&m.reason, 200)
+                .filter(|r| !r.trim().is_empty() && r.as_str() == m.reason)
+                .ok_or_else(|| bad("motivo público obrigatório"))?
+        } else {
+            if !m.reason.is_empty() {
+                return Err(bad("só veto e revogação levam motivo"));
+            }
+            String::new()
+        };
+        if m.contest_secs == 0 {
+            return Err(bad("janela de contestação inválida"));
+        }
+        let sk = self
+            .master()?
+            .signing_key(0)
+            .map_err(|_| fail(ErrorCode::Internal, "chave da carteira"))?;
+        let pk = public_key_bytes(&sk);
+        let mut lines = Vec::from([String::from("Você é MEMBRO do órgão")]);
+        lines.push(String::from("Tipo:"));
+        lines.extend(wrap(&ctype, 28));
+        lines.push(String::from("Titular (chave):"));
+        lines.extend(hex_lines(
+            &m.subject.iter().take(12).copied().collect::<Vec<u8>>(),
+            6,
+        ));
+        if claims_shown {
+            lines.push(String::from("Atributos:"));
+            for part in claims_text.split(';').filter(|p| !p.trim().is_empty()) {
+                lines.extend(wrap(part.trim(), 28));
+            }
+            if !m.public {
+                lines.push(String::from("Só o compromisso vai à"));
+                lines.push(String::from("chain; os dados ficam"));
+                lines.push(String::from("com o titular."));
+            }
+        } else {
+            lines.push(String::from("Atributos NÃO conferidos"));
+            lines.push(String::from("aqui. Compromisso:"));
+            lines.extend(hex_lines(&commitment[..12], 6));
+        }
+        if m.valid_until == 0 {
+            lines.push(String::from("Validade: sem prazo"));
+        } else {
+            lines.push(format!("Validade até: {}", ymd(m.valid_until)));
+        }
+        lines.push(format!(
+            "Janela (informada): {}",
+            window_text(m.contest_secs)
+        ));
+        match op {
+            CRED_OP_PROPOSE => lines.push(String::from("Conta como 1ª aprovação.")),
+            CRED_OP_VETO => lines.push(String::from("Só vale dentro da janela.")),
+            CRED_OP_REVOKE => lines.push(String::from("Só vale após a janela.")),
+            _ => {}
+        }
+        if !reason.is_empty() {
+            lines.push(String::from("Motivo (público):"));
+            lines.extend(wrap(&reason, 28));
+        }
+        push_amount(&mut lines, "Taxa:", m.fee);
+        lines.push(format!("Rede: {chain}"));
+        self.confirm(ButtonKind::SignCredentialOp, Screen::new(title, lines))?;
+        let payload = if op == CRED_OP_PROPOSE {
+            let claims_on_chain: &[u8] = if m.public { &m.claims } else { &[] };
+            cred_propose_payload(
+                ctype.as_bytes(),
+                &m.subject,
+                &commitment,
+                claims_on_chain,
+                m.valid_until,
+            )
+        } else {
+            let claims_on_chain: &[u8] = if m.public { &m.claims } else { &[] };
+            let id = cred_id(
+                ctype.as_bytes(),
+                &m.subject,
+                &commitment,
+                claims_on_chain,
+                m.valid_until,
+            );
+            cred_vote_payload(op, ctype.as_bytes(), &id, &reason)
+        };
+        let msg = tx_signing_bytes(&chain, m.nonce, m.fee, MODULE_CREDENTIALS, &payload, &pk);
         let signature = sign_tagged(&sk, tags::LEDGER_TX, &msg);
         Ok(Response::TransferSigned(TransferSigned {
             signature,
@@ -2070,6 +2244,27 @@ struct AssetTrade<'a> {
     window_secs: u64,
     fee: u64,
     nonce: u64,
+}
+
+/// A credential type name: short, no spoofing characters.
+fn clean_ctype(s: &str) -> Result<String, Failure> {
+    sanitize(s, 32)
+        .filter(|c| !c.trim().is_empty() && c.as_str() == s)
+        .ok_or_else(|| fail(ErrorCode::InvalidArgument, "tipo de credencial inválido"))
+}
+
+/// `AAAA-MM-DD` (UTC) of a Unix time: civil-from-days, no clock or table needed.
+fn ymd(secs: u64) -> String {
+    let z = (secs / 86_400) as i64 + 719_468;
+    let era = z.div_euclid(146_097);
+    let doe = z.rem_euclid(146_097);
+    let yoe = (doe - doe / 1_460 + doe / 36_524 - doe / 146_096) / 365;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let d = doy - (153 * mp + 2) / 5 + 1;
+    let mo = if mp < 10 { mp + 3 } else { mp - 9 };
+    let y = yoe + era * 400 + i64::from(mo <= 2);
+    format!("{y:04}-{mo:02}-{d:02}")
 }
 
 /// "20 min", "3 h", "2 dias": the veto window as a person reads it.

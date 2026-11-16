@@ -121,6 +121,18 @@ def asset_trade():
     d.legend([(MUTED, "transação do usuário (dispositivo)", False), (GREEN, "efeito", True), (RED, "veto do órgão", False)])
     return d
 
+def credential_issuance():
+    d = D("credential-issuance", 1100, 0, "Credencial na chain: emissão pelo órgão", "Cada membro envia a PRÓPRIA transação; há contestação e validade, medidas pelo horário do bloco", "CREDENCIAIS")
+    A = [("t", "Titular", "Suite (só lê)", "onca", 110), ("a", "Membro A", "Emissor + dispositivo", "onca", 390), ("l", "Livro de economia", "módulo de credenciais", "focal", 690), ("b", "Membro B", "Emissor + dispositivo", "plain", 970)]
+    M = [("t", "a", "chave de credencial (por tipo)", "default", False), ("a", "l", "Propose: atributos ou compromisso", "default", False),
+         ("b", "l", "Approve (completa o quórum M-de-N)", "default", False), ("l", "l", "pendente: janela de contestação", "accent", False),
+         ("b", "l", "Veto (opcional): motivo público", "bad", False), ("l", "t", "ativa, até a validade", "ok", True),
+         ("b", "l", "Revoga (depois da janela)", "bad", False)]
+    N = [(1, "l", "O dispositivo recalcula o compromisso e o id dos atributos que mostra", 420), (3, "l", "Estado calculado pelo horário do bloco: nada ativa nem expira sozinho", 420)]
+    d.sequence(A, M, notas=N, passo=34)
+    d.legend([(MUTED, "transação do membro (dispositivo)", False), (GREEN, "efeito", True), (RED, "veto ou revogação", False)])
+    return d
+
 def suite_architecture():
     d = D("suite-architecture", 1100, 480, "Dentro da Teko Suite", "Interface fina, regras no Rust; o PIN nunca passa por aqui", "SUITE")
     d.arrow([(240, 178), (310, 178)], "default", label="IPC Tauri", at=(275, 164))

@@ -503,6 +503,115 @@ impl<T: Transport> DeviceClient<T> {
         Ok(tx)
     }
 
+    /// The PUBLIC credential key of this holder for one type (ADR-0037), after the confirmation
+    /// on the device. The holder shows it to the issuing organ.
+    pub fn credential_key(&mut self, ctype: &str) -> Result<Vec<u8>, ClientError> {
+        let k = self.expect(
+            Request::GetCredentialKey(GetCredentialKey {
+                ctype: ctype.to_string(),
+            }),
+            |r| match r {
+                Response::CredentialKey(k) => Ok(k),
+                o => Err(o),
+            },
+        )?;
+        if k.public_key.len() != 33 && k.public_key.len() != 65 {
+            return Err(ClientError::Verification(
+                "chave de credencial inválida".into(),
+            ));
+        }
+        Ok(k.public_key)
+    }
+
+    /// Asks the device to build, show and sign an organ member's OWN transaction in the
+    /// credentials module (ADR-0037). The device recomputes the commitment and the credential id
+    /// from the claims it shows; the client rebuilds the same transaction and checks the signature
+    /// before returning it, so a device or host that changed anything is caught here.
+    pub fn wallet_sign_credential_op(
+        &mut self,
+        a: &CredentialOpArgs<'_>,
+    ) -> Result<teko_ledger::Tx, ClientError> {
+        let signed = self.expect(
+            Request::SignCredentialOp(SignCredentialOp {
+                chain_id: a.chain_id.to_string(),
+                op: a.kind as u32,
+                ctype: a.ctype.to_string(),
+                subject: a.subject.to_vec(),
+                claims: a.claims.to_vec(),
+                public: a.public,
+                salt: a.salt.map(<[u8]>::to_vec).unwrap_or_default(),
+                commitment: a.commitment.map(<[u8]>::to_vec).unwrap_or_default(),
+                valid_until: a.valid_until,
+                reason: a.reason.to_string(),
+                contest_secs: a.contest_secs,
+                fee: a.fee,
+                nonce: a.nonce,
+            }),
+            |r| match r {
+                Response::TransferSigned(t) => Ok(t),
+                o => Err(o),
+            },
+        )?;
+        let bad = |m: &str| ClientError::Verification(m.into());
+        // the same commitment the device computes
+        let commitment: [u8; 32] = if a.public {
+            teko_crypto::ledger::cred_public_commitment(a.claims)
+        } else if !a.claims.is_empty() {
+            let salt: [u8; 16] = a
+                .salt
+                .and_then(|s| s.try_into().ok())
+                .ok_or_else(|| bad("sal deve ter 16 bytes"))?;
+            teko_crypto::ledger::cred_private_commitment(&salt, a.claims)
+        } else {
+            a.commitment
+                .and_then(|c| c.try_into().ok())
+                .ok_or_else(|| bad("compromisso deve ter 32 bytes"))?
+        };
+        let on_chain_claims: &[u8] = if a.public { a.claims } else { &[] };
+        let op = match a.kind {
+            CredentialOpKind::Propose => {
+                teko_credentials::Op::Propose(teko_credentials::ProposeOp {
+                    ctype: a.ctype.as_bytes().to_vec(),
+                    subject: a.subject.to_vec(),
+                    commitment: commitment.to_vec(),
+                    claims: on_chain_claims.to_vec(),
+                    valid_until: a.valid_until,
+                })
+            }
+            kind => {
+                let vote = teko_credentials::VoteOp {
+                    ctype: a.ctype.as_bytes().to_vec(),
+                    id: teko_credentials::credential_id(
+                        a.ctype.as_bytes(),
+                        a.subject,
+                        &commitment,
+                        on_chain_claims,
+                        a.valid_until,
+                    )
+                    .to_vec(),
+                    reason: a.reason.to_string(),
+                };
+                match kind {
+                    CredentialOpKind::Approve => teko_credentials::Op::Approve(vote),
+                    CredentialOpKind::Veto => teko_credentials::Op::Veto(vote),
+                    _ => teko_credentials::Op::Revoke(vote),
+                }
+            }
+        };
+        let tx = teko_ledger::Tx {
+            chain_id: a.chain_id.to_string(),
+            nonce: a.nonce,
+            module: teko_credentials::CREDENTIALS_MODULE,
+            payload: op.encode(),
+            sender: signed.public_key,
+            signature: signed.signature,
+            fee: a.fee,
+        };
+        tx.verify()
+            .map_err(|_| bad("a assinatura devolvida não confere com a transação"))?;
+        Ok(tx)
+    }
+
     /// Asks the device to build, show and sign the OWNER's `Offer` of an asset to `buyer_address`
     /// (ADR-0036): the owner's OWN transaction, from the wallet. The device derives the whole
     /// transaction from these fields and signs after the physical confirmation; the client
@@ -1081,6 +1190,38 @@ fn status_of(f: &Features) -> DeviceStatus {
 }
 
 /// The assets transaction the device signed: rebuilt from the fields, signature checked.
+/// Which credentials operation the device is asked to sign (the numbers are the protocol's).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[repr(u32)]
+pub enum CredentialOpKind {
+    Propose = 1,
+    Approve = 2,
+    Veto = 3,
+    Revoke = 4,
+}
+
+/// Arguments of `wallet_sign_credential_op`.
+#[derive(Debug, Clone)]
+pub struct CredentialOpArgs<'a> {
+    pub chain_id: &'a str,
+    pub kind: CredentialOpKind,
+    pub ctype: &'a str,
+    /// The holder's credential key (from `credential_key` on the HOLDER's device).
+    pub subject: &'a [u8],
+    /// The claims `name=value;name=value`; empty only for a vote on a private credential.
+    pub claims: &'a [u8],
+    pub public: bool,
+    /// 16 bytes, for a private credential with claims.
+    pub salt: Option<&'a [u8]>,
+    /// The commitment on the chain, for a vote without the claims.
+    pub commitment: Option<&'a [u8]>,
+    pub valid_until: u64,
+    pub reason: &'a str,
+    pub contest_secs: u64,
+    pub fee: u64,
+    pub nonce: u64,
+}
+
 fn asset_tx(
     chain_id: &str,
     nonce: u64,

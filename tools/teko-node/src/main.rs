@@ -14,7 +14,8 @@ const HELP: &str = "\
 teko-node: rede de teste federada (PoA). PROTÓTIPO, só chaves de teste.
 
 USO:
-  teko-node init   [--dir dev/net] [--network devnet|testnet] [--nodes 3] [--port 7901] [--founder tekow1…] [--alloc TEKO] [--founder-target TEKO] [--force]
+  teko-node init   [--dir dev/net] [--network devnet|testnet] [--nodes 3] [--port 7901] [--founder tekow1…] [--issuer tekow1…] [--alloc TEKO] [--founder-target TEKO] [--force]
+                   --issuer: carteira MEMBRO dos órgãos de credenciais de teste (padrão: o --founder)
                    --founder: endereço da CARTEIRA (do dispositivo) que recebe as recompensas do fundador (opção B, ADR-0028)
   teko-node run    [--dir dev/net] --index I        sobe o validador I (só loopback)
   teko-node stop   [--dir dev/net]                  para os validadores iniciados com `run` (pelos arquivos .pid)
@@ -86,8 +87,23 @@ fn run(args: Vec<String>) -> Result<(), String> {
                 None => None,
             };
             let alloc = founder_alloc(&f, owner.is_some())?;
-            let g = teko_node::init_economy(&dir, owner, target, alloc, f.contains_key("force"))
-                .map_err(e)?;
+            // the wallet that is a MEMBER of the credential organs (default: the founder's)
+            let issuer = match f.get("issuer") {
+                Some(a) => Some(
+                    teko_crypto::parse_wallet_address(a)
+                        .map_err(|_| "--issuer: endereço tekow1… inválido (confira o checksum)")?,
+                ),
+                None => owner,
+            };
+            let g = teko_node::init_economy_with_issuer(
+                &dir,
+                owner,
+                issuer,
+                target,
+                alloc,
+                f.contains_key("force"),
+            )
+            .map_err(e)?;
             match owner {
                 Some(a) => {
                     println!(

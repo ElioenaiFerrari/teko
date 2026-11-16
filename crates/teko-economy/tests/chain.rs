@@ -472,3 +472,37 @@ fn block_time_is_the_proposers_it_only_moves_forward_and_must_be_near_the_voters
     assert!(!app.validate_from(1, &me, &far));
     assert!(!app.validate_from(1, &me, &past));
 }
+
+#[test]
+fn credential_types_in_the_genesis_survive_the_text_round_trip_and_build_the_module() {
+    let node = key(1);
+    let owner = addr(&key(2));
+    let mut g = genesis(&node, &owner, 3_000);
+    let members: Vec<Address> = (10..13).map(|i| addr(&key(i))).collect();
+    g.credtypes.push(teko_economy::CredTypeSpec {
+        name: "cnh-b".into(),
+        threshold: 2,
+        members: members.clone(),
+        contest_secs: 604_800,
+        validity_secs: 157_680_000,
+        public: false,
+    });
+    g.credtypes.push(teko_economy::CredTypeSpec {
+        name: "candidato".into(),
+        threshold: 1,
+        members,
+        contest_secs: 86_400,
+        validity_secs: 31_536_000,
+        public: true,
+    });
+    let back = EconomyGenesis::parse(&g.to_text()).unwrap();
+    assert_eq!(back, g);
+    let chain = EconomyChain::new(back).unwrap();
+    let t = teko_credentials::type_info(chain.ledger(), b"candidato").unwrap();
+    assert!(t.public);
+    assert_eq!(t.contest_secs, 86_400);
+    assert_eq!(teko_credentials::types(chain.ledger()).len(), 2);
+    // a bad type is refused when the genesis is parsed
+    let bad = g.to_text().replace("cnh-b 2", "cnh-b 9");
+    assert!(EconomyGenesis::parse(&bad).is_err());
+}

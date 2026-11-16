@@ -1,6 +1,6 @@
 # Teko — atalhos. Rode `make` (ou `make help`) para ver tudo.
 .DEFAULT_GOAL := help
-.PHONY: help setup emulator suite reset demo issuer-help preview fmt lint test check build clean-dev verify-fw release-check repro fund docs-check diagrams coin-demo assets-demo devnet close devnet-dkg devnet-economy explorer devnet-equivocate devnet-veto tally-time devnet-founder devnet-stop devnet-status devnet-reset devnet-blocks testnet-help election publish simulate simulate-live tally reset-board
+.PHONY: issuer devnet-cosign help setup emulator suite reset demo issuer-help preview fmt lint test check build clean-dev verify-fw release-check repro fund docs-check diagrams coin-demo assets-demo devnet close devnet-dkg devnet-economy explorer devnet-equivocate devnet-veto tally-time devnet-founder devnet-stop devnet-status devnet-reset devnet-blocks testnet-help election publish simulate simulate-live tally reset-board
 
 CARGO ?= cargo
 PIN   ?= 482913
@@ -22,15 +22,18 @@ emulator: ## Liga o dispositivo emulado (PIN e confirmações são digitados NES
 suite: ## Abre a Teko Suite (janela desktop)
 	$(CARGO) run -q -p teko-suite
 
+issuer: ## Abre o Teko Emissor: app separado em que órgãos emitem credenciais na chain (precisa do emulador e de make devnet)
+	$(CARGO) run -q -p teko-issuer
+
 NET ?= dev/net
 # Instituições (nós) da rede de TESTE, definido na criação da rede. Com 4 uma pode ficar fora do ar sem parar a
 # rede; com 3 o quórum (mais de 2/3) exige os 3 (ADR-0034). Para mudar depois: make devnet-stop devnet-reset e `rm -r dev/net`.
 NODES ?= 4
 NODE = target/debug/teko-node
 
-devnet: ## Sobe a rede de TESTE local com NODES=4 instituições (votos e economia em BFT; nenhum bloco nasce sozinho). Primeira vez: make devnet FOUNDER=tekow1… [ALLOC=1000] (sua carteira recebe as primeiras moedas, na gênese)
+devnet: ## Sobe a rede de TESTE local com NODES=4 instituições (votos e economia em BFT; nenhum bloco nasce sozinho). Primeira vez: make devnet FOUNDER=tekow1… [ALLOC=1000] [ISSUER=tekow1…, membro dos órgãos de credenciais; padrão: FOUNDER] (sua carteira recebe as primeiras moedas, na gênese)
 	$(CARGO) build -q -p teko-node
-	@test -f $(NET)/network.txt || $(NODE) init --dir $(NET) --network devnet --nodes $(NODES) $(if $(FOUNDER),--founder $(FOUNDER)) $(if $(FOUNDER_TARGET),--founder-target $(FOUNDER_TARGET)) $(if $(ALLOC),--alloc $(ALLOC))
+	@test -f $(NET)/network.txt || $(NODE) init --dir $(NET) --network devnet --nodes $(NODES) $(if $(FOUNDER),--founder $(FOUNDER)) $(if $(ISSUER),--issuer $(ISSUER)) $(if $(FOUNDER_TARGET),--founder-target $(FOUNDER_TARGET)) $(if $(ALLOC),--alloc $(ALLOC))
 	@if [ "$(origin NODES)" = "command line" ]; then n=$$(ls -d $(NET)/node-* 2>/dev/null | wc -l | tr -d ' '); [ "$$n" = "$(NODES)" ] || echo "AVISO: NODES=$(NODES) foi ignorado: a rede em $(NET) já existe com $$n nós (a quantidade é definida só na criação). Para recriar com $(NODES): make devnet-stop && mv $(NET) $(NET).bak && make devnet FOUNDER=… NODES=$(NODES)"; fi
 	@$(NODE) stop --dir $(NET) >/dev/null 2>&1; \
 	for d in $(NET)/node-*; do i=$${d##*node-}; $(NODE) run --dir $(NET) --index $$i >$(NET)/node-$$i/node.log 2>&1 & done; \
@@ -51,6 +54,9 @@ devnet-founder: ## Define a carteira do fundador (recebe as recompensas) e zera 
 
 devnet-equivocate: ## SIMULAÇÃO (só dev): o validador de teste assina 2 votos conflitantes e leva Slash. Uso: make devnet-equivocate [VALIDATOR=0]. Antes, trave stake na Suite (Validadores)
 	$(CARGO) run -q -p devnet-sim -- equivocate --dir $(NET) --validator $(or $(VALIDATOR),0)
+
+devnet-cosign: ## SIMULA os membros de teste dos órgãos aprovando credenciais pendentes (TYPE=cnh-b opcional); só dev
+	@$(CARGO) run -q -p devnet-sim -- cosign --dir $(NET) $(if $(TYPE),--type $(TYPE))
 
 devnet-veto: ## SIMULAÇÃO (só dev): o órgão simulado veta uma negociação de bem pendente (janela de veto). Uso: make devnet-veto CLASS=imovel ASSET=<id>
 	$(CARGO) run -q -p devnet-sim -- veto --dir $(NET) --class $(CLASS) --asset $(ASSET)

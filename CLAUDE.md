@@ -21,6 +21,7 @@ crates/teko-ballot-crypto/  (Fase 2) ElGamal exponencial de limiar P-256, provas
 crates/teko-ledger/        (Fase 2, M2) livro-razão genérico: Tx assinada, módulos, blocos atômicos, raiz de estado (ADR-0020)
 crates/teko-coin/          (Fase 2, M3) moeda de teto fixo: halving, taxa por byte, stake, slash, faucet devnet (ADR-0021)
 crates/teko-assets/        (Fase 2, M4) bens: classes com órgão M-de-N, negociação direta com janela de veto (oferta, aceite com escrow, veto, finalização; ADR-0036), gravames
+crates/teko-credentials/   (Fase 2, etapa A) credenciais na chain: tipos com órgão M-de-N, janela de contestação, validade, veto, revogação (ADR-0037)
 crates/teko-wallet/        (Fase 2, M5a) carteira: BIP-39 24 palavras (só na tela do dispositivo), SLIP-10 P-256, endereço tekow1…; independente da identidade (ADR-0023)
 crates/teko-economy/       (Fase 2, M6a) economia sobre BFT: blocos com certificado, validadores por stake, fase de fundador (ADR-0028)
 crates/teko-chain/         (Fase 2) rede de votos em **BFT institucional** (ADR-0034): perfis devnet/testnet (mainnet TRAVADA), blocos com certificado de commit, réplica verificada
@@ -35,6 +36,7 @@ crates/teko-attestation/   5. manifestos de firmware, M-de-N, cadeias de atesta�
 tools/issuer-cli/          5. autoridade simulada
 crates/teko-transport/     (junto de 4) trait Transport + implementação local
 apps/suite/                6. Tauri v2
+apps/issuer/               (Fase 2, etapa A) Teko Emissor: app separado, órgãos emitem credenciais (`make issuer`)
 ```
 
 Cada etapa só começa com a anterior com testes passando. Ao fim de cada etapa, atualizar os docs e resumir o que mudou.
@@ -85,6 +87,8 @@ make docs-check                        # confere links, imagens e crates no READ
 make fund ADDR=tekow1… AMOUNT=1000    # TEKO de TESTE na carteira (devnet local; decimais ok; 1 TEKO = 1.000.000 ypy, ADR-0029)
 make diagrams                         # regenera os diagramas (docs/diagrams)
 make devnet FOUNDER=tekow1… [NODES=4]  # (1ª vez; NODES = instituições, padrão 4) FOUNDER = sua carteira: recebe as recompensas do fundador (ADR-0028)
+make issuer                            # app Emissor: órgãos emitem credenciais na chain (ADR-0037)
+make devnet-cosign                     # SIMULA membros de teste dos órgãos aprovando credenciais; só dev
 make devnet-veto CLASS=imovel ASSET=<id>  # SIMULA o órgão vetando uma negociação de bem pendente (ADR-0036); só dev
 make devnet-equivocate                 # SIMULA a equivocação do validador de teste (penalidade/Slash); só dev
 make tally-time                        # apura o quadro (release) e mostra o tempo; TEKO_VERIFY_THREADS=1 = sequencial

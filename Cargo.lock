@@ -791,6 +791,7 @@ dependencies = [
  "teko-bft",
  "teko-chain",
  "teko-coin",
+ "teko-credentials",
  "teko-crypto",
  "teko-economy",
  "teko-ledger",
@@ -4197,6 +4198,7 @@ dependencies = [
  "teko-attestation",
  "teko-ballot-crypto",
  "teko-coin",
+ "teko-credentials",
  "teko-crypto",
  "teko-device-core",
  "teko-election",
@@ -4215,6 +4217,17 @@ dependencies = [
  "prost",
  "rand",
  "teko-bft",
+ "teko-crypto",
+ "teko-ledger",
+]
+
+[[package]]
+name = "teko-credentials"
+version = "0.1.0"
+dependencies = [
+ "proptest",
+ "prost",
+ "rand",
  "teko-crypto",
  "teko-ledger",
 ]
@@ -4249,6 +4262,7 @@ dependencies = [
  "teko-attestation",
  "teko-ballot-crypto",
  "teko-coin",
+ "teko-credentials",
  "teko-crypto",
  "teko-election",
  "teko-ledger",
@@ -4268,6 +4282,7 @@ dependencies = [
  "teko-assets",
  "teko-bft",
  "teko-coin",
+ "teko-credentials",
  "teko-crypto",
  "teko-ledger",
 ]
@@ -4298,9 +4313,30 @@ dependencies = [
  "teko-assets",
  "teko-bft",
  "teko-coin",
+ "teko-credentials",
  "teko-crypto",
  "teko-economy",
  "teko-ledger",
+]
+
+[[package]]
+name = "teko-issuer"
+version = "0.1.0"
+dependencies = [
+ "rand",
+ "serde",
+ "serde_json",
+ "tauri",
+ "tauri-build",
+ "teko-assets",
+ "teko-client",
+ "teko-coin",
+ "teko-credentials",
+ "teko-crypto",
+ "teko-ledger",
+ "teko-node",
+ "teko-protocol",
+ "teko-transport",
 ]
 
 [[package]]
@@ -4376,6 +4412,7 @@ dependencies = [
  "teko-bulletin",
  "teko-client",
  "teko-coin",
+ "teko-credentials",
  "teko-crypto",
  "teko-election",
  "teko-ledger",

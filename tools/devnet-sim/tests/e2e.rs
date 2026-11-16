@@ -286,3 +286,99 @@ fn the_simulated_organ_vetoes_a_pending_trade_and_the_buyer_is_refunded_on_real_
     }
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+#[test]
+fn simulated_organ_members_cosign_a_credential_proposed_by_the_issuer_wallet_on_real_nodes() {
+    use teko_credentials::{CREDENTIALS_MODULE, Op, ProposeOp, Status, credential_id};
+    use teko_node::{DEVNET_CRED_TYPES, init_economy_with_issuer};
+
+    let _turn = TURN.lock().unwrap_or_else(|e| e.into_inner());
+    let issuer: SigningKey = generate_signing_key(&mut rand::rngs::StdRng::seed_from_u64(77));
+    let issuer_addr = address_of(&public_key_bytes(&issuer));
+    let dir: PathBuf = std::env::temp_dir().join(format!(
+        "teko-devnet-cosign-{}-{}",
+        std::process::id(),
+        free_port_base()
+    ));
+    let _ = std::fs::remove_dir_all(&dir);
+    init_network(&dir, NetworkKind::Devnet, 3, free_port_base(), false).unwrap();
+    let mut g = init_economy_with_issuer(
+        &dir,
+        Some(issuer_addr),
+        Some(issuer_addr),
+        None,
+        Some(10_000),
+        false,
+    )
+    .unwrap();
+    g.coin.fee_per_byte = 0;
+    std::fs::write(dir.join(ECONOMY_FILE), g.to_text()).unwrap();
+    let ec = load_economy(&dir).unwrap().unwrap();
+    // the issuer wallet is a member of every devnet organ, with 2 simulated co-members
+    for (name, _, _, _) in DEVNET_CRED_TYPES {
+        let t = teko_credentials::type_info(&ec.genesis.build_ledger().unwrap(), name.as_bytes())
+            .unwrap();
+        assert_eq!(t.members.len(), 3);
+        assert!(t.members.contains(&issuer_addr.to_vec()));
+    }
+    let nodes: Vec<NodeHandle> = (0..3).map(|i| start_node(&dir, i, &ec)).collect();
+    let client = NodeClient::new(load_network(&dir).unwrap().peers);
+
+    let holder = public_key_bytes(&key(8_000));
+    // the nodes use the real clock
+    let valid_until = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_secs()
+        + 100_000_000;
+    let p = ProposeOp {
+        ctype: b"cnh-b".to_vec(),
+        subject: holder.clone(),
+        commitment: vec![5; 32],
+        claims: vec![],
+        valid_until,
+    };
+    let id = credential_id(
+        &p.ctype,
+        &p.subject,
+        &p.commitment,
+        &p.claims,
+        p.valid_until,
+    );
+    // an ISSUER-signed proposal is only 1 of 2: it waits for approvals
+    let tx = Tx::new_signed(
+        &issuer,
+        &ec.genesis.chain_id,
+        0,
+        CREDENTIALS_MODULE,
+        Op::Propose(p).encode(),
+    );
+    client.econ_submit(&[tx]).unwrap();
+    wait("the proposal is in a block", 30, || {
+        client
+            .econ_sync(&ec.genesis)
+            .is_ok_and(|c| teko_credentials::credential(c.ledger(), b"cnh-b", &id).is_some())
+    });
+    let c = client.econ_sync(&ec.genesis).unwrap();
+    assert_eq!(
+        teko_credentials::credential(c.ledger(), b"cnh-b", &id)
+            .unwrap()
+            .status_at(0),
+        Status::Proposed
+    );
+
+    // the simulator approves with the simulated members, only as many as the quorum needs
+    let said = devnet_sim::cosign(&dir, Some("cnh-b")).unwrap();
+    assert!(said.contains("cnh-b"), "{said}");
+    let c = client.econ_sync(&ec.genesis).unwrap();
+    let rec = teko_credentials::credential(c.ledger(), b"cnh-b", &id).unwrap();
+    assert_eq!(rec.approvals.len(), 2);
+    assert!(rec.active_at > rec.approved_at && rec.approved_at > 0);
+    assert!(matches!(rec.status_at(rec.approved_at), Status::Pending));
+    // nothing left to approve is a clear error
+    assert!(devnet_sim::cosign(&dir, None).is_err());
+    for n in nodes {
+        n.stop();
+    }
+    let _ = std::fs::remove_dir_all(&dir);
+}

@@ -34,6 +34,7 @@ O computador (Suite) **nunca** vê chaves nem PIN. O dispositivo cifra e assina 
 | `teko-ledger` | livro-razão genérico: transações assinadas, módulos, blocos atômicos e raiz de estado (base da moeda e dos bens) |
 | `teko-coin` | moeda de teto fixo: recompensa com *halving*, taxa por byte, stake, penalidade por equivocação e faucet de teste (só devnet) |
 | `teko-assets` | bens: classes (imóvel e veículo) governadas por órgão M-de-N, metadados fora da chain com hash amarrado, **negociação direta com janela de veto** (oferta, aceite com escrow, veto do órgão, finalização por qualquer um; cada parte assina a própria transação no dispositivo, ADR-0036) e gravames |
+| `teko-credentials` | credenciais na chain: tipos governados por órgão M-de-N (membros por endereço de carteira), emissão por transações de cada membro, janela de contestação, validade, veto e revogação, tudo pelo horário do bloco (ADR-0037) |
 | `teko-transport` | trait de transporte e implementação local |
 | `teko-client` | cliente da Suite: onboarding, assinatura, eleição |
 | `device-emulator` | "tela e botões" do dispositivo, em processo separado |
@@ -70,6 +71,8 @@ make fund ADDR=tekow1… AMOUNT=1000   # TEKO de TESTE para a sua carteira, apar
 make tally-time     # tempo de verificação do quadro de votos (paralelo; ADR-0033)
 make devnet-equivocate  # SIMULA a equivocação do validador de teste e mostra a penalidade (trave stake na Suite antes)
 make coin-demo      # demonstração da moeda em memória: teto, halving, taxa, stake e slash
+make issuer         # o Teko Emissor: app separado em que órgãos emitem credenciais na chain (precisa do emulador e de make devnet)
+make devnet-cosign  # SIMULA os membros de teste dos órgãos aprovando credenciais pendentes (só dev)
 make assets-demo    # demonstração dos bens: registro com quórum, gravame, negociação direta com janela de veto e veto do órgão
 make devnet-veto CLASS=imovel ASSET=<id>   # SIMULA o órgão vetando uma negociação pendente (dentro da janela)
 ```

@@ -28,7 +28,8 @@ pub use economy::EconomyConfig;
 pub use error::NodeError;
 pub use node::{Node, NodeConfig, NodeHandle};
 pub use setup::{
-    ECONOMY_FILE, NetFiles, init_economy, init_network, load_class_registrar_keys, load_economy,
-    load_network, load_registrar_keys, load_validator_key, node_dir,
+    DEVNET_CRED_TYPES, ECONOMY_FILE, NetFiles, init_economy, init_economy_with_issuer,
+    init_network, load_class_registrar_keys, load_economy, load_network, load_orgmember_keys,
+    load_registrar_keys, load_validator_key, node_dir, orgmember_file,
 };
 pub use world::NodeWorld;

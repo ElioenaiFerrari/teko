@@ -2926,3 +2926,472 @@ fn bad_stake_requests_are_refused_before_any_prompt_and_rejection_signs_nothing(
     let r = dev.handle(stake_req(1, 5, 0, 0));
     assert_eq!(failure_code(&r), Some(ErrorCode::UserRejected));
 }
+
+// ───────────────────────── credentials on the chain (ADR-0037) ─────────────────────────
+
+const CRED_CHAIN: &str = "teko-devnet";
+
+#[allow(clippy::too_many_arguments)]
+fn cred_req(
+    op: u32,
+    ctype: &str,
+    subject: &[u8],
+    claims: &[u8],
+    public: bool,
+    salt: &[u8],
+    valid_until: u64,
+    reason: &str,
+    nonce: u64,
+) -> SignCredentialOp {
+    SignCredentialOp {
+        chain_id: CRED_CHAIN.into(),
+        op,
+        ctype: ctype.into(),
+        subject: subject.to_vec(),
+        claims: claims.to_vec(),
+        public,
+        salt: salt.to_vec(),
+        commitment: Vec::new(),
+        valid_until,
+        reason: reason.into(),
+        contest_secs: 604_800,
+        fee: 0,
+        nonce,
+    }
+}
+
+fn credential_key_of(dev: &mut Dev, ctype: &str) -> Vec<u8> {
+    match dev.handle(Request::GetCredentialKey(GetCredentialKey {
+        ctype: ctype.into(),
+    })) {
+        Response::CredentialKey(k) => k.public_key,
+        other => panic!("{other:?}"),
+    }
+}
+
+#[test]
+fn the_credential_key_is_per_type_stable_and_unlinkable_to_identity_wallet_and_voter_keys() {
+    let (_w, hal, mut dev, identity_pk) = ready();
+    let a = credential_key_of(&mut dev, "cnh-b");
+    assert_eq!(a, credential_key_of(&mut dev, "cnh-b")); // deterministic
+    let b = credential_key_of(&mut dev, "cnh-a");
+    assert_ne!(a, b); // one key per type
+    assert_ne!(a, identity_pk);
+    let wallet_pk = match dev.handle(Request::GetAddress(GetAddress {})) {
+        Response::Address(x) => x.public_key,
+        other => panic!("{other:?}"),
+    };
+    assert_ne!(a, wallet_pk);
+    // exporting needs the physical confirmation and a sane name
+    let before = hal.confirms_requested();
+    let r = dev.handle(Request::GetCredentialKey(GetCredentialKey {
+        ctype: "a\nb".into(),
+    }));
+    assert_eq!(failure_code(&r), Some(ErrorCode::InvalidArgument));
+    let r = dev.handle(Request::GetCredentialKey(GetCredentialKey {
+        ctype: String::new(),
+    }));
+    assert_eq!(failure_code(&r), Some(ErrorCode::InvalidArgument));
+    assert_eq!(hal.confirms_requested(), before);
+    hal.push_decision(Decision::Reject);
+    let r = dev.handle(Request::GetCredentialKey(GetCredentialKey {
+        ctype: "cnh-b".into(),
+    }));
+    assert_eq!(failure_code(&r), Some(ErrorCode::UserRejected));
+    // a locked device does not export it
+    dev.lock();
+    let r = dev.handle(Request::GetCredentialKey(GetCredentialKey {
+        ctype: "cnh-b".into(),
+    }));
+    assert_eq!(failure_code(&r), Some(ErrorCode::InvalidState));
+}
+
+#[test]
+fn an_organ_member_issues_approves_vetoes_and_revokes_from_the_device_in_the_real_ledger() {
+    use teko_credentials::{
+        CREDENTIALS_MODULE, Op as COp, ProposeOp, Status, VoteOp, credential_id,
+    };
+    use teko_crypto::ledger::{cred_private_commitment, cred_public_commitment};
+    use teko_ledger::{Ledger, Tx, address_of};
+
+    let (_w, hal, mut dev, _) = ready();
+    let me_pk = match dev.handle(Request::GetAddress(GetAddress {})) {
+        Response::Address(x) => x.public_key,
+        other => panic!("{other:?}"),
+    };
+    let mut rng = StdRng::seed_from_u64(91);
+    let m1 = generate_signing_key(&mut rng);
+    let m2 = generate_signing_key(&mut rng);
+    let holder = credential_key_of(&mut dev, "cnh-b");
+    let members = vec![
+        address_of(&me_pk).to_vec(),
+        address_of(&public_key_bytes(&m1)).to_vec(),
+        address_of(&public_key_bytes(&m2)).to_vec(),
+    ];
+    let mut l = Ledger::new(CRED_CHAIN, vec![teko_credentials::module()]).unwrap();
+    teko_credentials::genesis_type(&mut l, b"cnh-b", &members, 2, 600, 100_000_000, false).unwrap();
+    teko_credentials::genesis_type(&mut l, b"candidato", &members, 1, 600, 100_000_000, true)
+        .unwrap();
+    let now = std::cell::Cell::new(1_700_000_000u64);
+    let me_addr = address_of(&me_pk);
+    // a transaction the device signed, rebuilt by the host from the same fields
+    let device_tx = |l: &mut Ledger, s: TransferSigned, op: COp, dt: u64| {
+        now.set(now.get() + dt);
+        let t = Tx {
+            chain_id: CRED_CHAIN.into(),
+            nonce: l.nonce_of(&me_addr),
+            module: CREDENTIALS_MODULE,
+            payload: op.encode(),
+            sender: s.public_key,
+            signature: s.signature,
+            fee: 0,
+        };
+        let h = l.height() + 1;
+        l.apply_block_at(h, now.get(), &[9; 32], &[t])
+    };
+    let sw = |l: &mut Ledger, k: &SigningKey, op: COp, dt: u64| {
+        now.set(now.get() + dt);
+        let t = Tx::new_signed(
+            k,
+            CRED_CHAIN,
+            l.nonce_of(&address_of(&public_key_bytes(k))),
+            CREDENTIALS_MODULE,
+            op.encode(),
+        );
+        let h = l.height() + 1;
+        l.apply_block_at(h, now.get(), &[9; 32], &[t])
+    };
+    let signed = |r: Response| match r {
+        Response::TransferSigned(s) => s,
+        other => panic!("{other:?}"),
+    };
+
+    // 1) PRIVATE credential: the device shows the claims, only the salted commitment goes on-chain
+    let claims = b"nome=Ana Souza;categoria=B;registro=123".to_vec();
+    let salt = [5u8; 16];
+    let until = now.get() + 50_000_000;
+    hal.clear_screens();
+    let s = signed(dev.handle(Request::SignCredentialOp(cred_req(
+        1, "cnh-b", &holder, &claims, false, &salt, until, "", 0,
+    ))));
+    let sc = hal
+        .screens()
+        .into_iter()
+        .find(|s| s.title == "EMITIR CREDENCIAL")
+        .unwrap();
+    assert!(sc.lines.iter().any(|l| l.contains("nome=Ana Souza")));
+    assert!(sc.lines.iter().any(|l| l.contains("categoria=B")));
+    assert!(
+        sc.lines
+            .iter()
+            .any(|l| l.contains("Validade até: 2025-06-15"))
+    );
+    assert!(sc.lines.iter().any(|l| l.contains("1ª aprovação")));
+    let commitment = cred_private_commitment(&salt, &claims);
+    let id = credential_id(b"cnh-b", &holder, &commitment, &[], until);
+    device_tx(
+        &mut l,
+        s,
+        COp::Propose(ProposeOp {
+            ctype: b"cnh-b".to_vec(),
+            subject: holder.clone(),
+            commitment: commitment.to_vec(),
+            claims: vec![],
+            valid_until: until,
+        }),
+        1,
+    )
+    .unwrap();
+    assert_eq!(
+        teko_credentials::status(&l, b"cnh-b", &id, now.get()),
+        Some(Status::Proposed)
+    );
+    // a second member approves with software: pending in the window, active after it
+    sw(
+        &mut l,
+        &m1,
+        COp::Approve(VoteOp {
+            ctype: b"cnh-b".to_vec(),
+            id: id.to_vec(),
+            reason: String::new(),
+        }),
+        1,
+    )
+    .unwrap();
+    assert_eq!(
+        teko_credentials::status(&l, b"cnh-b", &id, now.get()),
+        Some(Status::Pending)
+    );
+    assert_eq!(
+        teko_credentials::status(&l, b"cnh-b", &id, now.get() + 600),
+        Some(Status::Active)
+    );
+
+    // 2) the device VETOES a pending credential (it has the claims, so it recomputes the id)
+    let other_holder = credential_key_of(&mut dev, "cnh-a");
+    let claims2 = b"nome=Beto;categoria=A".to_vec();
+    let salt2 = [6u8; 16];
+    let c2 = cred_private_commitment(&salt2, &claims2);
+    let id2 = credential_id(b"cnh-b", &other_holder, &c2, &[], until);
+    sw(
+        &mut l,
+        &m1,
+        COp::Propose(ProposeOp {
+            ctype: b"cnh-b".to_vec(),
+            subject: other_holder.clone(),
+            commitment: c2.to_vec(),
+            claims: vec![],
+            valid_until: until,
+        }),
+        1,
+    )
+    .unwrap();
+    sw(
+        &mut l,
+        &m2,
+        COp::Approve(VoteOp {
+            ctype: b"cnh-b".to_vec(),
+            id: id2.to_vec(),
+            reason: String::new(),
+        }),
+        1,
+    )
+    .unwrap();
+    hal.clear_screens();
+    let s = signed(dev.handle(Request::SignCredentialOp(cred_req(
+        3,
+        "cnh-b",
+        &other_holder,
+        &claims2,
+        false,
+        &salt2,
+        until,
+        "fraude documental",
+        l.nonce_of(&me_addr),
+    ))));
+    let sc = hal
+        .screens()
+        .into_iter()
+        .find(|s| s.title == "VETAR CREDENCIAL")
+        .unwrap();
+    assert!(sc.lines.iter().any(|l| l.contains("fraude documental")));
+    device_tx(
+        &mut l,
+        s,
+        COp::Veto(VoteOp {
+            ctype: b"cnh-b".to_vec(),
+            id: id2.to_vec(),
+            reason: "fraude documental".into(),
+        }),
+        1,
+    )
+    .unwrap();
+    sw(
+        &mut l,
+        &m1,
+        COp::Veto(VoteOp {
+            ctype: b"cnh-b".to_vec(),
+            id: id2.to_vec(),
+            reason: "fraude documental".into(),
+        }),
+        1,
+    )
+    .unwrap();
+    assert_eq!(
+        teko_credentials::status(&l, b"cnh-b", &id2, now.get()),
+        Some(Status::Vetoed)
+    );
+
+    // 3) the device REVOKES the active credential of step 1 knowing only its commitment
+    now.set(now.get() + 700);
+    hal.clear_screens();
+    let mut revoke = cred_req(
+        4,
+        "cnh-b",
+        &holder,
+        &[],
+        false,
+        &[],
+        until,
+        "cassada",
+        l.nonce_of(&me_addr),
+    );
+    revoke.commitment = commitment.to_vec();
+    let s = signed(dev.handle(Request::SignCredentialOp(revoke)));
+    let sc = hal
+        .screens()
+        .into_iter()
+        .find(|s| s.title == "REVOGAR CREDENCIAL")
+        .unwrap();
+    assert!(sc.lines.iter().any(|l| l.contains("NÃO conferidos")));
+    device_tx(
+        &mut l,
+        s,
+        COp::Revoke(VoteOp {
+            ctype: b"cnh-b".to_vec(),
+            id: id.to_vec(),
+            reason: "cassada".into(),
+        }),
+        0,
+    )
+    .unwrap();
+    sw(
+        &mut l,
+        &m2,
+        COp::Revoke(VoteOp {
+            ctype: b"cnh-b".to_vec(),
+            id: id.to_vec(),
+            reason: "cassada".into(),
+        }),
+        1,
+    )
+    .unwrap();
+    assert_eq!(
+        teko_credentials::status(&l, b"cnh-b", &id, now.get()),
+        Some(Status::Revoked)
+    );
+
+    // 4) PUBLIC credential: the claims go on-chain and the commitment is their hash
+    let public_claims = b"cargo=governador;uf=SP;numero=13;nome=Ana Souza".to_vec();
+    let candidate = credential_key_of(&mut dev, "candidato");
+    let until2 = now.get() + 50_000_000;
+    let s = signed(dev.handle(Request::SignCredentialOp(cred_req(
+        1,
+        "candidato",
+        &candidate,
+        &public_claims,
+        true,
+        &[],
+        until2,
+        "",
+        l.nonce_of(&me_addr),
+    ))));
+    let c3 = cred_public_commitment(&public_claims);
+    device_tx(
+        &mut l,
+        s,
+        COp::Propose(ProposeOp {
+            ctype: b"candidato".to_vec(),
+            subject: candidate.clone(),
+            commitment: c3.to_vec(),
+            claims: public_claims.clone(),
+            valid_until: until2,
+        }),
+        1,
+    )
+    .unwrap();
+    let id3 = credential_id(b"candidato", &candidate, &c3, &public_claims, until2);
+    assert_eq!(
+        teko_credentials::status(&l, b"candidato", &id3, now.get() + 600),
+        Some(Status::Active)
+    );
+}
+
+#[test]
+#[allow(clippy::vec_init_then_push)]
+fn credential_requests_are_validated_before_anything_is_shown_or_signed() {
+    let (_w, hal, mut dev, _) = ready();
+    let holder = credential_key_of(&mut dev, "cnh-b");
+    let base = |op: u32| cred_req(op, "cnh-b", &holder, b"a=b", false, &[1; 16], 0, "", 0);
+    let mut cases: Vec<SignCredentialOp> = Vec::new();
+    cases.push(cred_req(
+        9, "cnh-b", &holder, b"a=b", false, &[1; 16], 0, "", 0,
+    )); // unknown op
+    cases.push(cred_req(
+        0, "cnh-b", &holder, b"a=b", false, &[1; 16], 0, "", 0,
+    ));
+    cases.push(cred_req(
+        1,
+        "cnh-b",
+        &[1, 2],
+        b"a=b",
+        false,
+        &[1; 16],
+        0,
+        "",
+        0,
+    )); // bad subject
+    cases.push(cred_req(
+        1, "cnh-b", &holder, b"a=b", false, &[1; 3], 0, "", 0,
+    )); // short salt
+    cases.push(cred_req(
+        1, "cnh-b", &holder, b"a=\nb", false, &[1; 16], 0, "", 0,
+    )); // control char
+    cases.push(cred_req(
+        1,
+        "cnh-b",
+        &holder,
+        b"\xff\xfe",
+        false,
+        &[1; 16],
+        0,
+        "",
+        0,
+    )); // not UTF-8
+    cases.push(cred_req(
+        1,
+        "cnh-b",
+        &holder,
+        &[b'a'; 3_000],
+        false,
+        &[1; 16],
+        0,
+        "",
+        0,
+    ));
+    cases.push(cred_req(1, "cnh-b", &holder, b"", true, &[], 0, "", 0)); // public without claims
+    cases.push(cred_req(1, "cnh-b", &holder, b"", false, &[], 0, "", 0)); // issuer must see them
+    cases.push(cred_req(
+        3, "cnh-b", &holder, b"a=b", false, &[1; 16], 0, "", 0,
+    )); // veto without reason
+    cases.push(cred_req(
+        4, "cnh-b", &holder, b"a=b", false, &[1; 16], 0, "  ", 0,
+    ));
+    cases.push(cred_req(
+        1, "cnh-b", &holder, b"a=b", false, &[1; 16], 0, "x", 0,
+    )); // reason on a propose
+    cases.push(cred_req(
+        2, "cnh-b", &holder, b"a=b", false, &[1; 16], 0, "x", 0,
+    )); // reason on an approve
+    cases.push(cred_req(3, "cnh-b", &holder, b"", false, &[], 0, "r", 0)); // no commitment at all
+    cases.push(cred_req(1, "", &holder, b"a=b", false, &[1; 16], 0, "", 0));
+    cases.push(SignCredentialOp {
+        chain_id: "rede\nfalsa".into(),
+        ..base(1)
+    });
+    cases.push(SignCredentialOp {
+        contest_secs: 0,
+        ..base(1)
+    });
+    let mut public_with_commitment = cred_req(1, "candidato", &holder, b"a=b", true, &[], 0, "", 0);
+    public_with_commitment.commitment = vec![1; 32];
+    cases.push(public_with_commitment);
+    let before = hal.confirms_requested();
+    for c in cases {
+        let r = dev.handle(Request::SignCredentialOp(c.clone()));
+        assert_eq!(
+            failure_code(&r),
+            Some(ErrorCode::InvalidArgument),
+            "{c:?} -> {r:?}"
+        );
+    }
+    assert_eq!(hal.confirms_requested(), before); // nothing was ever shown
+
+    // nothing is signed without the physical confirmation
+    hal.push_decision(Decision::Reject);
+    let r = dev.handle(Request::SignCredentialOp(base(1)));
+    assert_eq!(failure_code(&r), Some(ErrorCode::UserRejected));
+    // needs the wallet and the unlocked device
+    dev.lock();
+    let r = dev.handle(Request::SignCredentialOp(base(1)));
+    assert_eq!(failure_code(&r), Some(ErrorCode::InvalidState));
+}
+
+#[test]
+fn credential_operations_need_a_wallet() {
+    let (_w, _hal, mut dev) = fresh_initialized();
+    let r = dev.handle(Request::SignCredentialOp(cred_req(
+        1, "cnh-b", &[2; 33], b"a=b", false, &[1; 16], 0, "", 0,
+    )));
+    assert_eq!(failure_code(&r), Some(ErrorCode::InvalidState));
+}

@@ -18,6 +18,7 @@ path = "src/main.rs"
 teko-node.workspace = true
 teko-bft.workspace = true
 teko-assets.workspace = true
+teko-credentials.workspace = true
 teko-coin.workspace = true
 teko-economy.workspace = true
 teko-crypto.workspace = true

@@ -71,6 +71,8 @@ fn module_name(m: u32) -> String {
         "coin".into()
     } else if m == teko_assets::ASSETS_MODULE {
         "assets".into()
+    } else if m == teko_credentials::CREDENTIALS_MODULE {
+        "credentials".into()
     } else {
         format!("module-{m}")
     }
@@ -133,6 +135,22 @@ fn kind_of(tx: &Tx) -> TxKind {
                 op: op.into(),
                 class: label(&class),
                 asset: label(&asset),
+            };
+        }
+    }
+    if tx.module == teko_credentials::CREDENTIALS_MODULE {
+        use teko_credentials::Op;
+        let parsed = match Op::decode(&tx.payload) {
+            Some(Op::Propose(m)) => Some(("propose", m.ctype)),
+            Some(Op::Approve(m)) => Some(("approve", m.ctype)),
+            Some(Op::Veto(m)) => Some(("veto", m.ctype)),
+            Some(Op::Revoke(m)) => Some(("revoke", m.ctype)),
+            None => None,
+        };
+        if let Some((op, ctype)) = parsed {
+            return TxKind::Credentials {
+                op: op.into(),
+                ctype: label(&ctype),
             };
         }
     }

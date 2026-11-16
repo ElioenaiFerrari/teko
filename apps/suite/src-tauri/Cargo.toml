@@ -17,6 +17,7 @@ prost.workspace = true
 teko-client.workspace = true
 teko-coin.workspace = true
 teko-assets.workspace = true
+teko-credentials.workspace = true
 teko-ledger.workspace = true
 teko-node.workspace = true
 teko-attestation.workspace = true

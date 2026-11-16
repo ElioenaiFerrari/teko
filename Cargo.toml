@@ -13,6 +13,7 @@ members = [
   "crates/teko-ledger",
   "crates/teko-coin",
   "crates/teko-assets",
+  "crates/teko-credentials",
   "crates/teko-wallet",
   "crates/teko-economy",
   "crates/teko-explorer",
@@ -26,6 +27,7 @@ members = [
   "tools/explorer-server",
   "tools/devnet-sim",
   "apps/suite/src-tauri",
+  "apps/issuer/src-tauri",
 ]
 
 [workspace.package]
@@ -58,6 +60,7 @@ teko-chain = { path = "crates/teko-chain" }
 teko-ballot-crypto = { path = "crates/teko-ballot-crypto" }
 teko-bft = { path = "crates/teko-bft" }
 teko-ledger = { path = "crates/teko-ledger" }
+teko-credentials = { path = "crates/teko-credentials" }
 teko-coin = { path = "crates/teko-coin" }
 teko-assets = { path = "crates/teko-assets" }
 teko-wallet = { path = "crates/teko-wallet" }

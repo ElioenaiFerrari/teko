@@ -323,3 +323,21 @@ Legenda: **P** = `proptest` (muitos casos), **U** = unitário, **E** = ponta a p
 | Em nós reais: negociação pendente na janela, finalização antes dela recusada na hora (com o motivo) sem bloco vazio, e concluída depois | node: `a_trade_between_wallets_waits_in_the_veto_window_in_real_nodes_and_completes_after_it` |
 | O veto simulado do órgão devolve o preço ao comprador em nós reais | devnet-sim: `the_simulated_organ_vetoes_a_pending_trade...` |
 
+## Credenciais na chain (ADR-0037)
+
+| Garantia | Teste |
+|---|---|
+| Proposta → pendente → ativa → expirada só pelo horário do bloco | credentials: `it_goes_from_proposed_to_pending_to_active_to_expired_by_block_time_only` |
+| Só membro propõe/aprova; cada membro conta uma vez | credentials: `only_members_propose_and_approve_and_each_member_counts_once` |
+| Veto só dentro da janela e só com o quórum; motivo público obrigatório | credentials: `the_quorum_vetoes_inside_the_window_and_never_after` |
+| Revogação só de credencial ativa, por quórum, com motivo | credentials: `an_active_credential_is_revoked_by_the_quorum_with_a_public_reason` |
+| Validade por tipo (vitalícia, teto, janela) | credentials: `validity_rules_follow_the_type` |
+| Privado guarda só compromisso; público amarra os atributos ao hash | credentials: `private_types_keep_only_a_commitment_and_public_types_bind_their_claims` |
+| Nunca ativa na janela nem depois do veto, em qualquer ordem de ações | credentials: `a_credential_is_never_active_inside_the_window_or_after_veto` (proptest) |
+| Tipos de credencial na gênese: texto ida e volta e módulo montado | economy: `credential_types_in_the_genesis_survive_the_text_round_trip_and_build_the_module` |
+| Chave de credencial por tipo, estável, sem ligação com identidade e carteira | device-core: `the_credential_key_is_per_type_stable_and_unlinkable_to_identity_wallet_and_voter_keys` |
+| O dispositivo emite, aprova, veta e revoga e a transação roda no livro real | device-core: `an_organ_member_issues_approves_vetoes_and_revokes_from_the_device_in_the_real_ledger` |
+| Pedidos inválidos recusados antes de mostrar; sem botão não assina | device-core: `credential_requests_are_validated_before_anything_is_shown_or_signed` |
+| Com o dispositivo real do emulador (TCP) | client: `credential_keys_and_organ_transactions_are_signed_on_the_real_device_and_run_in_the_ledger` |
+| Em nós reais: proposta do emissor + cosign dos membros simulados | devnet-sim: `simulated_organ_members_cosign_a_credential_proposed_by_the_issuer_wallet_on_real_nodes` |
+

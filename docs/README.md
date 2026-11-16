@@ -28,6 +28,7 @@ Tudo em pt-BR (código e identificadores ficam em inglês). Cada fluxo é um arq
 | 13 | [Suite desktop](flows/13-desktop-suite.md) | Como o app é montado? |
 | 14 | [Carteira e frase de recuperação](flows/14-wallet-and-seed.md) | Como recupero meu dinheiro se perder o dispositivo? |
 | 15 | [Explorador da chain](flows/15-explorer.md) | Como vejo blocos, transações e saldos sem confiar no nó? |
+| 16 | [Credenciais na chain e app do emissor](flows/16-credentials-on-chain.md) | Como um órgão emite uma credencial, com contestação e validade? |
 
 ## Referência técnica
 [ARCHITECTURE](ARCHITECTURE.md) · [THREAT-MODEL](THREAT-MODEL.md) · [KEY-HIERARCHY](KEY-HIERARCHY.md) · [DEVICE-PROTOCOL](DEVICE-PROTOCOL.md) · [ONBOARDING-FLOW](ONBOARDING-FLOW.md) · [RECOVERY](RECOVERY.md) · [NETWORKS](NETWORKS.md) · [PHASE-2-VOTING](PHASE-2-VOTING.md) · [RELEASE](RELEASE.md) · [TEST-MATRIX](TEST-MATRIX.md) · [GLOSSARY](GLOSSARY.md) · [ADRs](adr/README.md)

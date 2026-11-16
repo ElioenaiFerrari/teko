@@ -16,6 +16,7 @@ fn main() {
         client: Mutex::new(None),
         addr,
         board: Mutex::new(None),
+        cred_keys: Mutex::new(Default::default()),
     });
     // verify the election board in the background from the start (ADR-0033)
     commands::spawn_board_warmup(suite.clone());
@@ -48,6 +49,8 @@ fn main() {
             commands::asset_finalize,
             commands::asset_veto,
             commands::dev_mode,
+            commands::credentials_view,
+            commands::credential_key,
             commands::issue_credential,
             commands::revoke_credential,
             commands::reveal_identity,

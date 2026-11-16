@@ -52,6 +52,11 @@ pub enum TxKind {
         class: String,
         asset: String,
     },
+    /// A credentials-module operation (`propose`, `approve`, `veto`, `revoke`; ADR-0037).
+    Credentials {
+        op: String,
+        ctype: String,
+    },
     Unknown {
         module: u32,
         payload_len: usize,

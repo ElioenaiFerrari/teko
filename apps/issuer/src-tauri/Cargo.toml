@@ -1,0 +1,33 @@
+[package]
+name = "teko-issuer"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+description = "Teko Emissor: app separado em que órgãos e comunidades autorizados emitem credenciais na chain, assinando no próprio dispositivo (ADR-0037)"
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = [] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+rand.workspace = true
+teko-client.workspace = true
+teko-credentials.workspace = true
+teko-assets.workspace = true
+teko-coin.workspace = true
+teko-ledger.workspace = true
+teko-node.workspace = true
+teko-protocol.workspace = true
+teko-transport.workspace = true
+teko-crypto.workspace = true
+
+[features]
+default = ["custom-protocol"]
+# Serves the embedded UI instead of a dev server (needed for `cargo run`).
+custom-protocol = ["tauri/custom-protocol"]
+
+[lints]
+workspace = true

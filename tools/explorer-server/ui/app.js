@@ -31,6 +31,7 @@
       case 'faucet': return 'Moedas de TESTE (faucet da devnet)';
       case 'set_validator_key': return `Vinculou a chave de validador <span class="mono">${esc(short(k.key, 8))}</span>`;
       case 'assets': return `Bens: ${esc(({ register: 'registro', offer: 'oferta de venda', accept: 'aceite da oferta (preço em escrow)', cancel: 'oferta cancelada', finalize: 'transferência concluída', veto: 'VETO do órgão', add_lien: 'gravame', release_lien: 'gravame liberado', update_registrars: 'troca de registradores' })[k.op] || k.op)} · classe ${esc(k.class)}${k.asset ? ` · ${esc(k.asset)}` : ''}`;
+      case 'credentials': return `Credenciais: ${esc(({ propose: 'emissão proposta (1ª aprovação)', approve: 'aprovação do órgão', veto: 'VETO do órgão na contestação', revoke: 'revogação pelo órgão' })[k.op] || k.op)} · tipo ${esc(k.ctype)}`;
       default: return `Módulo ${esc(k.module)} (${esc(k.payload_len)} bytes)`;
     }
   }

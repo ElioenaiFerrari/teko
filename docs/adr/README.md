@@ -20,6 +20,7 @@ Regra: decisões de produto/segurança só passam a `Aceito` pela aprovação do
 | [0043](0043-desempate-por-sorteio-verificavel.md) | Desempate por sorteio verificável (VRF de limiar sobre a chave da cerimônia) | Aceito provisoriamente (implementado) | confirmar |
 | [0044](0044-cargos-de-varias-vagas-senador.md) | Cargos de várias vagas, etapa 1: o Senador (cédula de N votos distintos, N eleitos, classes) | Aceito provisoriamente (implementado) | confirmar |
 | [0045](0045-rotacao-das-instituicoes.md) | Rotação das instituições da chain de votos (mais de 2/3 do conjunto em vigor, épocas, trava, dispositivo com catraca) | Aceito provisoriamente (implementado) | confirmar |
+| [0046](0046-cargos-proporcionais.md) | Cargos proporcionais: voto em candidato ou legenda, quociente + D'Hondt, barreiras e sorteio verificável | Aceito provisoriamente (implementado) | confirmar |
 | [0009](0009-interface-do-emulador.md) | Interface do emulador | Aceito (provisório) | Recomendação adotada |
 | [0010](0010-transporte-local.md) | Transporte local | Aceito (provisório) | Recomendação adotada |
 | [0011](0011-icp-brasil-fora-de-escopo.md) | ICP-Brasil fora de escopo | Proposto | Registro de escopo |

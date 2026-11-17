@@ -353,6 +353,9 @@ fn office_name(o: Office) -> Option<&'static str> {
         Office::Governor => Some(Cargo::Governador.name()),
         Office::Mayor => Some(Cargo::Prefeito.name()),
         Office::Senator => Some(Cargo::Senador.name()),
+        Office::FederalDeputy => Some(Cargo::DeputadoFederal.name()),
+        Office::StateDeputy => Some(Cargo::DeputadoEstadual.name()),
+        Office::CityCouncillor => Some(Cargo::Vereador.name()),
         _ => None,
     }
 }
@@ -371,7 +374,7 @@ fn claim_elected(ctx: &mut Ctx<'_, '_>, op: ClaimElectedOp) -> Result<(), Module
     if !t.system {
         return Err(err("the elected type is not a system type"));
     }
-    if op.outcome.len() > 4_096 || op.signers.len() != op.signatures.len() || op.signers.len() > 64
+    if op.outcome.len() > 16_384 || op.signers.len() != op.signatures.len() || op.signers.len() > 64
     {
         return Err(err("malformed claim"));
     }
@@ -451,9 +454,39 @@ fn claim_elected(ctx: &mut Ctx<'_, '_>, op: ClaimElectedOp) -> Result<(), Module
             .copied()
             .zip(outcome.elected_credentials.iter().cloned())
             .collect()
+    } else if office.is_proportional() {
+        // a CHAMBER (ADR-0046): up to its seats, each party holding exactly the seats it won
+        let seats = outcome.seats as usize;
+        if !(1..=100).contains(&seats)
+            || outcome.elected.is_empty()
+            || outcome.elected.len() > seats
+            || outcome.elected.len() != outcome.elected_credentials.len()
+            || outcome
+                .parties
+                .iter()
+                .map(|p| p.seats as usize)
+                .sum::<usize>()
+                != outcome.elected.len()
+        {
+            return Err(err(
+                "a chamber result names up to its seats and the seats of each party",
+            ));
+        }
+        let mut seen = std::collections::BTreeSet::new();
+        for w in &outcome.elected {
+            if !seen.insert(*w) {
+                return Err(err("a winner appears twice"));
+            }
+        }
+        outcome
+            .elected
+            .iter()
+            .copied()
+            .zip(outcome.elected_credentials.iter().cloned())
+            .collect()
     } else {
         if outcome.seats != 0 || !outcome.elected.is_empty() {
-            return Err(err("only a senate result names several winners"));
+            return Err(err("only a senate or chamber result names several winners"));
         }
         vec![(outcome.winner_option, outcome.winner_credential_id.clone())]
     };
@@ -469,6 +502,8 @@ fn claim_elected(ctx: &mut Ctx<'_, '_>, op: ClaimElectedOp) -> Result<(), Module
         claims: Vec<u8>,
     }
     let mut made: Vec<Elected> = Vec::new();
+    // seats per party number among the winners (a chamber)
+    let mut per_party: std::collections::BTreeMap<String, u32> = std::collections::BTreeMap::new();
     for (option, credential_id) in &winners {
         // the winner is a candidate the chain knows: its holder is who is elected
         let cand = load_cred(ctx, CANDIDATE_TYPE.as_bytes(), credential_id)?;
@@ -489,11 +524,14 @@ fn claim_elected(ctx: &mut Ctx<'_, '_>, op: ClaimElectedOp) -> Result<(), Module
             .copied()
             .ok_or_else(|| err("winner outside the ballot"))?;
         let mut parts = vec![format!("cargo={cargo}")];
-        if office == Office::Governor || office == Office::Senator {
-            parts.push(format!("uf={scope_code}"));
+        match scope.level() {
+            ScopeLevel::State => parts.push(format!("uf={scope_code}")),
+            ScopeLevel::Municipality => parts.push(format!("municipio={scope_code}")),
+            _ => {}
         }
-        if office == Office::Mayor {
-            parts.push(format!("municipio={scope_code}"));
+        if office.is_proportional() {
+            *per_party.entry(c.partido.clone()).or_default() += 1;
+            parts.push(format!("partido={}", c.partido));
         }
         parts.push(format!("numero={}", c.numero));
         parts.push(format!("nome={}", c.nome));
@@ -518,6 +556,22 @@ fn claim_elected(ctx: &mut Ctx<'_, '_>, op: ClaimElectedOp) -> Result<(), Module
             commitment: commitment.to_vec(),
             claims,
         });
+    }
+    // a chamber: the elected of each party are exactly the seats the result gives that party
+    if office.is_proportional() {
+        for p in &outcome.parties {
+            if per_party.get(&p.number).copied().unwrap_or(0) != p.seats {
+                return Err(err("the elected do not match the seats of their party"));
+            }
+        }
+        if per_party
+            .keys()
+            .any(|n| !outcome.parties.iter().any(|p| &p.number == n))
+        {
+            return Err(err(
+                "an elected candidate belongs to no party of the result",
+            ));
+        }
     }
     // the previous holders of this office and jurisdiction are superseded. A SENATOR slot also
     // carries the number of seats: the 2-seat class and the 1-seat class do not replace each other.

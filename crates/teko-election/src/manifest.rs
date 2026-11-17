@@ -19,11 +19,13 @@ pub const BALLOT_KIND_PUBLIC: &str = "public";
 /// (ADR-0040). 4: an option may be BLANK or NULL (ADR-0042). 5: a contest may have SEVERAL seats
 /// (`Contest.seats`, ADR-0044). Firmware of an older version re-encodes
 /// without the new fields and refuses the signature.
-pub const FORMAT_VERSION: u32 = 5;
+pub const FORMAT_VERSION: u32 = 6;
 /// The fixed names of the special options.
 pub const BLANK_NAME: &str = "Branco";
 pub const NULL_NAME: &str = "Nulo";
-const MAX_OPTIONS: usize = 64;
+/// Options per contest. A proportional list needs room for parties and candidates (ADR-0046); the
+/// encrypted ballot carries one ciphertext per option (`teko_ballot_crypto::MAX_OPTIONS`, same value).
+const MAX_OPTIONS: usize = 128;
 const MAX_CONTESTS: usize = 32;
 
 /// Who may see partial results while voting is open (ADR-0018). With PUBLIC
@@ -82,6 +84,20 @@ impl Office {
     pub fn is_majoritarian(self) -> bool {
         self.is_single_seat() || self == Office::Senator
     }
+
+    /// Federal and state deputies and city councillors: seats shared among PARTIES by the electoral
+    /// quotient and D'Hondt, the most voted candidates of each party take them (ADR-0046).
+    pub fn is_proportional(self) -> bool {
+        matches!(
+            self,
+            Office::FederalDeputy | Office::StateDeputy | Office::CityCouncillor
+        )
+    }
+
+    /// The result is computed by a pure rule over the tally (majoritarian or proportional).
+    pub fn is_decided(self) -> bool {
+        self.is_majoritarian() || self.is_proportional()
+    }
 }
 
 /// What an option is (ADR-0042). BLANK and NULL are explicit choices of the voter, cast and counted
@@ -93,6 +109,9 @@ pub enum OptionKind {
     Candidate = 0,
     Blank = 1,
     Null = 2,
+    /// A party label (ADR-0046): a vote for the party, in a proportional contest only. Its name is the
+    /// party's, its number the two digits every candidate number of the party starts with.
+    Party = 3,
 }
 
 #[derive(Clone, PartialEq, Message)]
@@ -112,12 +131,44 @@ pub struct ElectionOption {
     /// Candidate (the default, so old encodings are unchanged), blank or null (ADR-0042).
     #[prost(enumeration = "OptionKind", tag = "5")]
     pub kind: i32,
+    /// On a candidate of a proportional contest: the number of its party (a `Party` option of the
+    /// same contest). Empty everywhere else, so the encoding of other contests is unchanged.
+    #[prost(string, tag = "6")]
+    pub party: String,
 }
 
 impl ElectionOption {
     pub fn is_candidate(&self) -> bool {
         self.kind() == OptionKind::Candidate
     }
+
+    pub fn is_party(&self) -> bool {
+        self.kind() == OptionKind::Party
+    }
+
+    /// Counted as a valid vote: a candidate or a party label (blank and null are not).
+    pub fn is_valid_choice(&self) -> bool {
+        self.is_candidate() || self.is_party()
+    }
+}
+
+/// How a proportional contest shares its seats (ADR-0046). The three thresholds are in basis points
+/// of the electoral quotient; 0 disables one.
+#[derive(Clone, PartialEq, Message)]
+pub struct Proportional {
+    /// The seats of the chamber.
+    #[prost(uint32, tag = "1")]
+    pub seats: u32,
+    /// A candidate needs this much of the quotient to take a seat won by the party's quotient
+    /// (Brazil: 10%).
+    #[prost(uint32, tag = "2")]
+    pub first_candidate_bp: u32,
+    /// A party needs this much of the quotient to take part in the leftovers (Brazil: 80%).
+    #[prost(uint32, tag = "3")]
+    pub party_bp: u32,
+    /// A candidate needs this much of the quotient to take a seat in the leftovers (Brazil: 20%).
+    #[prost(uint32, tag = "4")]
+    pub candidate_bp: u32,
 }
 
 /// Unix seconds. `registration_opens < voting_opens < voting_closes`.
@@ -166,6 +217,10 @@ pub struct Contest {
     /// every other office leaves 0 (one seat), so their encoding and hash are unchanged.
     #[prost(uint32, tag = "10")]
     pub seats: u32,
+    /// Set on a proportional office (deputies, councillors): the chamber and its thresholds
+    /// (ADR-0046). The ballot stays ONE vote (`seats` is 0).
+    #[prost(message, optional, tag = "11")]
+    pub proportional: Option<Proportional>,
 }
 
 impl Contest {
@@ -174,7 +229,7 @@ impl Contest {
         self.options
             .iter()
             .enumerate()
-            .filter(|(_, o)| !o.is_candidate())
+            .filter(|(_, o)| matches!(o.kind(), OptionKind::Blank | OptionKind::Null))
             .map(|(i, _)| i)
             .collect()
     }
@@ -273,7 +328,7 @@ fn validate_contest(c: &Contest) -> Result<(), ElectionError> {
         return Err(bad("office does not match the jurisdiction level"));
     }
     if c.options.len() < 2 || c.options.len() > MAX_OPTIONS {
-        return Err(bad("need 2..=64 options per contest"));
+        return Err(bad("need 2..=128 options per contest"));
     }
     // rounds (ADR-0040): only single-seat offices have a runoff; a second round has the two finalists
     if (c.runoff || !c.parent.is_empty()) && !office.is_single_seat() {
@@ -299,8 +354,35 @@ fn validate_contest(c: &Contest) -> Result<(), ElectionError> {
         _ if c.seats != 0 => return Err(bad("only a senator contest sets seats")),
         _ => {}
     }
-    if c.candidates().count() < 2 || c.candidates().count() <= c.seat_count() {
-        return Err(bad("need more candidates than seats (and at least two)"));
+    // proportional (ADR-0046): a chamber and its parties; majoritarian contests have neither
+    match (&c.proportional, office.is_proportional()) {
+        (Some(p), true) => {
+            if !(1..=100).contains(&p.seats) {
+                return Err(bad("a chamber has 1..=100 seats"));
+            }
+            if p.first_candidate_bp > 10_000 || p.party_bp > 10_000 || p.candidate_bp > 10_000 {
+                return Err(bad("a threshold is at most 10000 basis points"));
+            }
+            if c.options.iter().filter(|o| o.is_party()).count() < 2 {
+                return Err(bad("a proportional contest has at least two parties"));
+            }
+            if c.candidates().count() < 2 {
+                return Err(bad("need at least two candidates"));
+            }
+        }
+        (None, true) => return Err(bad("a proportional office needs its chamber")),
+        (Some(_), false) => return Err(bad("only deputies and councillors have a chamber")),
+        (None, false) => {
+            if c.options
+                .iter()
+                .any(|o| o.is_party() || !o.party.is_empty())
+            {
+                return Err(bad("parties exist only in a proportional contest"));
+            }
+            if c.candidates().count() < 2 || c.candidates().count() <= c.seat_count() {
+                return Err(bad("need more candidates than seats (and at least two)"));
+            }
+        }
     }
     for kind in [OptionKind::Blank, OptionKind::Null] {
         if c.options.iter().filter(|o| o.kind() == kind).count() > 1 {
@@ -318,7 +400,29 @@ fn validate_contest(c: &Contest) -> Result<(), ElectionError> {
             return Err(bad("unknown option kind"));
         }
         match o.kind() {
-            OptionKind::Candidate => {}
+            OptionKind::Candidate => {
+                if c.proportional.is_some() {
+                    let ok = !o.party.is_empty()
+                        && o.number.starts_with(&o.party)
+                        && o.number.len() > o.party.len()
+                        && c.options
+                            .iter()
+                            .any(|p| p.is_party() && p.number == o.party);
+                    if !ok {
+                        return Err(bad(
+                            "a candidate of a proportional contest names a party of the contest and its number starts with the party's",
+                        ));
+                    }
+                }
+            }
+            OptionKind::Party => {
+                let digits = o.number.len() == 2 && o.number.bytes().all(|b| b.is_ascii_digit());
+                if !digits || !o.credential_id.is_empty() || !o.party.is_empty() {
+                    return Err(bad(
+                        "a party option has a two-digit number and no credential",
+                    ));
+                }
+            }
             kind => {
                 let fixed = if kind == OptionKind::Blank {
                     BLANK_NAME
@@ -394,7 +498,7 @@ pub fn validate_manifest(m: &ElectionManifest) -> Result<(), ElectionError> {
             .any(|c| c.options.len() > teko_ballot_crypto::MAX_OPTIONS)
         {
             return Err(bad(
-                "encrypted ballots allow at most 16 options per contest",
+                "encrypted ballots allow at most 128 options per contest",
             ));
         }
     }
@@ -818,22 +922,22 @@ mod tests {
     }
 
     #[test]
-    fn an_encrypted_contest_counts_the_specials_in_its_sixteen_options() {
+    fn an_encrypted_contest_counts_the_specials_in_its_128_options() {
         let mut m = manifest();
         m.tally_key =
             teko_ballot_crypto::point_to_bytes(&teko_ballot_crypto::Point::GENERATOR).to_vec();
         let names: Vec<alloc::string::String> =
-            (0..14).map(|i| alloc::format!("Cand {i}")).collect();
+            (0..126).map(|i| alloc::format!("Cand {i}")).collect();
         let refs: Vec<&str> = names.iter().map(String::as_str).collect();
         m.contests[1].options = fixtures::options(&refs, 20);
         m.contests[1] = with_specials(m.contests[1].clone());
-        assert_eq!(m.contests[1].options.len(), 16);
+        assert_eq!(m.contests[1].options.len(), 128);
         assert!(validate_manifest(&m).is_ok());
-        let extra = String::from("Cand 14");
+        let extra = String::from("Cand 126");
         m.contests[1].options.insert(
-            14,
+            126,
             ElectionOption {
-                index: 14,
+                index: 126,
                 name: extra,
                 number: "99".into(),
                 ..Default::default()
@@ -842,7 +946,7 @@ mod tests {
         for (i, o) in m.contests[1].options.iter_mut().enumerate() {
             o.index = i as u32;
         }
-        assert!(validate_manifest(&m).is_err(), "17 options");
+        assert!(validate_manifest(&m).is_err(), "129 options");
     }
 
     #[test]
@@ -1026,5 +1130,79 @@ mod tests {
             prop_assert_ne!(manifest_hash(&bare), manifest_hash(&other));
             prop_assert_ne!(contest_hash(&bare.contests[0]), contest_hash(&bare.contests[1]));
         }
+    }
+
+    fn chamber() -> Contest {
+        let mut c = crate::proportional::tests::chamber(2, 2, 5, (1_000, 8_000, 2_000));
+        c.title = "Deputado Estadual de São Paulo".into();
+        c.schedule = Some(Schedule {
+            registration_opens: 1,
+            voting_opens: 2,
+            voting_closes: 3,
+        });
+        c
+    }
+
+    #[test]
+    fn a_proportional_contest_needs_its_chamber_parties_and_candidates_of_those_parties() {
+        let c = chamber();
+        validate_contest(&c).unwrap();
+        // the chamber is required for deputies and councillors, and only for them
+        let mut no_rule = c.clone();
+        no_rule.proportional = None;
+        assert!(validate_contest(&no_rule).is_err());
+        let mut gov = fixtures::manifest().contests[1].clone();
+        gov.proportional = c.proportional.clone();
+        assert!(validate_contest(&gov).is_err());
+        // seats and thresholds are bounded
+        for (seats, bp) in [(0u32, 0u32), (101, 0), (5, 10_001)] {
+            let mut t = c.clone();
+            let p = t.proportional.as_mut().unwrap();
+            p.seats = seats;
+            p.party_bp = bp;
+            assert!(validate_contest(&t).is_err(), "{seats} {bp}");
+        }
+        // at least two parties
+        let mut one = c.clone();
+        one.options.retain(|o| !(o.is_party() && o.number == "45"));
+        for (i, o) in one.options.iter_mut().enumerate() {
+            o.index = i as u32;
+        }
+        assert!(validate_contest(&one).is_err());
+        // a candidate names a party of the contest, and its number starts with the party's
+        for edit in [
+            (|o: &mut ElectionOption| o.party = String::new()) as fn(&mut ElectionOption),
+            |o| o.party = "99".into(),
+            |o| o.number = "9901".into(),
+            |o| o.number = "13".into(),
+        ] {
+            let mut t = c.clone();
+            let cand = t.options.iter_mut().find(|o| o.is_candidate()).unwrap();
+            edit(cand);
+            assert!(validate_contest(&t).is_err());
+        }
+        // a party label: two digits, no credential
+        for edit in [
+            (|o: &mut ElectionOption| o.number = "135".into()) as fn(&mut ElectionOption),
+            |o| o.credential_id = alloc::vec![1; 32],
+            |o| o.party = "13".into(),
+        ] {
+            let mut t = c.clone();
+            let party = t.options.iter_mut().find(|o| o.is_party()).unwrap();
+            edit(party);
+            assert!(validate_contest(&t).is_err());
+        }
+        // parties exist only in proportional contests
+        let mut maj = fixtures::manifest().contests[1].clone();
+        maj.options.push(ElectionOption {
+            index: maj.options.len() as u32,
+            name: "Verde".into(),
+            number: "13".into(),
+            kind: OptionKind::Party as i32,
+            ..Default::default()
+        });
+        assert!(validate_contest(&maj).is_err());
+        // a party label is NOT a special option: the ballot weighs only blank and null
+        assert_eq!(c.special_positions().len(), 2);
     }
 }

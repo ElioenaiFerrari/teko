@@ -115,11 +115,14 @@ pub fn with_specials(
 }
 
 /// One candidate of a contest, taken from an on-chain `candidato` credential (ADR-0040).
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct DevCandidate {
     pub credential_id: Vec<u8>,
     pub numero: String,
     pub nome: String,
+    /// Party number and name (proportional offices, ADR-0046); empty otherwise.
+    pub partido: String,
+    pub legenda: String,
 }
 
 /// Candidates by contest id.
@@ -138,6 +141,9 @@ pub struct DevContestPlan {
     /// How many people the contest elects: 0 for the single-seat offices, 1 or 2 for a senator
     /// (ADR-0044). Senate contests exist only in an ENCRYPTED election.
     pub seats: u32,
+    /// The seats of the chamber of a PROPORTIONAL contest (ADR-0046), 0 for the others. These
+    /// contests exist only when the chain has candidacies for them (there is no example list).
+    pub chamber: u32,
 }
 
 /// The contests of the sample election: id, office, jurisdiction and closing time, relative to `now`.
@@ -150,6 +156,11 @@ pub fn dev_contest_plan(now: u64) -> Vec<DevContestPlan> {
         scope_code,
         voting_closes,
         seats: 0,
+        chamber: 0,
+    };
+    let chamber = |id, cargo, scope_code, voting_closes, chamber| DevContestPlan {
+        chamber,
+        ..c(id, cargo, scope_code, voting_closes)
     };
     let senate = |id, scope_code, seats| DevContestPlan {
         seats,
@@ -166,6 +177,10 @@ pub fn dev_contest_plan(now: u64) -> Vec<DevContestPlan> {
         // the Senate: SP renews 2 seats, RJ renews 1 (the classes alternate, ADR-0044)
         senate("senador-sp", "SP", 2),
         senate("senador-rj", "RJ", 1),
+        // the chambers (ADR-0046): small ones, enough to see the quotient and the leftovers
+        chamber("deputado-federal-sp", "deputado-federal", "SP", open, 6),
+        chamber("deputado-estadual-sp", "deputado-estadual", "SP", open, 8),
+        chamber("vereador-3550308", "vereador", "3550308", announced, 7),
     ]
 }
 
@@ -356,19 +371,40 @@ impl Issuer {
                        o: Vec<ElectionOption>,
                        s: (u64, u64, u64)|
          -> Result<Contest, IssuerError> {
-            // candidates from the chain replace the example list of this contest
+            // candidates from the chain replace the example list of this contest; in a proportional
+            // contest the parties follow the candidates (ADR-0046)
             let options = match cands.get(id) {
-                Some(list) => list
-                    .iter()
-                    .enumerate()
-                    .map(|(i, c)| ElectionOption {
-                        index: i as u32,
-                        name: c.nome.clone(),
-                        number: c.numero.clone(),
-                        credential_id: c.credential_id.clone(),
-                        ..Default::default()
-                    })
-                    .collect(),
+                Some(list) => {
+                    let mut v: Vec<ElectionOption> = list
+                        .iter()
+                        .enumerate()
+                        .map(|(i, c)| ElectionOption {
+                            index: i as u32,
+                            name: c.nome.clone(),
+                            number: c.numero.clone(),
+                            credential_id: c.credential_id.clone(),
+                            party: c.partido.clone(),
+                            ..Default::default()
+                        })
+                        .collect();
+                    let mut parties: Vec<(&str, &str)> = list
+                        .iter()
+                        .filter(|c| !c.partido.is_empty())
+                        .map(|c| (c.partido.as_str(), c.legenda.as_str()))
+                        .collect();
+                    parties.sort_unstable();
+                    parties.dedup();
+                    for (number, name) in parties {
+                        v.push(ElectionOption {
+                            index: v.len() as u32,
+                            name: name.to_string(),
+                            number: number.to_string(),
+                            kind: teko_election::OptionKind::Party as i32,
+                            ..Default::default()
+                        });
+                    }
+                    v
+                }
                 None => o,
             };
             // every contest also offers BLANK and NULL (ADR-0042)
@@ -527,8 +563,42 @@ impl Issuer {
         ]
         .into_iter()
         .collect::<Result<Vec<Contest>, _>>()?;
-        // the SENATE (ADR-0044) exists only in an encrypted election: two seats need the range proof
         let mut contests = contests;
+        // the CHAMBERS (ADR-0046): only when the chain has their candidacies
+        for p in dev_contest_plan(now) {
+            if p.chamber == 0 || !cands.contains_key(p.id) {
+                continue;
+            }
+            let (office, title, scope, s) = match p.cargo {
+                "deputado-federal" => (
+                    Office::FederalDeputy,
+                    "Deputado Federal por São Paulo",
+                    Scope::state(p.scope_code),
+                    open,
+                ),
+                "deputado-estadual" => (
+                    Office::StateDeputy,
+                    "Deputado Estadual de São Paulo",
+                    Scope::state(p.scope_code),
+                    open,
+                ),
+                _ => (
+                    Office::CityCouncillor,
+                    "Vereador de São Paulo",
+                    Scope::municipality(p.scope_code),
+                    announced,
+                ),
+            };
+            let mut c = contest(p.id, office, title, scope, Vec::new(), s)?;
+            c.proportional = Some(teko_election::Proportional {
+                seats: p.chamber,
+                first_candidate_bp: 1_000,
+                party_bp: 8_000,
+                candidate_bp: 2_000,
+            });
+            contests.push(c);
+        }
+        // the SENATE (ADR-0044) exists only in an encrypted election: two seats need the range proof
         if !tally_key.is_empty() {
             for (id, uf, title, names, first, seats) in [
                 (
@@ -593,11 +663,12 @@ impl Issuer {
         // Governance decisions, each contest on ITS OWN schedule.
         let mut transitions: Vec<Transition> = Vec::new();
         for c in &manifest.contests {
-            let upto = if c.contest_id.starts_with("prefeito") {
-                Phase::CandidatesPublished
-            } else {
-                Phase::VotingOpen
-            };
+            let upto =
+                if c.contest_id.starts_with("prefeito") || c.contest_id.starts_with("vereador") {
+                    Phase::CandidatesPublished
+                } else {
+                    Phase::VotingOpen
+                };
             let s = c.schedule.clone().unwrap_or_default();
             let steps = [
                 (
@@ -731,6 +802,7 @@ impl Issuer {
             runoff: false,
             parent: parent_id.to_string(),
             seats: 0,
+            ..Default::default()
         };
         // the old transitions are bound to the OLD contests' hashes, which do not change
         let mut transitions = bundle
@@ -1174,11 +1246,13 @@ mod tests {
                     credential_id: vec![1; 32],
                     numero: "13".into(),
                     nome: "Ana Souza".into(),
+                    ..Default::default()
                 },
                 DevCandidate {
                     credential_id: vec![2; 32],
                     numero: "22".into(),
                     nome: "Beto Lima".into(),
+                    ..Default::default()
                 },
             ],
         );
@@ -1203,7 +1277,7 @@ mod tests {
         // (the Senate exists only in an ENCRYPTED election, ADR-0044: this one is in the clear)
         let plan: Vec<_> = dev_contest_plan(1_900_000_000)
             .into_iter()
-            .filter(|p| p.seats == 0)
+            .filter(|p| p.seats == 0 && p.chamber == 0)
             .collect();
         assert_eq!(plan.len(), m.contests.len());
         assert!(m.contests.iter().all(|c| c.seats == 0));
@@ -1224,6 +1298,7 @@ mod tests {
             credential_id: vec![n; 32],
             numero: num.into(),
             nome: nome.into(),
+            ..Default::default()
         };
         let id = issuer
             .dev_add_runoff(
@@ -1274,6 +1349,53 @@ mod tests {
         let status = replay(&policy, &m, &transitions).unwrap();
         assert_eq!(status.phase_of(&id), Some(Phase::VotingOpen));
         assert_eq!(status.phase_of("governador-sp"), Some(Phase::VotingOpen));
+        let _ = fs::remove_dir_all(issuer.dir());
+    }
+
+    #[test]
+    fn a_chamber_enters_the_election_only_with_candidacies_and_carries_its_parties() {
+        let issuer = Issuer::open(scratch_dir("chamber"));
+        issuer.dev_setup().unwrap();
+        let cand = |n: &str, party: &str, legend: &str, id: u8| DevCandidate {
+            credential_id: vec![id; 32],
+            numero: n.into(),
+            nome: format!("Cand {n}"),
+            partido: party.into(),
+            legenda: legend.into(),
+        };
+        let mut cands = DevCandidates::new();
+        cands.insert(
+            "deputado-estadual-sp".into(),
+            vec![
+                cand("11011", "11", "Mata", 1),
+                cand("11012", "11", "Mata", 2),
+                cand("22021", "22", "Rio", 3),
+                cand("22022", "22", "Rio", 4),
+            ],
+        );
+        issuer
+            .dev_election_with(1_900_000_000, Some("e-1"), &cands)
+            .unwrap();
+        let bytes = fs::read(issuer.dir().join("election.bundle")).unwrap();
+        let b =
+            <teko_election::ElectionBundle as prost::Message>::decode(bytes.as_slice()).unwrap();
+        let m = <ElectionManifest as prost::Message>::decode(b.manifest.as_slice()).unwrap();
+        teko_election::validate_manifest(&m).unwrap();
+        let c = m.contest("deputado-estadual-sp").unwrap();
+        assert_eq!(c.proportional.as_ref().unwrap().seats, 8);
+        // candidates, then the two parties, then blank and null
+        let kinds: Vec<_> = c.options.iter().map(|o| o.kind()).collect();
+        assert_eq!(
+            kinds
+                .iter()
+                .filter(|k| **k == teko_election::OptionKind::Party)
+                .count(),
+            2
+        );
+        assert!(c.candidates().all(|o| !o.party.is_empty()));
+        // the other chambers have no candidacies: they are not in the election
+        assert!(m.contest("deputado-federal-sp").is_none());
+        assert!(m.contest("vereador-3550308").is_none());
         let _ = fs::remove_dir_all(issuer.dir());
     }
 }

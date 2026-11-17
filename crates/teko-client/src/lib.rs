@@ -1466,6 +1466,10 @@ pub struct ContestSummary {
     pub option_numbers: Vec<String>,
     /// Per option: 0 candidate, 1 blank, 2 null (ADR-0042).
     pub option_kinds: Vec<u32>,
+    /// Per option: the party number of a candidate (proportional contests, ADR-0046).
+    pub option_parties: Vec<String>,
+    /// Seats of the chamber of a proportional contest, else 0.
+    pub chamber_seats: u32,
     /// How many people the contest elects (ADR-0044): the voter marks up to this many options.
     pub seats: u32,
     /// Set on a SECOND ROUND: the first-round contest it continues.
@@ -1542,6 +1546,8 @@ fn summarize(l: &ElectionLoaded) -> ElectionSummary {
                 option_names: c.option_names.clone(),
                 option_numbers: c.option_numbers.clone(),
                 option_kinds: c.option_kinds.clone(),
+                option_parties: c.option_parties.clone(),
+                chamber_seats: c.chamber_seats,
                 seats: c.seats.max(1),
                 parent: c.parent.clone(),
                 eligible: c.eligible,

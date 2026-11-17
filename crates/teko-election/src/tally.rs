@@ -141,8 +141,21 @@ pub struct OptionTally {
     pub name: String,
     pub number: String,
     pub votes: u64,
-    /// Candidate, blank or null (ADR-0042).
+    /// Candidate, blank, null (ADR-0042) or party label (ADR-0046).
     pub kind: OptionKind,
+    /// A candidate's party number in a proportional contest; empty otherwise.
+    pub party: String,
+}
+
+/// One party of a proportional contest, as the tally sees it.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PartyTally {
+    pub number: String,
+    pub name: String,
+    /// Votes cast in the party label alone.
+    pub label_votes: u64,
+    /// Label votes + the votes of its candidates.
+    pub votes: u64,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -223,13 +236,37 @@ impl ContestTally {
         w >= self.accepted && w <= s * self.accepted
     }
 
-    /// Votes in CANDIDATES: the denominator of the majority (blank and null are outside it, ADR-0042).
+    /// Votes in CANDIDATES (and in party labels, in a proportional contest): the denominator of the
+    /// majority; blank and null are outside it (ADR-0042, ADR-0046).
     pub fn valid_votes(&self) -> u64 {
         self.options
             .iter()
-            .filter(|o| o.kind == OptionKind::Candidate)
+            .filter(|o| matches!(o.kind, OptionKind::Candidate | OptionKind::Party))
             .map(|o| o.votes)
             .sum()
+    }
+
+    /// The parties of a proportional contest, by number (empty in the others).
+    pub fn party_totals(&self) -> Vec<PartyTally> {
+        let mut v: Vec<PartyTally> = self
+            .options
+            .iter()
+            .filter(|o| o.kind == OptionKind::Party)
+            .map(|p| PartyTally {
+                number: p.number.clone(),
+                name: p.name.clone(),
+                label_votes: p.votes,
+                votes: p.votes
+                    + self
+                        .options
+                        .iter()
+                        .filter(|o| o.kind == OptionKind::Candidate && o.party == p.number)
+                        .map(|o| o.votes)
+                        .sum::<u64>(),
+            })
+            .collect();
+        v.sort_by(|a, b| b.votes.cmp(&a.votes).then(a.number.cmp(&b.number)));
+        v
     }
 
     pub fn blank_votes(&self) -> u64 {
@@ -721,6 +758,7 @@ impl Tallier {
                             number: o.number.clone(),
                             votes: 0,
                             kind: o.kind(),
+                            party: o.party.clone(),
                         })
                         .collect(),
                 });

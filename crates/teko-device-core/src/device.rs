@@ -1839,6 +1839,8 @@ impl<H: Hal, R: Rng + CryptoRng> Device<H, R> {
                     registration_required: !c.registration_key.is_empty(),
                     option_numbers: c.options.iter().map(|o| o.number.clone()).collect(),
                     option_kinds: c.options.iter().map(|o| o.kind as u32).collect(),
+                    option_parties: c.options.iter().map(|o| o.party.clone()).collect(),
+                    chamber_seats: c.proportional.as_ref().map_or(0, |p| p.seats),
                     seats: c.seat_count() as u32,
                     parent: c.parent.clone(),
                 }
@@ -2195,7 +2197,7 @@ impl<H: Hal, R: Rng + CryptoRng> Device<H, R> {
             .iter()
             .filter_map(|p| contest.options.get(*p))
             .collect();
-        let specials = options.iter().filter(|o| !o.is_candidate()).count();
+        let specials = options.iter().filter(|o| !o.is_valid_choice()).count();
         let candidates = options.len() - specials;
         // 1..=seats candidates, OR exactly one blank/null alone (the ballot proof enforces the same)
         let rule_ok = (specials == 1 && candidates == 0)
@@ -2233,13 +2235,29 @@ impl<H: Hal, R: Rng + CryptoRng> Device<H, R> {
             let label = match option.kind() {
                 OptionKind::Blank => String::from("VOTO EM BRANCO"),
                 OptionKind::Null => String::from("VOTO NULO"),
+                OptionKind::Party => format!("LEGENDA {} - {}", option.number, option.name),
                 OptionKind::Candidate if option.number.is_empty() => option.name.clone(),
-                OptionKind::Candidate => format!("{} - {}", option.number, option.name),
+                OptionKind::Candidate if option.party.is_empty() => {
+                    format!("{} - {}", option.number, option.name)
+                }
+                OptionKind::Candidate => {
+                    format!(
+                        "{} - {} (partido {})",
+                        option.number, option.name, option.party
+                    )
+                }
             };
             lines.extend(wrap(&label, 28));
-            if !option.is_candidate() {
-                lines.push(String::from("(não conta para nenhum"));
-                lines.push(String::from("candidato)"));
+            match option.kind() {
+                OptionKind::Party => {
+                    lines.push(String::from("(conta só para o partido,"));
+                    lines.push(String::from("nenhum candidato)"));
+                }
+                OptionKind::Blank | OptionKind::Null => {
+                    lines.push(String::from("(não conta para nenhum"));
+                    lines.push(String::from("candidato)"));
+                }
+                OptionKind::Candidate => {}
             }
         }
         let encrypted_mode = !manifest.tally_key.is_empty();

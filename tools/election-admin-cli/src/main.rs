@@ -258,10 +258,24 @@ fn run(args: Vec<String>) -> Result<(), String> {
                                 r.others_votes
                             );
                         }
-                        if c.options
-                            .iter()
-                            .any(|o| !o.kind.eq(&teko_election::OptionKind::Candidate))
-                        {
+                        let parties = c.party_totals();
+                        if !parties.is_empty() {
+                            println!("   Partidos (legenda + candidatos):");
+                            for p in &parties {
+                                println!(
+                                    "   {:<34} {:>7}  (legenda {})",
+                                    format!("{} {}", p.number, p.name),
+                                    p.votes,
+                                    p.label_votes
+                                );
+                            }
+                        }
+                        if c.options.iter().any(|o| {
+                            matches!(
+                                o.kind,
+                                teko_election::OptionKind::Blank | teko_election::OptionKind::Null
+                            )
+                        }) {
                             println!(
                                 "   {:<34} {:>7}   (fora da base da maioria)",
                                 format!("Branco {} · Nulo {}", c.blank_votes(), c.null_votes()),

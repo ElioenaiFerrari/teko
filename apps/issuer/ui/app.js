@@ -102,7 +102,7 @@
     civicFile: '',
     civicForm: { name: '', birth: '', nat: 'BR', uf: 'SP', mun: '3550308', reg: '', days: 3650 },
     delivered: '',
-    candForm: { eleicao: 'geral-2026', days: 120, cargo: 'governador', uf: 'SP', mun: '', numero: '', nome: '', holder: '', batch: '' },
+    candForm: { eleicao: 'geral-2026', days: 120, cargo: 'governador', uf: 'SP', mun: '', numero: '', nome: '', partido: '', legenda: '', holder: '', batch: '' },
     candResult: [],
   };
 
@@ -211,14 +211,14 @@
       render();
     },
     async candissue() {
-      const f = { eleicao: $('#k-eleicao').value.trim(), days: Number($('#k-days').value), cargo: $('#k-cargo').value, uf: comboValue('k-uf'), mun: comboValue('k-mun'), numero: $('#k-numero').value.trim(), nome: $('#k-nome').value.trim(), holder: $('#k-holder').value.trim(), batch: $('#k-batch').value };
+      const f = { eleicao: $('#k-eleicao').value.trim(), days: Number($('#k-days').value), cargo: $('#k-cargo').value, uf: comboValue('k-uf'), mun: comboValue('k-mun'), numero: $('#k-numero').value.trim(), nome: $('#k-nome').value.trim(), partido: $('#k-partido').value.trim(), legenda: $('#k-legenda').value.trim(), holder: $('#k-holder').value.trim(), batch: $('#k-batch').value };
       S.candForm = f;
-      // one candidate from the fields, plus one per line of the batch: cargo|uf|municipio|numero|nome|chave
+      // one candidate from the fields, plus one per line of the batch: cargo|uf|municipio|numero|nome|chave|partido|legenda
       const items = [];
-      if (f.nome || f.numero || f.holder) items.push({ cargo: f.cargo, uf: f.uf, municipio: f.mun, numero: f.numero, nome: f.nome, eleicao: f.eleicao, holder_key: f.holder, valid_days: f.days });
+      if (f.nome || f.numero || f.holder) items.push({ cargo: f.cargo, uf: f.uf, municipio: f.mun, numero: f.numero, nome: f.nome, partido: f.partido, legenda: f.legenda, eleicao: f.eleicao, holder_key: f.holder, valid_days: f.days });
       for (const line of f.batch.split('\n').map((l) => l.trim()).filter(Boolean)) {
-        const [cargo, uf, municipio, numero, nome, holder] = line.split('|').map((x) => (x || '').trim());
-        items.push({ cargo, uf, municipio, numero, nome, eleicao: f.eleicao, holder_key: holder, valid_days: f.days });
+        const [cargo, uf, municipio, numero, nome, holder, partido, legenda] = line.split('|').map((x) => (x || '').trim());
+        items.push({ cargo, uf, municipio, numero, nome, partido: partido || '', legenda: legenda || '', eleicao: f.eleicao, holder_key: holder, valid_days: f.days });
       }
       if (!items.length) { toast('Preencha uma candidatura ou o lote.'); return; }
       try {
@@ -339,13 +339,15 @@
       <article class="card"><div class="issue-form">
         <label class="field"><span>Eleição (id)</span><input class="input mono" id="k-eleicao" value="${esc(f.eleicao)}"></label>
         <label class="field"><span>Validade (dias a partir de agora)</span><input class="input" id="k-days" type="number" min="1" value="${f.days}"></label>
-        <label class="field"><span>Cargo</span><select class="input" id="k-cargo">${['presidente', 'governador', 'senador', 'prefeito'].map((c) => `<option ${c === f.cargo ? 'selected' : ''}>${c}</option>`).join('')}</select></label>
-        <div class="field"><label for="k-uf">Estado (governador, senador e prefeito)</label>${combo('k-uf', geoStates(), f.uf, 'Digite para buscar o estado')}</div>
-        <div class="field"><label for="k-mun">Município (prefeito)</label>${combo('k-mun', geoCities(f.uf), f.mun, 'Escolha o estado e busque o município')}</div>
+        <label class="field"><span>Cargo</span><select class="input" id="k-cargo">${['presidente', 'governador', 'senador', 'deputado-federal', 'deputado-estadual', 'prefeito', 'vereador'].map((c) => `<option ${c === f.cargo ? 'selected' : ''}>${c}</option>`).join('')}</select></label>
+        <div class="field"><label for="k-uf">Estado (governador, senador e deputados)</label>${combo('k-uf', geoStates(), f.uf, 'Digite para buscar o estado')}</div>
+        <div class="field"><label for="k-mun">Município (prefeito e vereador)</label>${combo('k-mun', geoCities(f.uf), f.mun, 'Escolha o estado e busque o município')}</div>
         <label class="field"><span>Número</span><input class="input" id="k-numero" value="${esc(f.numero)}"></label>
         <label class="field"><span>Nome</span><input class="input" id="k-nome" value="${esc(f.nome)}"></label>
+        <label class="field"><span>Partido (2 dígitos; só deputados e vereador: o número do candidato começa por ele)</span><input class="input" id="k-partido" maxlength="2" inputmode="numeric" value="${esc(f.partido)}"></label>
+        <label class="field"><span>Legenda do partido (nome ou sigla; só deputados e vereador)</span><input class="input" id="k-legenda" maxlength="40" value="${esc(f.legenda)}"></label>
         <label class="field"><span>Chave de credencial do candidato (hex)</span><input class="input mono" id="k-holder" value="${esc(f.holder)}" autocomplete="off" spellcheck="false"></label>
-        <label class="field"><span>Lote (uma por linha: cargo|uf|município|número|nome|chave)</span><textarea class="input mono" id="k-batch" rows="4" placeholder="governador|SP||13|Ana Souza|02ab…">${esc(f.batch)}</textarea></label>
+        <label class="field"><span>Lote (uma por linha: cargo|uf|município|número|nome|chave|partido|legenda)</span><textarea class="input mono" id="k-batch" rows="4" placeholder="governador|SP||13|Ana Souza|02ab…">${esc(f.batch)}</textarea></label>
         ${callout('info', 'Cada candidatura é um pedido no dispositivo.', 'O dispositivo mostra o cargo, os dados e a validade, e pede o botão para cada uma. Em teste: <code>make candidates</code> emite candidaturas de exemplo.')}
         <p><button class="btn" data-act="candissue">Propor no dispositivo</button></p>
       </div></article>${res}`;

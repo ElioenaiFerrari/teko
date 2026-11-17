@@ -18,4 +18,4 @@ O sistema só elegia **uma pessoa por pleito** (`decide()` devolvia um eleito ou
 - Em 2 vagas o voto é cifrado: o total por candidato é público depois do fechamento, como nas outras eleições.
 - A classe do Senado (1 ou 2 vagas) é escolhida pelo organizador do pleito; o sistema não calcula o calendário real.
 - Quem lê o quadro vê que a cédula é de 2 vagas (tamanho da prova), mas não quais candidatos foram marcados.
-- **Continuam PENDENTES:** o proporcional (deputados e vereadores: partidos, legenda, cálculo de cadeiras) e a rotação das instituições da chain de votos.
+- O proporcional (deputados e vereadores) foi resolvido no [ADR-0046](0046-cargos-proporcionais.md) e a rotação das instituições no ADR-0045.

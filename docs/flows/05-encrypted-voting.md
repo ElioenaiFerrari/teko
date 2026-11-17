@@ -20,7 +20,7 @@ Dispositivo, Suite, validadores, quadro (blocos).
 
 ![Cédula de várias vagas: cada opção é 0 ou 1, o total ponderado está em 1 até N, e a prova recusa candidato com branco ou três candidatos](../diagrams/senate-ballot.png)
 
-> **Branco e nulo (ADR-0042):** são duas posições a mais na cédula (`kind` no manifesto), cifradas como as outras; o dispositivo mostra "VOTO EM BRANCO" / "VOTO NULO" com as próprias palavras. O limite de 16 posições passa a valer para candidatos + 2.
+> **Branco e nulo (ADR-0042):** são duas posições a mais na cédula (`kind` no manifesto), cifradas como as outras; o dispositivo mostra "VOTO EM BRANCO" / "VOTO NULO" com as próprias palavras. O limite de posições é **128** (candidatos, legendas, branco e nulo; era 16, ADR-0046). Em pleito proporcional há também a **legenda** (`kind` 3): o voto conta só para o partido; o dispositivo mostra "LEGENDA 11 - Nome" ou "11011 - Nome (partido 11)" e a Suite escolhe pelo **número digitado**.
 
 ## Passo a passo
 1. A Suite envia `SignBallot{pleito, opção}`; a tela mostra o **nome da opção** (vindo do manifesto) e pede confirmação.

@@ -2544,6 +2544,81 @@ mod encrypted {
         ));
     }
 
+    /// A proportional chamber in the citizen's state (ADR-0046): candidates of two parties and the two
+    /// party labels; `choice` is voted and the confirmation screen text comes back.
+    fn chamber_vote(choice: u32) -> (String, Response) {
+        use teko_election::{ElectionOption, OptionKind, Proportional};
+        let (w, hal, mut dev, _) = ready();
+        let mut m = election_manifest(&w);
+        {
+            let c = &mut m.contests[0];
+            c.office = Office::StateDeputy as i32;
+            c.scope = Some(Scope::state("SP"));
+            c.runoff = false;
+            c.proportional = Some(Proportional {
+                seats: 3,
+                first_candidate_bp: 1_000,
+                party_bp: 8_000,
+                candidate_bp: 2_000,
+            });
+            let mk =
+                |i: u32, name: &str, number: &str, party: &str, kind: OptionKind| ElectionOption {
+                    index: i,
+                    name: name.into(),
+                    number: number.into(),
+                    party: party.into(),
+                    kind: kind as i32,
+                    ..Default::default()
+                };
+            c.options = vec![
+                mk(0, "Ana", "11011", "11", OptionKind::Candidate),
+                mk(1, "Beto", "11012", "11", OptionKind::Candidate),
+                mk(2, "Cris", "22021", "22", OptionKind::Candidate),
+                mk(3, "Dani", "22022", "22", OptionKind::Candidate),
+                mk(4, "Verde", "11", "", OptionKind::Party),
+                mk(5, "Azul", "22", "", OptionKind::Party),
+            ];
+        }
+        m.signatures = [0usize, 1]
+            .iter()
+            .map(|i| sign_election(&w.gov[*i], &m))
+            .collect();
+        let ts = history(&m, &w);
+        let Response::ElectionLoaded(l) = dev.handle(load_req(&m, &ts)) else {
+            panic!("not loaded")
+        };
+        let info = l
+            .contests
+            .iter()
+            .find(|c| c.contest_id == "presidente")
+            .unwrap();
+        // the host learns the kinds, the parties and the chamber (it only shows them)
+        assert_eq!(info.option_kinds.as_slice(), &[0, 0, 0, 0, 3, 3]);
+        assert_eq!(info.option_parties[..4], ["11", "11", "22", "22"]);
+        assert_eq!((info.seats, info.chamber_seats), (1, 3));
+        hal.push_decision(Decision::Confirm);
+        let r = vote(&mut dev, "presidente", choice);
+        let screen = hal
+            .screens()
+            .into_iter()
+            .find(|s| s.title == "CONFIRMAR VOTO?")
+            .unwrap();
+        (screen.lines.join(" "), r)
+    }
+
+    #[test]
+    fn a_party_label_and_a_candidate_of_a_list_are_shown_in_the_devices_words() {
+        let (text, r) = chamber_vote(4);
+        assert!(
+            text.contains("LEGENDA 11 - Verde") && text.contains("conta só para o partido"),
+            "{text}"
+        );
+        assert!(matches!(r, Response::BallotSignature(_)), "{r:?}");
+        let (text, r) = chamber_vote(2);
+        assert!(text.contains("22021 - Cris (partido 22)"), "{text}");
+        assert!(matches!(r, Response::BallotSignature(_)), "{r:?}");
+    }
+
     #[test]
     fn blank_and_null_show_the_devices_own_words_and_can_be_audited() {
         use teko_election::{BLANK_NAME, ElectionOption, NULL_NAME, OptionKind};
@@ -2787,9 +2862,10 @@ mod encrypted {
         assert!(failure_code(&dev.handle(load_req(&m, &ts))).is_some());
         let mut m = election_manifest(&w);
         m.tally_key = point_to_bytes(&Point::GENERATOR).to_vec();
-        for i in 0..20 {
+        for i in 0..130 {
+            let index = m.contests[0].options.len() as u32;
             m.contests[0].options.push(ElectionOption {
-                index: 100 + i,
+                index,
                 name: format!("X{i}"),
                 number: format!("{}", 900 + i),
                 ..Default::default()
@@ -2799,7 +2875,7 @@ mod encrypted {
         let ts = history(&m, &w);
         assert!(
             failure_code(&dev.handle(load_req(&m, &ts))).is_some(),
-            "more than 16 options"
+            "more than 128 options"
         );
     }
 }

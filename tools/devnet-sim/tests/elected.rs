@@ -113,7 +113,9 @@ fn candidates_on_the_chain_become_an_election_whose_certified_results_elect_peop
     // 2) the election is BUILT FROM THE CHAIN: every option binds its candidacy credential
     let report = build_election(&dir, "geral-2026", 30 * 86_400, now()).unwrap();
     assert!(
-        report.iter().all(|l| l.contains("candidatos da chain")),
+        report
+            .iter()
+            .all(|l| l.contains("candidatos da chain") || l.contains("candidatos de")),
         "{report:?}"
     );
     for n in boot {

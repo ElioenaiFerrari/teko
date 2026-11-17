@@ -23,6 +23,7 @@ mod lifecycle;
 mod manifest;
 mod outcome;
 mod policy;
+pub mod proportional;
 mod registration;
 mod result;
 mod tally;
@@ -39,12 +40,13 @@ pub use lifecycle::{
 };
 pub use manifest::{
     BALLOT_KIND_PUBLIC, BLANK_NAME, Contest, ElectionManifest, ElectionOption, FORMAT_VERSION,
-    NULL_NAME, Office, OptionKind, ResultsVisibility, Schedule, contest_hash, manifest_hash,
-    sign_manifest, validate_manifest, validate_revision, verify_manifest, verify_manifest_chain,
+    NULL_NAME, Office, OptionKind, Proportional, ResultsVisibility, Schedule, contest_hash,
+    manifest_hash, sign_manifest, validate_manifest, validate_revision, verify_manifest,
+    verify_manifest_chain,
 };
 pub use outcome::{
-    ElectionOutcome, OutcomeKind, SignedOutcome, count_outcome_signers, decide, decide_with,
-    needs_draw, outcome_bytes, sign_outcome,
+    ElectionOutcome, OutcomeKind, PartyResult, SignedOutcome, count_outcome_signers, decide,
+    decide_with, needs_draw, outcome_bytes, sign_outcome,
 };
 pub use policy::GovernancePolicy;
 pub use registration::{
@@ -54,7 +56,7 @@ pub use registration::{
 pub use result::{DecryptionShares, build_shares, decrypt_ctx};
 pub use tally::{
     BallotCheck, BallotVerdict, ContestTally, ElectionTally, LogEntry, LogKind, OptionTally,
-    Precheck, PublicView, Ranking, RegistrationCheck, RejectCounts, SubmittedBallot, Tallier,
-    precheck, precheck_registration, tally, tally_with,
+    PartyTally, Precheck, PublicView, Ranking, RegistrationCheck, RejectCounts, SubmittedBallot,
+    Tallier, precheck, precheck_registration, tally, tally_with,
 };
 pub use text::sanitize_text;

@@ -892,24 +892,37 @@
     };
     const kinds = c.option_kinds || [];
     const seats = c.seats || 1;
+    const prop = (c.chamber_seats || 0) > 0;
+    const parties = c.option_parties || [];
     const optRow = (n, i) => {
       const special = kinds[i] === 1 || kinds[i] === 2;
-      const label = kinds[i] === 1 ? '<span class="option__name">Voto em branco</span><span class="muted">não conta para nenhum candidato</span>'
+      const label = kinds[i] === 3 ? `<span class="option__name"><strong>${esc((c.option_numbers || [])[i] || '')}</strong> – Legenda ${esc(n)}</span><span class="muted">vota só no partido, sem escolher candidato</span>`
+        : kinds[i] === 1 ? '<span class="option__name">Voto em branco</span><span class="muted">não conta para nenhum candidato</span>'
         : kinds[i] === 2 ? '<span class="option__name">Voto nulo</span><span class="muted">não conta para nenhum candidato</span>'
         : `<span class="option__name">${(c.option_numbers || [])[i] ? `<strong>${esc(c.option_numbers[i])}</strong> – ` : ''}${esc(n)}</span>${badge(i)}`;
       const pk = S.picks[c.contest_id];
       const on = Array.isArray(pk) ? pk.includes(i) : pk === i;
-      return `<label class="option${special ? ' option--special' : ''}"><input type="${seats > 1 ? 'checkbox' : 'radio'}" name="cand-${esc(c.contest_id)}" value="${i}" data-special="${special ? 1 : 0}" ${on ? 'checked' : ''} ${canVote ? '' : 'disabled'}><span>${label}</span></label>`;
+      return `<label class="option${special ? ' option--special' : ''}" data-party="${esc(kinds[i] === 3 ? (c.option_numbers || [])[i] || '' : parties[i] || '')}"><input type="${seats > 1 ? 'checkbox' : 'radio'}" name="cand-${esc(c.contest_id)}" value="${i}" data-special="${special ? 1 : 0}" ${on ? 'checked' : ''} ${canVote ? '' : 'disabled'}><span>${label}</span></label>`;
     };
-    const candRows = c.option_names.map((n, i) => (kinds[i] ? '' : optRow(n, i))).join('');
-    const specialRows = c.option_names.map((n, i) => (kinds[i] ? optRow(n, i) : '')).join('');
-    const opts = candRows;
+    const isSpecial = (i) => kinds[i] === 1 || kinds[i] === 2;
+    // lista aberta (ADR-0046): por partido, a legenda primeiro e os candidatos do partido
+    const partyIdx = c.option_names.map((n, i) => i).filter((i) => kinds[i] === 3);
+    const candRows = prop
+      ? partyIdx.map((pi) => `<div class="party-group" data-party="${esc((c.option_numbers || [])[pi] || '')}"><div class="party-group__head muted">Partido ${esc((c.option_numbers || [])[pi] || '')} · ${esc(c.option_names[pi])}</div><div class="options">${optRow(c.option_names[pi], pi)}${c.option_names.map((n, i) => (kinds[i] === 0 && parties[i] === (c.option_numbers || [])[pi] ? optRow(n, i) : '')).join('')}</div></div>`).join('')
+      : c.option_names.map((n, i) => (kinds[i] ? '' : optRow(n, i))).join('');
+    const specialRows = c.option_names.map((n, i) => (isSpecial(i) ? optRow(n, i) : '')).join('');
+    const finder = prop && canVote ? `<div class="finder"><label class="muted" for="find-${esc(c.contest_id)}">Digite o número (2 dígitos = legenda; 4 ou 5 = candidato)</label>
+        <div class="row" style="gap:8px"><input class="input finder__in" id="find-${esc(c.contest_id)}" data-find="${esc(c.contest_id)}" inputmode="numeric" maxlength="8" autocomplete="off" placeholder="ex.: ${esc((c.option_numbers || []).find((x, i) => kinds[i] === 0) || '1101')}">
+        <select class="input" data-pfilter="${esc(c.contest_id)}" aria-label="Filtrar por partido"><option value="">Todos os partidos</option>${partyIdx.map((pi) => `<option value="${esc((c.option_numbers || [])[pi] || '')}">${esc((c.option_numbers || [])[pi] || '')} · ${esc(c.option_names[pi])}</option>`).join('')}</select></div>
+        <p class="muted finder__hit" data-hit="${esc(c.contest_id)}" aria-live="polite"></p></div>` : '';
+    const opts = finder + candRows;
     return `<article class="card" ${c.eligible ? '' : 'style="opacity:.82"'}>
       <div class="card__head"><div class="card__ico card__ico--${c.scope === 'national' ? 'arara' : c.scope === 'state' ? 'onca' : 'boto'}">${ico(c.scope === 'national' ? 'globe' : 'ballot')}</div>
         <div><h2>${esc(c.title)}</h2>
         <div class="row" style="gap:6px;margin-top:6px">${chip(scopeLabel(c), 'info')}${chip(phaseLabel, phaseKind)}${c.eligible ? chip(c.scope === 'national' ? 'Todos votam' : 'Seu domicílio', 'ok', 'check') : chip('Fora do seu domicílio', 'bad', 'lock')}${c.voted ? chip('Você já votou', 'ok', 'badge') : ''}${c.registration_required ? chip('Registro anônimo', 'info', 'shield') : ''}</div></div></div>
       <p class="muted">Votação: ${esc(fmtDate(c.voting_opens))} até ${esc(fmtDate(c.voting_closes))}</p>
       <div class="options" role="radiogroup" aria-label="Candidatos: ${esc(c.title)}">${opts}</div>
+      ${prop ? `<p class="muted">Este cargo elege <strong>${c.chamber_seats} pessoas</strong> por lista aberta: você tem <strong>um voto</strong>, em um candidato (conta para ele e para o partido) ou só na legenda (conta para o partido). As cadeiras são divididas entre os partidos pelo quociente eleitoral e pelas sobras (D'Hondt); em cada partido, ficam com os mais votados.</p>` : ''}
       ${seats > 1 ? `<p class="muted">Este cargo elege <strong>${seats} pessoas</strong>: marque <strong>até ${seats} candidatos diferentes</strong>, ou só branco, ou só nulo.</p>` : ''}
       ${specialRows ? `<div class="muted options-or">Ou, sem escolher candidato:</div><div class="options options--special" role="radiogroup" aria-label="Branco ou nulo: ${esc(c.title)}">${specialRows}</div>` : ''}
       ${why ? `<p class="muted">${esc(why)}</p>` : ''}
@@ -1198,6 +1211,13 @@
       if (ul.children[i] !== li) ul.insertBefore(li, ul.children[i] || null);
     });
     existing.forEach((li) => li.remove());
+    // lista aberta (ADR-0046): votos por partido (legenda + candidatos); as cadeiras saem no resultado certificado
+    let pb = body.querySelector('[data-slot=parties]');
+    if (c.parties && c.parties.length) {
+      if (!pb) { pb = document.createElement('div'); pb.dataset.slot = 'parties'; pb.className = 'parties'; body.append(pb); }
+      const html = `<div class="muted">Partidos (legenda + candidatos)</div><table class="parties__t"><tbody>${c.parties.map((p) => `<tr><td><strong>${esc(p.number)}</strong> ${esc(p.name)}</td><td class="num">${nf.format(p.votes)}</td><td class="num muted">legenda ${nf.format(p.label_votes)}</td></tr>`).join('')}</tbody></table>`;
+      if (pb.dataset.v !== html) { pb.dataset.v = html; pb.innerHTML = html; }
+    } else if (pb) pb.remove();
   }
 
   function renderResults() {
@@ -1850,6 +1870,24 @@
       }
       S.picks[id] = arr;
       all.forEach((i) => { i.checked = arr.includes(Number(i.value)); });
+    }));
+    // lista aberta (ADR-0046): digitar o número escolhe a legenda ou o candidato; o dispositivo mostra e confirma de novo
+    document.querySelectorAll('input[data-find]').forEach((inp) => inp.addEventListener('input', () => {
+      const id = inp.dataset.find;
+      const c = ((S.election || {}).contests || []).find((x) => x.contest_id === id);
+      if (!c) return;
+      const hit = document.querySelector(`[data-hit="${CSS.escape(id)}"]`);
+      const kinds = c.option_kinds || [];
+      const v = inp.value.trim();
+      const i = v ? (c.option_numbers || []).findIndex((n, k) => n === v && (kinds[k] === 0 || kinds[k] === 3)) : -1;
+      document.querySelectorAll(`input[name="cand-${CSS.escape(id)}"]`).forEach((r) => { r.checked = Number(r.value) === i; });
+      if (i < 0) { delete S.picks[id]; if (hit) hit.textContent = v.length >= 2 ? 'Número inexistente neste pleito.' : ''; return; }
+      S.picks[id] = i;
+      if (hit) hit.innerHTML = kinds[i] === 3 ? `Legenda <strong>${esc(c.option_names[i])}</strong>: o voto conta só para o partido.` : `<strong>${esc(c.option_names[i])}</strong> · partido ${esc((c.option_parties || [])[i] || '')}`;
+    }));
+    document.querySelectorAll('select[data-pfilter]').forEach((sel) => sel.addEventListener('change', () => {
+      const card = sel.closest('article');
+      if (card) card.querySelectorAll('.party-group').forEach((g) => { g.hidden = !!sel.value && g.dataset.party !== sel.value; });
     }));
   }
 

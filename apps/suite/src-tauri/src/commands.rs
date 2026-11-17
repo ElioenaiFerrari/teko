@@ -2234,6 +2234,16 @@ pub struct ContestView {
     null: u64,
     /// How many people the contest elects (ADR-0044); the UI marks that many leaders.
     seats: usize,
+    /// A proportional contest (ADR-0046): the parties with label votes and total votes.
+    parties: Vec<PartyView>,
+}
+
+#[derive(Serialize)]
+pub struct PartyView {
+    number: String,
+    name: String,
+    label_votes: u64,
+    votes: u64,
 }
 
 #[derive(Serialize)]
@@ -2398,6 +2408,19 @@ pub async fn results_snapshot(suite: State<'_, Suite>) -> Result<ResultsReply, U
                     blank: if show { c.blank_votes() } else { 0 },
                     null: if show { c.null_votes() } else { 0 },
                     seats: c.seats,
+                    parties: if show {
+                        c.party_totals()
+                            .into_iter()
+                            .map(|p| PartyView {
+                                number: p.number,
+                                name: p.name,
+                                label_votes: p.label_votes,
+                                votes: p.votes,
+                            })
+                            .collect()
+                    } else {
+                        Vec::new()
+                    },
                 }
             })
             .collect();
@@ -3238,6 +3261,10 @@ pub async fn candidate_checks() -> Result<Vec<ContestChecks>, UiError> {
                 teko_election::Office::President => Some(Cargo::Presidente),
                 teko_election::Office::Governor => Some(Cargo::Governador),
                 teko_election::Office::Mayor => Some(Cargo::Prefeito),
+                teko_election::Office::Senator => Some(Cargo::Senador),
+                teko_election::Office::FederalDeputy => Some(Cargo::DeputadoFederal),
+                teko_election::Office::StateDeputy => Some(Cargo::DeputadoEstadual),
+                teko_election::Office::CityCouncillor => Some(Cargo::Vereador),
                 _ => None,
             };
             let options = c
@@ -3257,6 +3284,7 @@ pub async fn candidate_checks() -> Result<Vec<ContestChecks>, UiError> {
                                         && k.eleicao == manifest.election_id
                                         && k.nome == o.name
                                         && k.numero == o.number
+                                        && k.partido == o.party
                                 });
                                 if ok { "verified" } else { "mismatch" }
                             }

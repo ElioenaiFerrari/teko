@@ -13,7 +13,7 @@ Cada pleito (cargo e jurisdição) passa por fases fixas. O **manifesto** da ele
 ![Ciclo de vida do pleito: rascunho, candidaturas, registro, votação aberta, encerrada, apurada, auditada e cancelada](../diagrams/election-lifecycle.png)
 
 ## Passo a passo
-1. **Candidatos:** o órgão emite as **candidaturas** (credenciais `candidato`, aba Candidaturas do Emissor; em teste, `make candidates`). `make election` monta o manifesto de exemplo (7 pleitos) com as candidaturas **ativas** da chain (cada opção leva o id da credencial; pleito sem candidaturas usa a lista de exemplo); `make publish` o publica no quadro.
+1. **Candidatos:** o órgão emite as **candidaturas** (credenciais `candidato`, aba Candidaturas do Emissor; em teste, `make candidates`). `make election` monta o manifesto de exemplo (7 pleitos) com as candidaturas **ativas** da chain (cada opção leva o id da credencial; pleito sem candidaturas usa a lista de exemplo; as câmaras de **deputado federal, deputado estadual e vereador** só entram com candidaturas na chain, cada uma com `partido` e `legenda`, e levam as opções de legenda, ADR-0046); `make publish` o publica no quadro.
 2. Os órgãos avançam as fases com M-de-N assinaturas.
 3. A votação só aceita cédulas em `VotingOpen`; o prazo é conferido **pelo dispositivo** e por `election-admin close-due`.
 4. Após o prazo o pleito é encerrado e a apuração libera o resultado ([fluxo 07](07-tally-and-results.md)).

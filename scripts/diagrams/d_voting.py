@@ -122,6 +122,27 @@ def tie_draw():
     d.legend([(MUTED, "mensagem", False), (GREEN, "conferência", True), (BOTO, "registro", False), (RED, "empate", False)])
     return d
 
+def proportional_allocation():
+    d = D("proportional-allocation", 1100, 560, "Cadeiras do proporcional", "Um voto por eleitor; o quociente e as sobras dividem as cadeiras entre os partidos, os mais votados ocupam", "VOTAÇÃO")
+    d.region(40, 100, 1020, 130, "Um voto, três escolhas válidas (lista aberta)", "boto")
+    d.node(70, 140, 300, 72, "Candidato", "conta para ele e para o partido", "plain", "número de 4 ou 5 dígitos")
+    d.node(400, 140, 300, 72, "Legenda", "conta só para o partido", "plain", "número de 2 dígitos")
+    d.node(730, 140, 300, 72, "Branco ou nulo", "fora dos votos válidos", "optional", "não entra no quociente")
+    d.arrow([(155, 230), (155, 262)], "default")
+    d.node(40, 262, 230, 96, "1. Quociente", "válidos ÷ cadeiras", "focal", "acima de 0,5 sobe")
+    d.node(310, 262, 230, 96, "2. Quociente partidário", "votos ÷ quociente", "plain", "candidato com 10%")
+    d.node(580, 262, 230, 96, "3. Sobras (D'Hondt)", "maior média", "plain", "partido 80%, candidato 20%")
+    d.node(850, 262, 210, 96, "4. Vaga que sobrou", "D'Hondt sem barreira", "plain", "sem voto, fica vaga")
+    d.arrow([(270, 310), (310, 310)], "default")
+    d.arrow([(540, 310), (580, 310)], "default")
+    d.arrow([(810, 310), (850, 310)], "default")
+    d.region(40, 390, 1020, 120, "Empate que muda quem é eleito: um sorteio só para o pleito inteiro", "optional")
+    d.node(70, 430, 300, 62, "Compara a ordem normal e a inversa", "se o resultado muda, há empate que importa", "plain")
+    d.node(400, 430, 300, 62, "Sorteio verificável", "ordem de todos os candidatos e legendas", "focal", "ADR-0043")
+    d.node(730, 430, 300, 62, "Qualquer um refaz", "mesmos bytes que as instituições assinaram", "ok")
+    d.legend([(MUTED, "etapa", False), (GREEN, "conferência", False)])
+    return d
+
 def validator_rotation():
     d = D("validator-rotation", 1100, 0, "Rotação das instituições", "Mais de 2/3 do conjunto em vigor aprova o novo; a chain, a economia e o dispositivo o seguem", "REDE")
     A = [("i", "Instituições", "conjunto em vigor", "onca", 100), ("c", "Chain de votos", "épocas", "boto", 400), ("e", "Economia", "conjunto guardado", "focal", 690), ("d", "Dispositivo", "catraca de época", "link", 970)]

@@ -302,6 +302,14 @@ input[type="checkbox"] { width: 20px; height: 20px; accent-color: var(--primary)
 .option .chip { font-weight: 500; }
 .options--special { margin-top: 0; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); }
 .options-or { margin: 12px 0 8px; }
+.finder { margin: 0 0 12px; display: grid; gap: 6px; }
+.finder__in { max-width: 12ch; font-variant-numeric: tabular-nums; }
+.party-group { margin: 0 0 12px; }
+.party-group__head { margin: 0 0 6px; font-weight: 600; }
+.parties { margin-top: 12px; }
+.parties__t { width: 100%; border-collapse: collapse; font-size: .92em; }
+.parties__t td { padding: 4px 6px; border-bottom: 1px solid var(--line, rgba(0,0,0,.1)); }
+.parties__t .num { text-align: right; font-variant-numeric: tabular-nums; }
 .option input:checked + span { border-color: var(--primary); background: var(--tint-primary); box-shadow: 0 0 0 2px var(--primary) inset; }
 .option input:focus-visible + span { outline: 3px solid var(--ring); outline-offset: 2px; }
 

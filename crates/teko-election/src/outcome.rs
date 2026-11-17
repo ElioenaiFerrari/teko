@@ -15,6 +15,7 @@ use crate::draw::{DrawGoal, DrawNeed, draw_order};
 use crate::eligibility::Scope;
 use crate::lifecycle::Phase;
 use crate::manifest::{Contest, Office, OptionKind};
+use crate::proportional::{self, Allocation};
 use crate::tally::ContestTally;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, prost::Enumeration)]
@@ -85,6 +86,35 @@ pub struct ElectionOutcome {
     pub elected: Vec<u32>,
     #[prost(bytes = "vec", repeated, tag = "22")]
     pub elected_credentials: Vec<Vec<u8>>,
+    /// A PROPORTIONAL contest (ADR-0046): the electoral quotient, each party's votes and seats, and the
+    /// thresholds that were applied. `seats`/`elected` then hold the whole chamber. Empty/zero for the
+    /// other offices, whose bytes are unchanged.
+    #[prost(uint64, tag = "23")]
+    pub quotient: u64,
+    #[prost(message, repeated, tag = "24")]
+    pub parties: Vec<PartyResult>,
+    #[prost(uint32, tag = "25")]
+    pub first_candidate_bp: u32,
+    #[prost(uint32, tag = "26")]
+    pub party_bp: u32,
+    #[prost(uint32, tag = "27")]
+    pub candidate_bp: u32,
+}
+
+/// One party's result in a proportional contest.
+#[derive(Clone, PartialEq, Message)]
+pub struct PartyResult {
+    /// The party's option index.
+    #[prost(uint32, tag = "1")]
+    pub option: u32,
+    /// Its label votes + the votes of its candidates.
+    #[prost(uint64, tag = "2")]
+    pub votes: u64,
+    #[prost(uint32, tag = "3")]
+    pub seats: u32,
+    /// The party's number (two digits), so the ledger can check every elected candidacy against it.
+    #[prost(string, tag = "4")]
+    pub number: String,
 }
 
 /// What an institution publishes on the board: the outcome and its signature. The entry kind is
@@ -149,6 +179,8 @@ enum Plan {
         /// Options that are ahead of the tied group and keep their places (finalists only).
         ahead: Vec<usize>,
     },
+    /// A proportional contest (ADR-0046): the allocation of the chamber.
+    Proportional(Allocation),
     /// Nobody voted for a candidate.
     Nobody,
 }
@@ -162,7 +194,7 @@ struct Analysis {
 
 /// The rule, on the verified totals. `None` when there is nothing to decide yet.
 fn analyze(contest: &Contest, tally: &ContestTally) -> Option<Analysis> {
-    if !contest.office().is_majoritarian() {
+    if !contest.office().is_decided() {
         return None;
     }
     if !matches!(
@@ -178,6 +210,42 @@ fn analyze(contest: &Contest, tally: &ContestTally) -> Option<Analysis> {
     let totals: Vec<u64> = tally.options.iter().map(|o| o.votes).collect();
     if !tally.totals_fit_the_ballots() {
         return None;
+    }
+    if contest.office().is_proportional() {
+        // PROPORTIONAL (ADR-0046): the allocation of the chamber; a tie that changes who is elected is
+        // drawn once for the whole contest (the drawn order of every candidate and party)
+        contest.proportional.as_ref()?;
+        let valid = tally.valid_votes();
+        let plan = if valid == 0 {
+            Plan::Nobody
+        } else if proportional::needs_draw(contest, &totals) {
+            Plan::Draw {
+                need: DrawNeed {
+                    tied: contest
+                        .options
+                        .iter()
+                        .enumerate()
+                        .filter(|(_, o)| o.is_valid_choice())
+                        .map(|(i, _)| i as u32)
+                        .collect(),
+                    take: contest.proportional.as_ref().map_or(0, |p| p.seats),
+                    goal: DrawGoal::Ranking,
+                    votes: valid,
+                },
+                ahead: Vec::new(),
+            }
+        } else {
+            match proportional::allocate(contest, &totals, &|i| i) {
+                Some(a) if !a.elected().is_empty() => Plan::Proportional(a),
+                _ => Plan::Nobody,
+            }
+        };
+        return Some(Analysis {
+            totals,
+            valid,
+            round: 1,
+            plan,
+        });
     }
     // only CANDIDATES compete and count for the majority; blank and null are reported apart (ADR-0042)
     let mut order: Vec<usize> = (0..totals.len())
@@ -321,10 +389,40 @@ pub fn decide_with(
         seats: if contest.office() == Office::Senator {
             contest.seat_count() as u32
         } else {
-            0
+            contest.proportional.as_ref().map_or(0, |p| p.seats)
         },
         elected: Vec::new(),
         elected_credentials: Vec::new(),
+        quotient: 0,
+        parties: Vec::new(),
+        first_candidate_bp: 0,
+        party_bp: 0,
+        candidate_bp: 0,
+    };
+    let chamber = |alloc: &Allocation, out: &mut ElectionOutcome| {
+        let list = alloc.elected();
+        out.kind = OutcomeKind::Elected as i32;
+        out.elected = list.iter().map(|i| *i as u32).collect();
+        out.elected_credentials = list
+            .iter()
+            .map(|i| contest.options[*i].credential_id.clone())
+            .collect();
+        out.quotient = alloc.quotient;
+        out.parties = alloc
+            .parties
+            .iter()
+            .map(|p| PartyResult {
+                option: p.option as u32,
+                votes: p.votes,
+                seats: p.seats,
+                number: contest.options[p.option].number.clone(),
+            })
+            .collect();
+        if let Some(r) = &contest.proportional {
+            out.first_candidate_bp = r.first_candidate_bp;
+            out.party_bp = r.party_bp;
+            out.candidate_bp = r.candidate_bp;
+        }
     };
     let elect_many = |list: &[usize], out: &mut ElectionOutcome| {
         out.kind = OutcomeKind::Elected as i32;
@@ -352,6 +450,7 @@ pub fn decide_with(
         Plan::Nobody => {}
         Plan::Elect(i) => elect(i, &mut out),
         Plan::ElectMany(list) => elect_many(&list, &mut out),
+        Plan::Proportional(alloc) => chamber(&alloc, &mut out),
         Plan::Runoff(x, y) => runoff([x, y], &mut out),
         Plan::Draw { need, ahead } => {
             if let Some(seed) = draw_seed {
@@ -360,6 +459,22 @@ pub fn decide_with(
                 out.draw_seed = seed.to_vec();
                 out.draw_tied = order.clone();
                 match need.goal {
+                    DrawGoal::Ranking => {
+                        // the drawn order is the tie-break of the whole allocation (lower wins)
+                        let n = contest.options.len();
+                        let mut place = alloc::vec![n; n];
+                        for (rank, opt) in order.iter().enumerate() {
+                            if let Some(p) = place.get_mut(*opt as usize) {
+                                *p = rank;
+                            }
+                        }
+                        let pos = |i: usize| place.get(i).copied().unwrap_or(n) * (n + 1) + i;
+                        if let Some(alloc) = proportional::allocate(contest, &a.totals, &pos)
+                            && !alloc.elected().is_empty()
+                        {
+                            chamber(&alloc, &mut out);
+                        }
+                    }
                     DrawGoal::Winner => elect(order[0] as usize, &mut out),
                     DrawGoal::Seats => {
                         let mut list = ahead;
@@ -429,6 +544,7 @@ mod tests {
                     number: alloc::format!("{}", 10 + i),
                     credential_id: alloc::vec![i as u8 + 1; 32],
                     kind: OptionKind::Candidate as i32,
+                    ..Default::default()
                 })
                 .collect(),
             ..Default::default()
@@ -445,6 +561,7 @@ mod tests {
                 number: String::new(),
                 credential_id: Vec::new(),
                 kind: k as i32,
+                ..Default::default()
             });
         }
         c
@@ -477,6 +594,7 @@ mod tests {
                     number: alloc::format!("{}", 10 + i),
                     votes: *v,
                     kind: c.options[i].kind(),
+                    party: String::new(),
                 })
                 .collect(),
             seats: c.seat_count(),
@@ -808,7 +926,7 @@ mod tests {
         let mut t = tally(&[3, 1]);
         t.accepted = 99; // totals that do not add up
         assert!(decide("c", "e", &c, &h, &t).is_none());
-        // the PROPORTIONAL offices (deputies, councillors: they need parties) are still PENDING
+        // a PROPORTIONAL office without its chamber (ADR-0046) is not decided
         for office in [
             Office::FederalDeputy,
             Office::StateDeputy,
@@ -932,5 +1050,56 @@ mod tests {
             }
             prop_assert_eq!(o.totals.iter().sum::<u64>(), o.accepted);
         }
+    }
+
+    #[test]
+    fn a_proportional_contest_is_decided_with_the_whole_chamber_and_its_parties() {
+        let c = crate::proportional::tests::chamber(2, 2, 4, (0, 0, 0));
+        let o = run(&c, &[100, 300, 200, 0, 250, 150, 5, 5]);
+        assert_eq!(o.kind(), OutcomeKind::Elected);
+        assert_eq!((o.seats, o.quotient), (4, 250));
+        assert_eq!(o.elected, alloc::vec![1, 2, 4, 5]);
+        assert_eq!(o.elected_credentials.len(), 4);
+        let shares: Vec<(u64, u32)> = o.parties.iter().map(|p| (p.votes, p.seats)).collect();
+        assert_eq!(shares, alloc::vec![(600, 2), (400, 2)]);
+        assert_eq!((o.blank_votes, o.null_votes), (5, 5));
+        assert!(!o.drawn);
+        // the majoritarian outcomes keep their bytes: none of the new fields is set
+        let g = run(&contest(2, false, ""), &[3, 1]);
+        assert_eq!((g.quotient, g.parties.len(), g.party_bp), (0, 0, 0));
+    }
+
+    #[test]
+    fn a_proportional_tie_that_matters_is_drawn_once_for_the_whole_contest() {
+        let c = crate::proportional::tests::chamber(2, 2, 1, (0, 0, 0));
+        let votes = [0u64, 5, 5, 0, 1, 1, 0, 0];
+        let t = tally_of(&c, &votes);
+        let need = needs_draw(&c, &t).unwrap();
+        assert_eq!(
+            (need.goal, need.take, need.votes),
+            (DrawGoal::Ranking, 1, 12)
+        );
+        // every candidate and party takes part (not blank or null)
+        assert_eq!(need.tied, alloc::vec![0, 1, 2, 3, 4, 5]);
+        let h = [9u8; 32];
+        assert_eq!(
+            decide_with("v", "e", &c, &h, &t, None).unwrap().kind(),
+            OutcomeKind::Tie
+        );
+        let mut seen = alloc::collections::BTreeSet::new();
+        for s in 0..40u8 {
+            let o = decide_with("v", "e", &c, &h, &t, Some(&[s; 32])).unwrap();
+            assert_eq!(o.kind(), OutcomeKind::Elected);
+            assert!(o.drawn && !o.draw_seed.is_empty());
+            assert_eq!(o.elected.len(), 1);
+            seen.insert(o.elected[0]);
+            // the same seed reaches the same bytes
+            let again = decide_with("v", "e", &c, &h, &t, Some(&[s; 32])).unwrap();
+            assert_eq!(outcome_bytes(&o), outcome_bytes(&again));
+        }
+        assert_eq!(seen, alloc::collections::BTreeSet::from([1usize as u32, 2]));
+        // no tie that matters: no draw, and a seed is ignored
+        let clear = tally_of(&c, &[0, 9, 1, 0, 5, 5, 0, 0]);
+        assert!(needs_draw(&c, &clear).is_none());
     }
 }

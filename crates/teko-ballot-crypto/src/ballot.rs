@@ -16,7 +16,7 @@ use crate::proofs::{
 };
 
 /// Options per contest. Keeps the ballot small (~200 bytes per option).
-pub const MAX_OPTIONS: usize = 16;
+pub const MAX_OPTIONS: usize = 128;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct EncryptedBallot {

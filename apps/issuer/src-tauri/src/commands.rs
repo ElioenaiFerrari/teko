@@ -892,12 +892,17 @@ pub async fn civic_deliver(id: String) -> Result<String, UiError> {
 
 #[derive(Deserialize, Clone)]
 pub struct CandidacyForm {
-    /// `presidente`, `governador`, `senador` or `prefeito`.
+    /// `presidente`, `governador`, `senador`, `deputado-federal`, `deputado-estadual`, `prefeito` or `vereador`.
     cargo: String,
     uf: String,
     municipio: String,
     numero: String,
     nome: String,
+    /// Proportional offices (ADR-0046): the party number and its name; empty otherwise.
+    #[serde(default)]
+    partido: String,
+    #[serde(default)]
+    legenda: String,
     eleicao: String,
     /// Hex of the candidate's credential key (from `GetCredentialKey("candidato")` on THEIR device).
     holder_key: String,
@@ -933,7 +938,7 @@ pub async fn candidacies_issue(
             let cargo = Cargo::parse(f.cargo.trim()).ok_or_else(|| {
                 ui_err(
                     "InvalidArgument",
-                    "cargo: presidente, governador, senador ou prefeito",
+                    "cargo: presidente, governador, senador, deputado-federal, deputado-estadual, prefeito ou vereador",
                 )
             })?;
             let claims = candidate_claims(&Candidacy {
@@ -942,6 +947,8 @@ pub async fn candidacies_issue(
                 municipio: f.municipio.trim().to_string(),
                 numero: f.numero.trim().to_string(),
                 nome: f.nome.trim().to_string(),
+                partido: f.partido.trim().to_string(),
+                legenda: f.legenda.trim().to_string(),
                 eleicao: f.eleicao.trim().to_string(),
             })
             .map_err(|m| ui_err("InvalidArgument", m))?;

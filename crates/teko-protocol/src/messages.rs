@@ -591,12 +591,18 @@ pub struct ContestInfo {
     /// This is a SECOND ROUND (the first-round contest it continues), or empty.
     #[prost(string, tag = "13")]
     pub parent: String,
-    /// Per option: 0 = candidate, 1 = blank, 2 = null (ADR-0042).
+    /// Per option: 0 = candidate, 1 = blank, 2 = null (ADR-0042), 3 = party label (ADR-0046).
     #[prost(uint32, repeated, tag = "14")]
     pub option_kinds: Vec<u32>,
     /// How many people the contest elects (1 unless it is a multi-seat senator contest, ADR-0044).
     #[prost(uint32, tag = "15")]
     pub seats: u32,
+    /// Per option: the party number of a candidate of a proportional contest, else empty (ADR-0046).
+    #[prost(string, repeated, tag = "16")]
+    pub option_parties: Vec<String>,
+    /// The seats of the chamber of a proportional contest (the ballot is still ONE vote), else 0.
+    #[prost(uint32, tag = "17")]
+    pub chamber_seats: u32,
 }
 #[derive(Clone, PartialEq, prost::Message)]
 pub struct ElectionLoaded {

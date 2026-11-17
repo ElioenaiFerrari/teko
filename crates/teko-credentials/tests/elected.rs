@@ -107,6 +107,7 @@ fn cand(cargo: Cargo, uf: &str, numero: &str, nome: &str, eleicao: &str) -> Cand
         numero: numero.into(),
         nome: nome.into(),
         eleicao: eleicao.into(),
+        ..Default::default()
     }
 }
 
@@ -140,6 +141,7 @@ fn outcome(
         seats: 0,
         elected: vec![],
         elected_credentials: vec![],
+        ..Default::default()
     }
 }
 
@@ -346,17 +348,23 @@ fn only_a_decided_contest_with_a_matching_candidacy_elects() {
         "governador-sp",
     );
     assert!(claim(&mut w, &unknown, &[0, 1, 2]).is_err());
-    // the proportional offices are still PENDING (a senator is elected, see the senate tests)
+    // a proportional office elects a CHAMBER (see the chamber tests): a result naming one winner is
+    // refused (a senator is elected too, see the senate tests)
     for office in [
         Office::FederalDeputy,
         Office::StateDeputy,
         Office::CityCouncillor,
     ] {
-        let prop = outcome(&id, office, Scope::state("SP"), "geral-2026", "dep-sp");
+        let scope = if office == Office::CityCouncillor {
+            Scope::municipality("3550308")
+        } else {
+            Scope::state("SP")
+        };
+        let prop = outcome(&id, office, scope, "geral-2026", "dep-sp");
         assert!(
             claim(&mut w, &prop, &[0, 1, 2])
                 .unwrap_err()
-                .contains("not elected automatically"),
+                .contains("chamber"),
             "{office:?}"
         );
     }
@@ -866,4 +874,131 @@ fn a_rotation_approved_by_more_than_two_thirds_changes_who_can_certify_a_result(
     // with the newcomer in its place the claim works
     send(&mut w, &relayer, sign_with(&[i0, i1, &newcomer]), 1).unwrap();
     assert_eq!(elected_of(&w, &holder).len(), 1);
+}
+
+fn deputy(partido: &str, legenda: &str, numero: &str, nome: &str) -> Candidacy {
+    Candidacy {
+        cargo: Cargo::DeputadoEstadual,
+        uf: "SP".into(),
+        partido: partido.into(),
+        legenda: legenda.into(),
+        numero: numero.into(),
+        nome: nome.into(),
+        eleicao: "e-2026".into(),
+        ..Default::default()
+    }
+}
+
+/// A chamber result (ADR-0046): options [P13, a, b, P45, c, d], `elected` = (option, candidacy id).
+fn chamber_outcome(
+    elected: &[(u32, &[u8])],
+    seats: u32,
+    parties: &[(&str, u32)],
+) -> ElectionOutcome {
+    let mut o = outcome(
+        &[],
+        Office::StateDeputy,
+        Scope::state("SP"),
+        "e-2026",
+        "dep-sp-2026",
+    );
+    o.totals = vec![10, 50, 30, 5, 40, 20, 4, 1];
+    o.accepted = 160;
+    o.seats = seats;
+    o.elected = elected.iter().map(|(i, _)| *i).collect();
+    o.elected_credentials = elected.iter().map(|(_, id)| id.to_vec()).collect();
+    o.quotient = 50;
+    o.parties = parties
+        .iter()
+        .enumerate()
+        .map(|(i, (n, s))| teko_election::PartyResult {
+            option: (i * 3) as u32,
+            votes: 100,
+            seats: *s,
+            number: (*n).into(),
+        })
+        .collect();
+    o
+}
+
+#[test]
+fn a_chamber_elects_every_winner_in_one_claim_with_its_party_and_the_next_chamber_replaces_it() {
+    let mut w = world(4);
+    let (a, ha) = candidacy(&mut w, &deputy("13", "Verde", "13001", "Ana"), 1);
+    let (b, hb) = candidacy(&mut w, &deputy("13", "Verde", "13002", "Beto"), 2);
+    let (c, hc) = candidacy(&mut w, &deputy("45", "Azul", "45001", "Cris"), 3);
+    let o = chamber_outcome(&[(1, &a), (2, &b), (4, &c)], 3, &[("13", 2), ("45", 1)]);
+    claim(&mut w, &o, &[0, 1, 2]).unwrap();
+    let (ea, eb, ec) = (
+        elected_of(&w, &ha),
+        elected_of(&w, &hb),
+        elected_of(&w, &hc),
+    );
+    assert_eq!((ea.len(), eb.len(), ec.len()), (1, 1, 1));
+    let claims = String::from_utf8(ea[0].1.claims.clone()).unwrap();
+    assert!(
+        claims.starts_with("cargo=deputado-estadual;uf=SP;partido=13;numero=13001;nome=Ana;eleicao=e-2026;pleito=dep-sp-2026;votos=50;"),
+        "{claims}"
+    );
+    assert!(
+        String::from_utf8(ec[0].1.claims.clone())
+            .unwrap()
+            .contains("partido=45;")
+    );
+    // the next chamber of the same office and state supersedes all of this one
+    let (d, hd) = candidacy(&mut w, &deputy("45", "Azul", "45002", "Dani"), 4);
+    let mut next = chamber_outcome(&[(5, &d)], 3, &[("13", 0), ("45", 1)]);
+    next.contest_id = "dep-sp-2030".into();
+    claim(&mut w, &next, &[0, 1, 2]).unwrap();
+    assert_eq!(elected_of(&w, &hd).len(), 1);
+    assert_ne!(
+        elected_of(&w, &ha)[0].1.status_at(w.now + 1_000),
+        Status::Active
+    );
+    assert_ne!(
+        elected_of(&w, &hc)[0].1.status_at(w.now + 1_000),
+        Status::Active
+    );
+}
+
+#[test]
+fn a_chamber_result_that_does_not_add_up_is_refused_and_nothing_is_issued() {
+    let mut w = world(4);
+    let (a, ha) = candidacy(&mut w, &deputy("13", "Verde", "13001", "Ana"), 1);
+    let (b, _) = candidacy(&mut w, &deputy("13", "Verde", "13002", "Beto"), 2);
+    let (c, _) = candidacy(&mut w, &deputy("45", "Azul", "45001", "Cris"), 3);
+    // more winners than seats
+    let e = claim(
+        &mut w,
+        &chamber_outcome(&[(1, &a), (2, &b), (4, &c)], 2, &[("13", 2), ("45", 1)]),
+        &[0, 1, 2],
+    )
+    .unwrap_err();
+    assert!(e.contains("chamber"), "{e}");
+    // the parties' seats do not add up to the winners
+    let e = claim(
+        &mut w,
+        &chamber_outcome(&[(1, &a), (2, &b)], 3, &[("13", 1), ("45", 0)]),
+        &[0, 1, 2],
+    )
+    .unwrap_err();
+    assert!(e.contains("chamber"), "{e}");
+    // a winner whose candidacy belongs to another party than the result says
+    let e = claim(
+        &mut w,
+        &chamber_outcome(&[(1, &a), (4, &c)], 2, &[("13", 0), ("45", 2)]),
+        &[0, 1, 2],
+    )
+    .unwrap_err();
+    assert!(e.contains("party"), "{e}");
+    // the same winner twice
+    let e = claim(
+        &mut w,
+        &chamber_outcome(&[(1, &a), (1, &a)], 3, &[("13", 2), ("45", 0)]),
+        &[0, 1, 2],
+    )
+    .unwrap_err();
+    assert!(e.contains("twice"), "{e}");
+    // a candidate of the state's SENATE race cannot take a deputy seat
+    assert_eq!(elected_of(&w, &ha).len(), 0, "all or nothing");
 }

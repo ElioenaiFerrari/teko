@@ -1,16 +1,21 @@
 //! The candidacy credential (ADR-0040): a PUBLIC credential of type `candidato` whose claims are
-//! `cargo;uf;municipio;numero;nome;eleicao`. An election's candidates are the ACTIVE candidacies
+//! `cargo;uf;municipio;[partido;legenda;]numero;nome;eleicao` (`partido` and `legenda` only in the
+//! proportional offices, ADR-0046). An election's candidates are the ACTIVE candidacies
 //! that match a contest; this module holds the pure rules (claims, matching, selection), used by
 //! the organ's app that issues them, by the builder of the election manifest and by auditors.
 
-/// The offices that can be elected today by a majority rule: the single-seat ones (ADR-0040) and
-/// the senator (1 or 2 seats, ADR-0044). The proportional ones are PENDING.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// The offices that are elected automatically: the single-seat ones (ADR-0040), the senator (1 or 2
+/// seats, ADR-0044) and the proportional ones, deputies and councillors (ADR-0046).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum Cargo {
+    #[default]
     Presidente,
     Governador,
     Prefeito,
     Senador,
+    DeputadoFederal,
+    DeputadoEstadual,
+    Vereador,
 }
 
 /// Where an office is contested.
@@ -28,6 +33,9 @@ impl Cargo {
             "governador" => Some(Cargo::Governador),
             "prefeito" => Some(Cargo::Prefeito),
             "senador" => Some(Cargo::Senador),
+            "deputado-federal" => Some(Cargo::DeputadoFederal),
+            "deputado-estadual" => Some(Cargo::DeputadoEstadual),
+            "vereador" => Some(Cargo::Vereador),
             _ => None,
         }
     }
@@ -38,26 +46,54 @@ impl Cargo {
             Cargo::Governador => "governador",
             Cargo::Prefeito => "prefeito",
             Cargo::Senador => "senador",
+            Cargo::DeputadoFederal => "deputado-federal",
+            Cargo::DeputadoEstadual => "deputado-estadual",
+            Cargo::Vereador => "vereador",
         }
     }
 
     pub fn level(self) -> Level {
         match self {
             Cargo::Presidente => Level::National,
-            Cargo::Governador | Cargo::Senador => Level::State,
-            Cargo::Prefeito => Level::Municipality,
+            Cargo::Governador
+            | Cargo::Senador
+            | Cargo::DeputadoFederal
+            | Cargo::DeputadoEstadual => Level::State,
+            Cargo::Prefeito | Cargo::Vereador => Level::Municipality,
+        }
+    }
+
+    /// Deputies and councillors: voted by party list (ADR-0046).
+    pub fn is_proportional(self) -> bool {
+        matches!(
+            self,
+            Cargo::DeputadoFederal | Cargo::DeputadoEstadual | Cargo::Vereador
+        )
+    }
+
+    /// Digits of a candidate number in a proportional office (2 of the party + 2 or 3 of the
+    /// candidate, as in Brazil).
+    fn number_len(self) -> Option<usize> {
+        match self {
+            Cargo::DeputadoFederal => Some(4),
+            Cargo::DeputadoEstadual | Cargo::Vereador => Some(5),
+            _ => None,
         }
     }
 }
 
 /// What the organ verified about a candidate.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct Candidacy {
     pub cargo: Cargo,
     /// 2 letters; empty for the President.
     pub uf: String,
     /// 7-digit IBGE code; only for a mayor.
     pub municipio: String,
+    /// Two digits of the party; only in the proportional offices (ADR-0046).
+    pub partido: String,
+    /// The party's name or acronym (all candidates of one party agree on it).
+    pub legenda: String,
     pub numero: String,
     pub nome: String,
     pub eleicao: String,
@@ -120,12 +156,31 @@ pub fn candidate_claims(c: &Candidacy) -> Result<String, String> {
             }
         }
     }
+    if c.cargo.is_proportional() {
+        let party_ok = c.partido.len() == 2 && c.partido.chars().all(|d| d.is_ascii_digit());
+        if !party_ok || !clean_text(&c.legenda, 40) {
+            return Err("partido: 2 dígitos e legenda de 1 a 40 caracteres (sem ; nem =)".into());
+        }
+        if Some(c.numero.len()) != c.cargo.number_len() || !c.numero.starts_with(&c.partido) {
+            return Err(format!(
+                "número de {}: {} dígitos, começando pelo partido",
+                c.cargo.name(),
+                c.cargo.number_len().unwrap_or(0)
+            ));
+        }
+    } else if !c.partido.is_empty() || !c.legenda.is_empty() {
+        return Err("partido só nos cargos proporcionais".into());
+    }
     let mut parts = vec![format!("cargo={}", c.cargo.name())];
     if !c.uf.is_empty() {
         parts.push(format!("uf={}", c.uf));
     }
     if !c.municipio.is_empty() {
         parts.push(format!("municipio={}", c.municipio));
+    }
+    if c.cargo.is_proportional() {
+        parts.push(format!("partido={}", c.partido));
+        parts.push(format!("legenda={}", c.legenda.trim()));
     }
     parts.push(format!("numero={}", c.numero));
     parts.push(format!("nome={}", c.nome.trim()));
@@ -145,7 +200,17 @@ pub fn parse_candidate(claims: &[u8]) -> Option<Candidacy> {
     };
     // no claim outside the known ones (a stray claim would be ignored by a reader and not by another)
     if pairs.iter().any(|(n, _)| {
-        !["cargo", "uf", "municipio", "numero", "nome", "eleicao"].contains(&n.as_str())
+        ![
+            "cargo",
+            "uf",
+            "municipio",
+            "partido",
+            "legenda",
+            "numero",
+            "nome",
+            "eleicao",
+        ]
+        .contains(&n.as_str())
     }) {
         return None;
     }
@@ -153,6 +218,8 @@ pub fn parse_candidate(claims: &[u8]) -> Option<Candidacy> {
         cargo: Cargo::parse(&get("cargo"))?,
         uf: get("uf"),
         municipio: get("municipio"),
+        partido: get("partido"),
+        legenda: get("legenda"),
         numero: get("numero"),
         nome: get("nome"),
         eleicao: get("eleicao"),
@@ -179,6 +246,9 @@ pub struct Selected {
     pub subject: Vec<u8>,
     pub numero: String,
     pub nome: String,
+    /// Party number and name, in the proportional offices (empty otherwise).
+    pub partido: String,
+    pub legenda: String,
 }
 
 /// The candidates of ONE contest: the ACTIVE candidacies for this election, office and
@@ -212,11 +282,22 @@ pub fn select_candidates(
         if out.iter().any(|o| o.subject == e.subject) {
             return Err(format!("o mesmo titular concorre duas vezes ({})", c.nome));
         }
+        if out
+            .iter()
+            .any(|o| o.partido == c.partido && o.legenda != c.legenda)
+        {
+            return Err(format!(
+                "o partido {} aparece com dois nomes ({})",
+                c.partido, c.legenda
+            ));
+        }
         out.push(Selected {
             id: e.id.clone(),
             subject: e.subject.clone(),
             numero: c.numero,
             nome: c.nome,
+            partido: c.partido,
+            legenda: c.legenda,
         });
     }
     if out.len() < 2 {
@@ -243,6 +324,8 @@ mod tests {
             cargo,
             uf: uf.into(),
             municipio: mun.into(),
+            partido: String::new(),
+            legenda: String::new(),
             numero: numero.into(),
             nome: nome.into(),
             eleicao: "geral-2026".into(),
@@ -374,5 +457,78 @@ mod tests {
         )
         .unwrap_err();
         assert!(e.contains("duas vezes"), "{e}");
+    }
+
+    fn deputy(cargo: Cargo, partido: &str, legenda: &str, numero: &str) -> Candidacy {
+        Candidacy {
+            cargo,
+            uf: if cargo == Cargo::Vereador {
+                String::new()
+            } else {
+                "SP".into()
+            },
+            municipio: if cargo == Cargo::Vereador {
+                "3550308".into()
+            } else {
+                String::new()
+            },
+            partido: partido.into(),
+            legenda: legenda.into(),
+            numero: numero.into(),
+            nome: "Ana".into(),
+            eleicao: "geral-2026".into(),
+        }
+    }
+
+    #[test]
+    fn a_proportional_candidacy_carries_its_party_and_its_number_starts_with_it() {
+        let c = deputy(Cargo::DeputadoEstadual, "13", "Verde", "13001");
+        let claims = candidate_claims(&c).unwrap();
+        assert_eq!(
+            claims,
+            "cargo=deputado-estadual;uf=SP;partido=13;legenda=Verde;numero=13001;nome=Ana;eleicao=geral-2026"
+        );
+        assert_eq!(parse_candidate(claims.as_bytes()), Some(c));
+        // federal: 4 digits; councillor: municipality and 5 digits
+        assert!(candidate_claims(&deputy(Cargo::DeputadoFederal, "13", "Verde", "1301")).is_ok());
+        assert!(candidate_claims(&deputy(Cargo::Vereador, "13", "Verde", "13001")).is_ok());
+        for bad in [
+            deputy(Cargo::DeputadoEstadual, "13", "Verde", "13"),
+            deputy(Cargo::DeputadoEstadual, "13", "Verde", "1301"),
+            deputy(Cargo::DeputadoEstadual, "13", "Verde", "45001"),
+            deputy(Cargo::DeputadoEstadual, "1", "Verde", "13001"),
+            deputy(Cargo::DeputadoEstadual, "13", "", "13001"),
+            deputy(Cargo::DeputadoEstadual, "13", "Ve;rde", "13001"),
+        ] {
+            assert!(candidate_claims(&bad).is_err(), "{bad:?}");
+        }
+        // a party only in the proportional offices
+        let mut g = cand(Cargo::Governador, "SP", "", "13", "Ana");
+        g.partido = "13".into();
+        assert!(candidate_claims(&g).is_err());
+        // the chain keeps the old claims unchanged: a governor has no party claims
+        assert!(
+            !candidate_claims(&cand(Cargo::Governador, "SP", "", "13", "Ana"))
+                .unwrap()
+                .contains("partido")
+        );
+    }
+
+    #[test]
+    fn the_same_party_cannot_appear_with_two_names_in_one_contest() {
+        let a = deputy(Cargo::DeputadoEstadual, "13", "Verde", "13001");
+        let b = deputy(Cargo::DeputadoEstadual, "13", "Verdes", "13002");
+        let es = vec![entry(1, 1, &a, 0, true), entry(2, 2, &b, 0, true)];
+        let e = select_candidates(&es, "geral-2026", Cargo::DeputadoEstadual, "SP", 100, 0)
+            .unwrap_err();
+        assert!(e.contains("dois nomes"), "{e}");
+        let b = deputy(Cargo::DeputadoEstadual, "13", "Verde", "13002");
+        let es = vec![entry(1, 1, &a, 0, true), entry(2, 2, &b, 0, true)];
+        let sel =
+            select_candidates(&es, "geral-2026", Cargo::DeputadoEstadual, "SP", 100, 0).unwrap();
+        assert_eq!(
+            (sel[0].partido.as_str(), sel[0].legenda.as_str()),
+            ("13", "Verde")
+        );
     }
 }

@@ -33,13 +33,23 @@
 
   const NOW = Math.floor(Date.now() / 1000), DAY = 86400;
   const voted = {};
-  const contests = () => [
+  const baseContests = () => [
     { contest_id: 'presidente', title: 'Presidente da República', phase: 'voting_open', phase_code: 3, scope: 'national', scope_code: '', option_names: ['Candidata Onça-Pintada', 'Candidato Boto-Cor-de-Rosa', 'Candidata Arara-Azul'], eligible: true, registration_required: true, voting_opens: NOW - DAY, voting_closes: NOW + 3 * DAY },
     { contest_id: 'senador-sp', title: 'Senador de São Paulo (2 vagas)', phase: 'voting_open', phase_code: 3, scope: 'state', scope_code: 'SP', option_names: ['Candidato Peixe-Boi', 'Candidata Ariranha', 'Candidato Cervo-do-Pantanal', 'Candidata Harpia'], seats: 2, eligible: true, registration_required: true, voting_opens: NOW - DAY, voting_closes: NOW + 3 * DAY },
     { contest_id: 'governador-sp', title: 'Governador de São Paulo', phase: 'registration_open', phase_code: 2, scope: 'state', scope_code: 'SP', option_names: ['Candidato Guará', 'Candidata Vitória-Régia'], eligible: true, registration_required: true, voting_opens: NOW + DAY, voting_closes: NOW + 5 * DAY },
     { contest_id: 'governador-rj', title: 'Governador do Rio de Janeiro', phase: 'voting_open', phase_code: 3, scope: 'state', scope_code: 'RJ', option_names: ['Candidato Mico-Leão-Dourado', 'Candidata Capivara'], eligible: false, registration_required: true, voting_opens: NOW - DAY, voting_closes: NOW + 2 * DAY },
     { contest_id: 'prefeito-3550308', title: 'Prefeito de São Paulo', phase: 'candidates_published', phase_code: 1, scope: 'municipality', scope_code: '3550308', option_names: ['Candidata Jaguatirica', 'Candidato Tucano'], eligible: true, registration_required: true, voting_opens: NOW + 3 * DAY, voting_closes: NOW + 4 * DAY },
   ].map((c) => ({ ...c, option_names: [...c.option_names, 'Branco', 'Nulo'], option_kinds: [...c.option_names.map(() => 0), 1, 2], seats: c.seats || 1, voted: !!voted[c.contest_id] }));
+  // lista aberta (ADR-0046): legendas e candidatos de dois partidos
+  const chamberContest = () => ({
+    contest_id: 'deputado-estadual-sp', title: 'Deputado Estadual de São Paulo', phase: 'voting_open', phase_code: 3, scope: 'state', scope_code: 'SP', eligible: true, registration_required: true,
+    voting_opens: NOW - DAY, voting_closes: NOW + 3 * DAY, seats: 1, chamber_seats: 8, voted: !!voted['deputado-estadual-sp'],
+    option_names: ['Iara da Mata', 'Jonas da Mata', 'Lia do Rio', 'Mateus do Rio', 'Partido da Mata', 'Partido do Rio', 'Branco', 'Nulo'],
+    option_numbers: ['11011', '11012', '22021', '22022', '11', '22', '', ''],
+    option_parties: ['11', '11', '22', '22', '', '', '', ''],
+    option_kinds: [0, 0, 0, 0, 3, 3, 1, 2],
+  });
+  const contests = () => [...baseContests(), chamberContest()];
   const electionSummary = () => ({ election_id: 'eleicoes-exemplo-2026', title: 'Eleições de exemplo 2026 (protótipo)', revision: 1, seq: 6, contests: contests() });
 
   let published = q === 'ready' && false;

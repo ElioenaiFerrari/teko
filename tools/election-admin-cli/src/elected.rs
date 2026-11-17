@@ -218,6 +218,13 @@ pub fn build_election(
                 c.eleicao == election_id && c.cargo == cargo && c.scope_code() == p.scope_code
             })
         });
+        if !any && p.chamber > 0 {
+            lines.push(format!(
+                "{}: sem candidaturas na chain, fora da eleição",
+                p.id
+            ));
+            continue;
+        }
         if !any {
             lines.push(format!(
                 "{}: sem candidaturas na chain, lista de exemplo",
@@ -234,7 +241,23 @@ pub fn build_election(
             margin_secs,
         )
         .map_err(|e| format!("{}: {e}", p.id))?;
-        lines.push(format!("{}: {} candidatos da chain", p.id, sel.len()));
+        if p.chamber > 0 {
+            let mut parties: Vec<&str> = sel.iter().map(|s| s.partido.as_str()).collect();
+            parties.sort_unstable();
+            parties.dedup();
+            if parties.len() < 2 {
+                return Err(format!("{}: são precisos ao menos 2 partidos", p.id));
+            }
+            lines.push(format!(
+                "{}: {} candidatos de {} partidos, {} cadeiras",
+                p.id,
+                sel.len(),
+                parties.len(),
+                p.chamber
+            ));
+        } else {
+            lines.push(format!("{}: {} candidatos da chain", p.id, sel.len()));
+        }
         cands.insert(
             p.id.to_string(),
             sel.into_iter()
@@ -242,6 +265,8 @@ pub fn build_election(
                     credential_id: s.id,
                     numero: s.numero,
                     nome: s.nome,
+                    partido: s.partido,
+                    legenda: s.legenda,
                 })
                 .collect(),
         );
@@ -278,6 +303,7 @@ pub fn start_runoff(dir: &Path, contest_id: &str, now: u64) -> Result<String, St
             credential_id: id.clone(),
             numero: c.numero,
             nome: c.nome,
+            ..Default::default()
         });
     }
     let [a, b]: [issuer_cli::DevCandidate; 2] = fin

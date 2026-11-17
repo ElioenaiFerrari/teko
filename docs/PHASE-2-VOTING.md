@@ -246,7 +246,7 @@ Invariantes novas a testar: a cédula só é assinada se o candidato exibido vei
 | 8 | Aceitar que a **primeira versão não resiste à compra de voto** | Sim, declarado na UI e nos docs |
 | 9 | **Quem atesta o domicílio eleitoral** (ADR-0017): a mesma autoridade de identidade ou um cadastro eleitoral separado | Conceitualmente separado; no estudo, o `issuer-cli` simula os dois papéis |
 | 10 | **Data de corte** do domicílio (fotografia da lista de elegíveis) e o que acontece com quem se muda | Fotografia fixa no manifesto; mudança só vale na próxima eleição |
-| 11 | **Voto em branco e nulo**, e cargos **proporcionais/multi-vaga** (deputado, vereador: voto em candidato ou legenda) | Branco/nulo como opções explícitas; proporcional fica para depois do majoritário |
+| 11 | **Voto em branco e nulo**, e cargos **proporcionais/multi-vaga** (deputado, vereador: voto em candidato ou legenda) | Branco/nulo como opções explícitas; proporcional resolvido no ADR-0046 (lista aberta, quociente + D'Hondt, barreiras, sorteio) |
 | 12 | **Eleitor no exterior** (vota só para Presidente) e outras exceções de domicílio | Modelar como domicílio especial; fora do primeiro corte |
 | 13 | **Encerramento antecipado** de um pleito (hoje o sistema recusa fechar antes do horário) | Manter recusa; emergência vira cancelamento motivado |
 | 14 | **Política de resultados parciais** (ADR-0018): `live`, `turnout_only` ou `after_close` | ✅ **Decidido:** nada de parciais, **criptograficamente** (ADR-0019: cédulas cifradas, só os totais são decifrados no fechamento por M-de-N validadores) |

@@ -416,7 +416,49 @@ fn sample_candidates(contest: &str) -> &'static [(&'static str, &'static str)] {
             ("Candidato Preguiça-de-Coleira", "461"),
             ("Candidata Sagui-da-Serra-Escuro", "462"),
         ],
+        // the chambers (ADR-0046): the first two digits of a number are the party's
+        "deputado-federal-sp" => &[
+            ("Ana da Mata", "1101"),
+            ("Beto da Mata", "1102"),
+            ("Cris da Mata", "1103"),
+            ("Dani do Rio", "2201"),
+            ("Edu do Rio", "2202"),
+            ("Fabi do Rio", "2203"),
+            ("Gil da Serra", "3301"),
+            ("Hana da Serra", "3302"),
+        ],
+        "deputado-estadual-sp" => &[
+            ("Iara da Mata", "11011"),
+            ("Jonas da Mata", "11012"),
+            ("Kátia da Mata", "11013"),
+            ("Lia do Rio", "22021"),
+            ("Mateus do Rio", "22022"),
+            ("Nina do Rio", "22023"),
+            ("Otto da Serra", "33031"),
+            ("Paula da Serra", "33032"),
+            ("Quim do Cerrado", "44041"),
+            ("Rita do Cerrado", "44042"),
+        ],
+        "vereador-3550308" => &[
+            ("Sara da Mata", "11101"),
+            ("Tito da Mata", "11102"),
+            ("Ubi do Rio", "22201"),
+            ("Vera do Rio", "22202"),
+            ("Wando da Serra", "33301"),
+            ("Xica da Serra", "33302"),
+        ],
         _ => &[],
+    }
+}
+
+/// The party of a sample number of a proportional contest: `(number, name)` (ADR-0046).
+fn sample_party(numero: &str) -> (&'static str, &'static str) {
+    match numero.get(..2) {
+        Some("11") => ("11", "Partido da Mata"),
+        Some("22") => ("22", "Partido do Rio"),
+        Some("33") => ("33", "Partido da Serra"),
+        Some("44") => ("44", "Partido do Cerrado"),
+        _ => ("", ""),
     }
 }
 
@@ -447,20 +489,27 @@ pub fn seed_candidates(dir: &Path, election_id: &str) -> Result<String, String> 
     for p in issuer_cli::dev_contest_plan(now) {
         let cargo = Cargo::parse(p.cargo).ok_or("cargo")?;
         for (i, (nome, numero)) in sample_candidates(p.id).iter().enumerate() {
-            let uf = if p.cargo == "governador" || p.cargo == "senador" {
+            let uf = if cargo.level() == teko_credentials::candidate::Level::State {
                 p.scope_code
             } else {
                 ""
             };
-            let mun = if p.cargo == "prefeito" {
+            let mun = if cargo.level() == teko_credentials::candidate::Level::Municipality {
                 p.scope_code
             } else {
                 ""
+            };
+            let (partido, legenda) = if cargo.is_proportional() {
+                sample_party(numero)
+            } else {
+                ("", "")
             };
             let claims = candidate_claims(&Candidacy {
                 cargo,
                 uf: uf.into(),
                 municipio: mun.into(),
+                partido: partido.into(),
+                legenda: legenda.into(),
                 numero: (*numero).into(),
                 nome: (*nome).into(),
                 eleicao: election_id.into(),

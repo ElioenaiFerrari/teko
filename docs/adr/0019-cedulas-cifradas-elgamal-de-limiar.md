@@ -22,7 +22,7 @@ ElectionGuard (ElGamal + Chaum-Pedersen + guardiões k-de-n), Helios e Belenios 
 | 2 | 452 | ~3,9 ms | ~3,6 ms |
 | 12 | 2.392 | ~21,6 ms | ~17,9 ms |
 | 16 (máximo) | 3.168 | ~28,7 ms | ~23,6 ms |
-Um milhão de cédulas de 12 opções leva ~5 h de verificação em um núcleo (paralelizável/verificação em lote é trabalho futuro). Limites: ≤16 opções por pleito cifrado; 1.000 entradas por bloco.
+Um milhão de cédulas de 12 opções leva ~5 h de verificação em um núcleo (paralelizável/verificação em lote é trabalho futuro). Limites: ≤128 opções por pleito cifrado (eram 16; ADR-0046); 1.000 entradas por bloco.
 
 ## O que isto NÃO garante (honestidade)
 1. **Conluio de M validadores abre antes do prazo** (2 de 3 na devnet): a decifração só é "honesta" por software. Endurecimento futuro: time-lock (drand) como segunda camada.

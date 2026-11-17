@@ -18,6 +18,9 @@ pub enum DrawGoal {
     /// The first `take` of the drawn order fill the seats left open at the cut of a multi-seat
     /// contest (ADR-0044).
     Seats,
+    /// A proportional contest (ADR-0046): the drawn order of ALL the candidates is the tie-break of
+    /// the whole allocation (`take` = the seats of the chamber, `votes` = the valid votes).
+    Ranking,
 }
 
 /// A tie the rule cannot break: the tied options (ascending ballot index), how many of them the

@@ -7,7 +7,7 @@ Status: **implementado como prova de conceito local**. A rede de votos roda em *
 | Rede | Para quê | Estado |
 |---|---|---|
 | `devnet` | Sua máquina: **4** validadores em loopback por padrão (`make devnet NODES=3` sobe 3, que **não toleram falha**; com 4 uma pode cair) | ✅ `make devnet` |
-| `testnet` | Várias máquinas, dados fictícios, regras iguais às de produção | ✅ funciona em várias máquinas ([TESTNET.md](TESTNET.md), [ADR-0048](adr/0048-rede-de-testnet-multi-maquina.md)): cada instituição gera a própria chave, o coordenador monta o genesis, os nós se autenticam por sessões Noise |
+| `testnet` | Várias máquinas, dados fictícios, regras iguais às de produção | ✅ **validada em dois computadores numa rede local** (testes locais; [roteiro](TESTNET-TWO-MACHINES.md), [TESTNET.md](TESTNET.md), [ADR-0048](adr/0048-rede-de-testnet-multi-maquina.md)): cada instituição gera a própria chave, o coordenador monta o genesis, os nós se autenticam por sessões Noise; pela internet/NAT ainda não validada |
 | `mainnet` | A eleição de verdade | 🔒 **TRAVADA**: `NetworkProfile::new(Mainnet)` e `network=mainnet` no arquivo são recusados |
 
 Cada rede tem um `chain_id` (`teko-devnet-1`, `teko-testnet-1`). Ele entra no **cabeçalho de cada bloco** e no **manifesto assinado da eleição** (`ElectionManifest.chain_id`). O dispositivo (`trust.txt: chain_id=`) recusa manifesto de outra rede, e a apuração (`Tallier::with_chain_id`) ignora e conta manifestos de outra rede.

@@ -77,7 +77,8 @@ fn run() -> Result<(), String> {
         .map_err(|e| e.to_string())?
         .ok_or("esta rede não tem economia (rode `teko-node init`)")?;
     let index = Index::new(ec.genesis).map_err(|e| e.to_string())?;
-    let mut shared = Shared::new(index, net.profile.kind.name()).with_votes(net.profile.clone());
+    let mut shared = Shared::new(index, net.profile.kind.name())
+        .with_votes(net.profile.clone(), net.links.clone());
     // the records hold the owners' data: only a local devnet (or an explicit folder) shows them
     let meta_dir = f
         .get("metadata-dir")

@@ -74,12 +74,15 @@ explorer: ## Explorador da chain (web + API JSON somente leitura) em http://127.
 	$(CARGO) run -q -p explorer-server -- --dir $(NET)
 
 devnet-economy: ## Economia BFT: altura, fase de fundador, validadores e verificação da cadeia
+	@$(CARGO) build -q -p teko-node
 	@$(NODE) economy --dir $(NET)
 
 devnet-status: ## Altura, entradas, mempool e pares de cada validador
+	@$(CARGO) build -q -p teko-node
 	@$(NODE) status --dir $(NET)
 
 devnet-blocks: ## Lista os blocos, verificados aqui (assinaturas, encadeamento e raiz Merkle)
+	@$(CARGO) build -q -p teko-node
 	@$(NODE) blocks --dir $(NET)
 
 VOTES ?= 5,5

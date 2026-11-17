@@ -32,9 +32,10 @@ pub use error::NodeError;
 pub use net::{PeerClient, genesis_hash_of};
 pub use node::{Node, NodeConfig, NodeHandle};
 pub use setup::{
-    DEVNET_CRED_TYPES, ECONOMY_FILE, NetFiles, PeerLink, generate_validator_key, genesis_network,
-    init_economy, init_economy_with_issuer, init_network, load_class_registrar_keys, load_economy,
-    load_network, load_orgmember_keys, load_registrar_keys, load_validator_key, node_dir,
-    orgmember_file, parse_peers, read_validator_key,
+    DEVNET_CRED_TYPES, ECONOMY_FILE, NetFiles, PeerLink, Who, generate_validator_key,
+    genesis_network, init_economy, init_economy_with_issuer, init_network,
+    load_class_registrar_keys, load_economy, load_network, load_orgmember_keys,
+    load_registrar_keys, load_validator_key, node_dir, orgmember_file, parse_peers,
+    read_validator_key, who_is,
 };
 pub use world::NodeWorld;

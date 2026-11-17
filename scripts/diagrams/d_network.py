@@ -164,6 +164,21 @@ def p2p_session():
     d.legend([(MUTED, "mensagem", False), (BOTO, "prova de identidade", False), (GREEN, "conferência", True), (RED, "abuso", False)])
     return d
 
+def testnet_two_machines():
+    d = D("testnet-two-machines", 1100, 440, "Testnet em dois computadores", "Quatro instituições, duas em cada máquina; cada nó tem uma porta de pares e uma pública", "REDE")
+    d.region(40, 100, 440, 232, "Computador A (IP_A)", "onca")
+    d.region(620, 100, 440, 232, "Computador B (IP_B)", "boto")
+    d.arrow([(440, 192), (660, 192)], "boto", label="PARES (NOISE)", at=(550, 176))
+    d.arrow([(440, 272), (660, 272)], "boto", label="PARES (NOISE)", at=(550, 256))
+    d.node(72, 156, 368, 72, "Instituição 0", "pares 7901 · pública 7911", "focal", "nó 0")
+    d.node(72, 236, 368, 72, "Instituição 1", "pares 7902 · pública 7912", "plain", "nó 1")
+    d.node(660, 156, 368, 72, "Instituição 2", "pares 7901 · pública 7911", "plain", "nó 2")
+    d.node(660, 236, 368, 72, "Instituição 3", "pares 7902 · pública 7912", "plain", "nó 3")
+    d.text(40, 360, "Todas as instituições falam com todas (mostrado só 0 com 2 e 1 com 3). Com 4, a rede tolera uma cair.", 11, MUTED)
+    d.text(40, 380, "A porta de pares só aceita quem prova a chave; a pública só lê e envia, para a Suite e o explorador.", 11, MUTED)
+    d.legend([(BOTO, "sessão cifrada entre instituições", False)])
+    return d
+
 def suite_architecture():
     d = D("suite-architecture", 1100, 480, "Dentro da Teko Suite", "Interface fina, regras no Rust; o PIN nunca passa por aqui", "SUITE")
     d.arrow([(240, 178), (310, 178)], "default", label="IPC Tauri", at=(275, 164))

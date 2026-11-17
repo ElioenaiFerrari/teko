@@ -544,25 +544,45 @@ fn run(args: Vec<String>) -> Result<(), String> {
         }
         "blocks" => {
             let net = load_network(&dir).map_err(e)?;
-            let chain = NodeClient::new(net.peers)
+            let chain = NodeClient::new(net.peers.clone())
                 .sync_chain(&net.profile)
                 .map_err(e)?;
             println!(
                 "{} blocos verificados (certificado de commit, encadeamento e raiz Merkle):",
                 chain.height()
             );
+            let label = |w: &teko_node::Who| match w.index {
+                Some(i) => format!("{i} ({})", w.host),
+                None => format!(
+                    "?{}",
+                    teko_crypto::hex::encode(&w.key[..4.min(w.key.len())])
+                ),
+            };
             for d in chain.blocks() {
                 let Ok(b) = d.block() else { continue };
-                let (precommits, round) = d
+                let round = d.commit.as_ref().map_or(0, |c| c.round);
+                let mut signers: Vec<teko_node::Who> = d
                     .commit
                     .as_ref()
-                    .map_or((0, 0), |c| (c.precommits.len(), c.round));
+                    .map(|c| {
+                        c.precommits
+                            .iter()
+                            .map(|v| teko_node::who_is(&net.links, &v.validator))
+                            .collect()
+                    })
+                    .unwrap_or_default();
+                signers.sort_by_key(|w| w.index.unwrap_or(usize::MAX));
+                let hosts: std::collections::BTreeSet<&str> =
+                    signers.iter().map(|w| w.host.as_str()).collect();
                 println!(
-                    "  #{} · {} entradas · {} precommits · rodada {}",
+                    "  #{} · {} entradas · rodada {} · proposto por {}\n      assinaram {} instituição(ões) em {} computador(es): {}",
                     b.height,
                     b.entries.len(),
-                    precommits,
-                    round
+                    round,
+                    label(&teko_node::who_is(&net.links, &b.proposer)),
+                    signers.len(),
+                    hosts.len(),
+                    signers.iter().map(label).collect::<Vec<_>>().join(", ")
                 );
             }
         }

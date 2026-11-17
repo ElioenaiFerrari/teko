@@ -50,4 +50,4 @@ Os validadores falam por sessões **Noise** na **porta de pares**: o handshake l
 
 ![Conexão entre instituições: Noise, prova da chave de consenso, conferência do conjunto em vigor, pedidos cifrados com limites e a porta pública para clientes](../diagrams/p2p-session.png)
 
-Código: `crates/teko-p2p` (handshake, sessão, limites, registros), `tools/teko-node/src/net.rs` (pares, envio, descoberta), `serve.rs` (as duas portas), `dkg.rs`. Testes: `tools/teko-node/tests/security.rs` e `tests/network.rs`, `tests/economy.rs` (consenso e economia pelo canal seguro). Runbook: [TESTNET.md](../TESTNET.md).
+Código: `crates/teko-p2p` (handshake, sessão, limites, registros), `tools/teko-node/src/net.rs` (pares, envio, descoberta), `serve.rs` (as duas portas), `dkg.rs`. Testes: `tools/teko-node/tests/security.rs` e `tests/network.rs`, `tests/economy.rs` (consenso e economia pelo canal seguro). Runbook: [TESTNET.md](../TESTNET.md); o roteiro de [dois computadores](../TESTNET-TWO-MACHINES.md) foi validado numa rede local (testes locais), inclusive com validadores derrubados. Pela internet/NAT ainda não.

@@ -20,7 +20,11 @@ O `teko-node` só falava TCP puro em loopback: sem autenticação, sem cifra, se
 7. **Descoberta.** Cada validador publica um **registro de endereço assinado** (`PeerRecord`: chave, endereço de pares e público, `seq` = hora da assinatura, validade de 1 dia, no máximo 7) e os nós os trocam a cada 20 s pelas sessões autenticadas. Só valem chaves do conjunto de validadores, com `seq` maior, não vencidos, de endereço bem formado e da mesma rede; o livro persiste em `node-<i>/peers.book`. O `peers.txt` (`index peer=… public=… key=…`) é só o **bootstrap**: um registro assinado mais novo vence. Um nó que mudou de endereço é reencontrado sem editar arquivo nenhum.
 8. **Operação.** `teko-node keygen` (cada instituição cria a chave **na própria máquina**; só a pública viaja), `genesis` (monta `network.txt` e `peers.txt` das públicas e endereços), `economy-init`, `genesis-hash` (conferência fora da banda; o hash entra no handshake: genesis diferente = recusado). `make devnet` usa exatamente o mesmo caminho seguro (não há atalho de teste). Runbook em [docs/TESTNET.md](../TESTNET.md).
 
+## Validação
+Em 2026-11-17 o dono do produto executou o roteiro [TESTNET-TWO-MACHINES](../TESTNET-TWO-MACHINES.md) em **dois computadores na mesma rede local** (4 instituições, 2 por máquina), todos os passos: `keygen`, `genesis`, conferência do `genesis-hash`, subida dos nós, `status`, cerimônia de chave e `blocks`, e a derrubada de validadores (a rede tolerou uma queda, pausou com duas e retomou). Validação manual, sem teste automatizado equivalente: os testes automatizados seguem em loopback.
+
 ## Limites honestos
+- **Não validado ainda:** pela internet, atrás de NAT, com mais de dois computadores e com latência alta.
 - A **porta pública não é cifrada** nem autentica o servidor: quem observa a rede vê o que cada cliente consulta (o conteúdo é reverificado pelo cliente, então um nó mentiroso é detectado, não obedecido).
 - A descoberta cobre só **validadores** (conjunto fechado): não há nós observadores, NAT traversal, DHT nem rede aberta.
 - **Qualquer instituição pode coordenar o DKG e, portanto, sabotá-lo** (a confiança entre elas é igual): o sigilo não depende disso, a disponibilidade sim.

@@ -31,7 +31,7 @@ Tudo em pt-BR (código e identificadores ficam em inglês). Cada fluxo é um arq
 | 16 | [Credenciais na chain e app do emissor](flows/16-credentials-on-chain.md) | Como um órgão emite uma credencial, com contestação e validade? |
 
 ## Referência técnica
-[ARCHITECTURE](ARCHITECTURE.md) · [THREAT-MODEL](THREAT-MODEL.md) · [KEY-HIERARCHY](KEY-HIERARCHY.md) · [DEVICE-PROTOCOL](DEVICE-PROTOCOL.md) · [ONBOARDING-FLOW](ONBOARDING-FLOW.md) · [RECOVERY](RECOVERY.md) · [NETWORKS](NETWORKS.md) · [TESTNET](TESTNET.md) · [PHASE-2-VOTING](PHASE-2-VOTING.md) · [RELEASE](RELEASE.md) · [TEST-MATRIX](TEST-MATRIX.md) · [GLOSSARY](GLOSSARY.md) · [ADRs](adr/README.md)
+[ARCHITECTURE](ARCHITECTURE.md) · [THREAT-MODEL](THREAT-MODEL.md) · [KEY-HIERARCHY](KEY-HIERARCHY.md) · [DEVICE-PROTOCOL](DEVICE-PROTOCOL.md) · [ONBOARDING-FLOW](ONBOARDING-FLOW.md) · [RECOVERY](RECOVERY.md) · [NETWORKS](NETWORKS.md) · [TESTNET](TESTNET.md) · [TESTNET em dois computadores](TESTNET-TWO-MACHINES.md) · [PHASE-2-VOTING](PHASE-2-VOTING.md) · [RELEASE](RELEASE.md) · [TEST-MATRIX](TEST-MATRIX.md) · [GLOSSARY](GLOSSARY.md) · [ADRs](adr/README.md)
 
 ## Manter a documentação viva
 Toda mudança de comportamento, comando `make`, crate, protocolo ou fluxo atualiza, **no mesmo trabalho**, o [README](../README.md) e o fluxo correspondente (texto + diagrama). Os diagramas são gerados por `make diagrams`; `make docs-check` confere links, imagens, texto alternativo e crates no README.

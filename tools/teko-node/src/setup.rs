@@ -38,7 +38,40 @@ pub struct NetFiles {
 /// How far the public port sits above the peer port in the local test network.
 pub const PUBLIC_PORT_OFFSET: u16 = 8;
 
+/// Who a consensus key is on the network: the institution's position in `peers.txt` and the host
+/// (computer) it runs on, so a block's signers can be shown as "institution 2, on 192.168.0.11".
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Who {
+    /// Position in `peers.txt`, or `None` for a key that is not listed.
+    pub index: Option<usize>,
+    pub host: String,
+    pub key: Vec<u8>,
+}
+
+/// Names `key` from the links of `peers.txt`.
+pub fn who_is(links: &[PeerLink], key: &[u8]) -> Who {
+    match links.iter().position(|l| l.key == key) {
+        Some(i) => Who {
+            index: Some(i),
+            host: links[i].host().to_string(),
+            key: key.to_vec(),
+        },
+        None => Who {
+            index: None,
+            host: String::new(),
+            key: key.to_vec(),
+        },
+    }
+}
+
 impl PeerLink {
+    /// The host part of the peer address (no port): which computer this institution runs on.
+    pub fn host(&self) -> &str {
+        self.peer
+            .rsplit_once(':')
+            .map_or(self.peer.as_str(), |(h, _)| h)
+    }
+
     /// The line of `peers.txt`.
     pub fn to_line(&self, index: usize) -> String {
         format!(
@@ -490,4 +523,39 @@ pub fn load_class_registrar_keys(dir: &Path, class: &str) -> Vec<SigningKey> {
 /// The TEST registrar keys of the `imovel` class (kept for older callers).
 pub fn load_registrar_keys(dir: &Path) -> Vec<SigningKey> {
     load_class_registrar_keys(dir, "imovel")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn link(k: u8, host: &str) -> PeerLink {
+        PeerLink {
+            key: vec![k; 33],
+            peer: format!("{host}:7901"),
+            public: format!("{host}:7911"),
+        }
+    }
+
+    #[test]
+    fn a_signer_is_named_by_its_position_and_its_computer() {
+        let links = vec![
+            link(1, "192.168.0.10"),
+            link(2, "192.168.0.10"),
+            link(3, "pc-b.local"),
+        ];
+        let w = who_is(&links, &[3; 33]);
+        assert_eq!((w.index, w.host.as_str()), (Some(2), "pc-b.local"));
+        assert_eq!(who_is(&links, &[1; 33]).host, "192.168.0.10");
+        // a key that is not in peers.txt is shown as unknown, never mistaken for an institution
+        let u = who_is(&links, &[9; 33]);
+        assert_eq!((u.index, u.host.as_str()), (None, ""));
+        // an address with no port still gives a host
+        let bare = PeerLink {
+            key: vec![4; 33],
+            peer: "solo".into(),
+            public: "solo".into(),
+        };
+        assert_eq!(bare.host(), "solo");
+    }
 }

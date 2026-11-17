@@ -1,5 +1,7 @@
 # Testnet em várias máquinas (runbook)
 
+Primeira vez? Siga o [roteiro curto para dois computadores](TESTNET-TWO-MACHINES.md): ele já foi **validado em dois computadores numa rede local** (testes locais, 2026-11-17), inclusive derrubando e religando validadores. Esta página é a versão de referência.
+
 Prova de conceito, **dados fictícios, chaves de teste**. A mainnet segue travada. Cada instituição roda **um** `teko-node` na própria máquina; só chaves públicas e arquivos públicos viajam. Desenho e limites: [ADR-0048](adr/0048-rede-de-testnet-multi-maquina.md) e [NETWORKS](NETWORKS.md).
 
 ## 0. O que você precisa

@@ -4,3 +4,7 @@
 node_modules
 apps/suite/src-tauri/gen
 __pycache__/
+# testes locais em dois computadores (docs/TESTNET-TWO-MACHINES.md): contêm chaves SECRETAS de teste
+/net/
+/validators.txt
+/pub.txt

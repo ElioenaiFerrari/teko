@@ -36,6 +36,8 @@ pub struct Shared {
     pub network: String,
     /// Profile of the vote ledger (PoA), when this network has one to show.
     pub profile: Option<NetworkProfile>,
+    /// `peers.txt`: names each signer (institution and computer) in the vote ledger.
+    pub links: Vec<teko_node::PeerLink>,
     pub votes: Mutex<VotesSnapshot>,
     /// Off-chain metadata records of assets (ADR-0032). Only a LOCAL devnet has them;
     /// they hold the owners' data, so a public explorer shows just the chain's hash.
@@ -53,6 +55,7 @@ impl Shared {
             meta: Mutex::new(Meta::default()),
             network: network.to_string(),
             profile: None,
+            links: Vec::new(),
             votes: Mutex::new(VotesSnapshot::default()),
             store: None,
         }
@@ -65,8 +68,9 @@ impl Shared {
     }
 
     /// Also follows the vote ledger described by `profile`.
-    pub fn with_votes(mut self, profile: NetworkProfile) -> Self {
+    pub fn with_votes(mut self, profile: NetworkProfile, links: Vec<teko_node::PeerLink>) -> Self {
         self.profile = Some(profile);
+        self.links = links;
         self
     }
 
@@ -115,7 +119,7 @@ pub fn sync_once(shared: &Shared, client: &NodeClient) {
         // verified by `sync_chain` (signatures, linkage, Merkle log); an unreachable
         // network keeps the last snapshot
         if let Ok(chain) = client.sync_chain(profile) {
-            *shared.votes() = snapshot(&chain);
+            *shared.votes() = snapshot(&chain, &shared.links);
         }
     }
     let nodes = client

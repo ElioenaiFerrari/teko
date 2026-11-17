@@ -126,7 +126,10 @@ fn the_explorer_verifies_the_chain_of_three_real_nodes_and_decodes_a_transfer() 
 
     let shared = Shared::new(Index::new(ec.genesis.clone()).unwrap(), "devnet")
         .with_store(teko_assets::MetadataStore::new(dir.join("assets-metadata")))
-        .with_votes(load_network(&dir).unwrap().profile);
+        .with_votes(
+            load_network(&dir).unwrap().profile,
+            load_network(&dir).unwrap().links,
+        );
     bump(&client, &ec.genesis.chain_id, 4);
     wait("a few blocks verified by the explorer", 30, || {
         sync_once(&shared, &client);
@@ -219,6 +222,18 @@ fn the_explorer_verifies_the_chain_of_three_real_nodes_and_decodes_a_transfer() 
     assert_eq!(votes["available"], true);
     assert_eq!(votes["validators"], 3);
     assert_eq!(votes["quorum"], 3); // more than 2/3 of 3 institutions
+    // every vote block names who certified it: institutions of peers.txt, at least the quorum
+    for b in votes["blocks"].as_array().unwrap() {
+        let signers = b["signers"].as_array().unwrap();
+        assert!(signers.len() >= 3, "{b}");
+        assert!(
+            signers
+                .iter()
+                .all(|s| s["index"].is_u64() && s["host"] == "127.0.0.1"),
+            "{b}"
+        );
+        assert_eq!(b["proposer"]["host"], "127.0.0.1");
+    }
     shared.index().audit().unwrap();
 
     for n in nodes {

@@ -104,6 +104,11 @@
     delivered: '',
     candForm: { eleicao: 'geral-2026', days: 120, cargo: 'governador', uf: 'SP', mun: '', numero: '', nome: '', partido: '', legenda: '', holder: '', batch: '' },
     candResult: [],
+    // certidões (ADR-0047)
+    marriageForm: { matricula: '', data: '', regime: 'comunhao-parcial', cartorio: '', an: '', ak: '', bn: '', bk: '' },
+    divorceForm: { matricula: '', data: '', forma: 'extrajudicial', cartorio: '' },
+    marriages: [],
+    civilResult: [],
   };
 
   const PROMPTS = {
@@ -149,14 +154,17 @@
   async function refreshCivic() {
     try { S.civicReqs = await invoke('civic_requests'); } catch (e) { S.civicReqs = []; }
   }
-  async function refresh() { await refreshDevice(); await refreshOverview(); if (S.route === 'civic') await refreshCivic(); render(); }
+  async function refreshMarriages() {
+    try { S.marriages = await invoke('civil_marriages'); } catch (e) { S.marriages = []; }
+  }
+  async function refresh() { await refreshDevice(); await refreshOverview(); if (S.route === 'civic') await refreshCivic(); if (S.route === 'civil') await refreshMarriages(); render(); }
 
   const unlocked = () => !!(S.dev && S.dev.connected && S.dev.status && !S.dev.status.locked);
   const myOrgs = () => (S.ov ? S.ov.orgs.filter((o) => o.is_member) : []);
 
   // ───────────────────────── ações ─────────────────────────
   const ACTIONS = {
-    async nav(el) { S.route = el.dataset.id; S.result = null; if (S.route === 'civic') await refreshCivic(); render(); },
+    async nav(el) { S.route = el.dataset.id; S.result = null; if (S.route === 'civic') await refreshCivic(); if (S.route === 'civil') await refreshMarriages(); render(); },
     async unlock() {
       try {
         const r = await call('unlock');
@@ -227,6 +235,28 @@
         toast(`${ok} de ${S.candResult.length} candidaturas propostas. Faltam as aprovações dos outros membros.`, ok ? 'ok' : 'bad');
       } catch (e) { toast(asErr(e).message); }
       await refreshOverview(); render();
+    },
+    async marriage() {
+      const v = (id) => $(id).value.trim();
+      const f = { matricula: v('#m-mat'), data: v('#m-data'), regime: v('#m-regime'), cartorio: v('#m-cart'), an: v('#m-an'), ak: v('#m-ak'), bn: v('#m-bn'), bk: v('#m-bk') };
+      S.marriageForm = f;
+      try {
+        S.civilResult = await call('civil_marriage_issue', { form: { matricula: f.matricula, data: f.data, regime: f.regime, cartorio: f.cartorio, a: { nome: f.an, holder_key: f.ak }, b: { nome: f.bn, holder_key: f.bk } } });
+        const ok = S.civilResult.filter((r) => !r.error).length;
+        toast(`${ok} de ${S.civilResult.length} certidões de casamento propostas. Faltam as aprovações dos outros membros.`, ok === S.civilResult.length ? 'ok' : 'bad');
+      } catch (e) { toast(asErr(e).message); }
+      await refreshOverview(); await refreshMarriages(); render();
+    },
+    async divorce() {
+      const v = (id) => $(id).value.trim();
+      const f = { matricula: v('#d-mat'), data: v('#d-data'), forma: v('#d-forma'), cartorio: v('#d-cart') };
+      S.divorceForm = f;
+      try {
+        S.civilResult = await call('civil_divorce_issue', { form: f });
+        const bad = S.civilResult.filter((r) => r.error).length;
+        toast(bad ? 'O divórcio não foi concluído: veja o resultado.' : 'Certidões de divórcio propostas e casamento com a revogação iniciada. Faltam os votos dos outros membros.', bad ? 'bad' : 'ok');
+      } catch (e) { toast(asErr(e).message); }
+      await refreshOverview(); await refreshMarriages(); render();
     },
     filter(el) { S.filter = el.dataset.id; render(); },
     async copy(el) { try { await navigator.clipboard.writeText($(el.dataset.target).textContent); toast('Copiado.', 'ok'); } catch { toast('Não consegui copiar.'); } },
@@ -329,6 +359,41 @@
       </div></article>${res}${del}`;
   }
 
+  const REGIMES = [['comunhao-parcial', 'Comunhão parcial de bens'], ['comunhao-universal', 'Comunhão universal de bens'], ['separacao-total', 'Separação total de bens'], ['participacao-final', 'Participação final nos aquestos']];
+  const ST = { proposed: 'proposta', pending: 'em contestação', active: 'válida', revoked: 'revogada', vetoed: 'vetada', expired: 'vencida', superseded: 'sucedida' };
+
+  function vCivil() {
+    const g = gate();
+    const orgs = myOrgs();
+    const ok = orgs.some((o) => o.ctype === 'certidao-casamento') && orgs.some((o) => o.ctype === 'certidao-divorcio');
+    if (g || !ok) return `${head('Certidões', 'Casamento e divórcio', '')}${g || callout('info', 'Sem órgão.', 'Sua carteira não é membro dos órgãos de certidões (tipos <code>certidao-casamento</code> e <code>certidao-divorcio</code>).')}`;
+    const m = S.marriageForm, d = S.divorceForm;
+    const res = S.civilResult.length ? `<article class="card"><h3>Resultado</h3>${S.civilResult.map((r) => `<p>${r.error ? chip('erro', 'bad') : chip('proposta', 'ok')} <strong>${esc(r.nome)}</strong> ${r.error ? esc(r.error) : `<span class="mono muted">${esc(short(r.id, 10, 6))}</span>`}</p>`).join('')}</article>` : '';
+    const open = S.marriages.filter((x) => x.active);
+    const list = S.marriages.length ? `<article class="card"><h3>Casamentos deste cartório</h3>${S.marriages.map((x) => `<p><strong>${esc(x.matricula)}</strong> · ${esc(x.data)} · ${esc(x.regime)}<br>${x.spouses.map((sp) => `${esc(sp.nome)} ${chip(ST[sp.status] || sp.status, sp.status === 'active' ? 'ok' : sp.status === 'revoked' ? 'bad' : 'warn')}`).join(' · ')}</p>`).join('')}</article>` : '';
+    return `${head('Certidões', 'Casamento e divórcio', 'São credenciais PRIVADAS: a chain guarda só um compromisso e cada titular guarda os dados. O casamento vale para os dois cônjuges (uma certidão para cada um); o divórcio encerra o casamento: as certidões de casamento são revogadas e a de divórcio fica como prova. Não vencem.')}
+      <article class="card"><h3>Registrar casamento</h3><div class="issue-form">
+        <label class="field"><span>Matrícula (a mesma nas duas certidões)</span><input class="input mono" id="m-mat" value="${esc(m.matricula)}"></label>
+        <label class="field"><span>Data do casamento (AAAA-MM-DD)</span><input class="input" id="m-data" value="${esc(m.data)}" placeholder="2020-02-29"></label>
+        <label class="field"><span>Regime de bens</span><select class="input" id="m-regime">${REGIMES.map(([k, l]) => `<option value="${k}" ${k === m.regime ? 'selected' : ''}>${l}</option>`).join('')}</select></label>
+        <label class="field"><span>Cartório</span><input class="input" id="m-cart" value="${esc(m.cartorio)}"></label>
+        <label class="field"><span>Cônjuge 1: nome</span><input class="input" id="m-an" value="${esc(m.an)}"></label>
+        <label class="field"><span>Cônjuge 1: chave de credencial (hex)</span><input class="input mono" id="m-ak" value="${esc(m.ak)}" autocomplete="off" spellcheck="false"></label>
+        <label class="field"><span>Cônjuge 2: nome</span><input class="input" id="m-bn" value="${esc(m.bn)}"></label>
+        <label class="field"><span>Cônjuge 2: chave de credencial (hex)</span><input class="input mono" id="m-bk" value="${esc(m.bk)}" autocomplete="off" spellcheck="false"></label>
+        ${callout('info', 'Duas propostas, duas confirmações no dispositivo.', 'Uma certidão para cada cônjuge, com a mesma matrícula e cada uma nomeando o outro. Cada titular recebe os dados dele em <code>dev/issued</code> (entrega fora da chain).')}
+        <p><button class="btn" data-act="marriage">Propor no dispositivo</button></p>
+      </div></article>
+      <article class="card"><h3>Registrar divórcio</h3><div class="issue-form">
+        <label class="field"><span>Casamento (só os que têm as duas certidões válidas)</span><select class="input" id="d-mat"><option value="">escolha…</option>${open.map((x) => `<option value="${esc(x.matricula)}" ${x.matricula === d.matricula ? 'selected' : ''}>${esc(x.matricula)} · ${esc(x.spouses.map((sp) => sp.nome).join(' e '))}</option>`).join('')}</select></label>
+        <label class="field"><span>Data do divórcio (AAAA-MM-DD, depois do casamento)</span><input class="input" id="d-data" value="${esc(d.data)}" placeholder="2024-05-10"></label>
+        <label class="field"><span>Forma</span><select class="input" id="d-forma">${[['extrajudicial', 'Extrajudicial (em cartório)'], ['judicial', 'Judicial']].map(([k, l]) => `<option value="${k}" ${k === d.forma ? 'selected' : ''}>${l}</option>`).join('')}</select></label>
+        <label class="field"><span>Cartório</span><input class="input" id="d-cart" value="${esc(d.cartorio)}"></label>
+        ${callout('warn', 'Encerra o casamento.', 'As certidões de divórcio são emitidas para os dois e, em seguida, o seu voto de <strong>revogação</strong> das certidões de casamento é dado. Os outros membros do órgão completam a revogação (em teste: <code>make devnet-cosign</code>).')}
+        <p><button class="btn" data-act="divorce" ${open.length ? '' : 'disabled'}>Emitir divórcio no dispositivo</button></p>
+      </div></article>${res}${list}`;
+  }
+
   function vCand() {
     const g = gate();
     const org = myOrgs().find((o) => o.ctype === 'candidato');
@@ -395,7 +460,7 @@
     $('#devcard').innerHTML = `<div class="devcard__row"><div><div class="devcard__title">${ok ? 'Dispositivo conectado' : 'Sem dispositivo'}</div>
       <div class="devcard__sub">${ok ? (d.status.locked ? 'bloqueado' : 'desbloqueado') : esc((d && d.error) || 'procurando…')}</div></div></div>
       <div class="devcard__chips">${ok ? chip(d.status.wallet_ready ? 'Carteira pronta' : 'Sem carteira', d.status.wallet_ready ? 'ok' : 'warn') : ''}</div>`;
-    const items = [['orgs', 'Órgãos'], ['civic', 'ID cívico'], ['cand', 'Candidaturas'], ['issue', 'Emitir'], ['creds', 'Credenciais']];
+    const items = [['orgs', 'Órgãos'], ['civic', 'ID cívico'], ['cand', 'Candidaturas'], ['civil', 'Certidões'], ['issue', 'Emitir'], ['creds', 'Credenciais']];
     $('#nav').innerHTML = items.map(([id, l]) => `<button class="nav__item" data-act="nav" data-id="${id}" ${S.route === id ? 'aria-current="page"' : ''}><span>${l}</span></button>`).join('');
     $('#addr').textContent = d && d.addr ? `emulador ${d.addr}` : '';
   }
@@ -411,7 +476,7 @@
 
   function render() {
     renderDevice();
-    const views = { orgs: vOrgs, civic: vCivic, cand: vCand, issue: vIssue, creds: vCreds };
+    const views = { orgs: vOrgs, civic: vCivic, cand: vCand, civil: vCivil, issue: vIssue, creds: vCreds };
     const focus = document.activeElement && document.activeElement.id;
     $('#main').innerHTML = `<div class="view">${(views[S.route] || vOrgs)()}</div>`;
     if (focus) { const e = document.getElementById(focus); if (e) e.focus(); }

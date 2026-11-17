@@ -48,5 +48,11 @@ make devnet-cosign                              # SIMULA os outros membros aprov
 make suite                                      # Credenciais: sua chave por tipo e o que foi emitido; ID cívico: pedir e instalar o pacote
 ```
 
+## Certidões de casamento e de divórcio (ADR-0047)
+
+![Certidões: uma para cada cônjuge, aprovadas pelo órgão; o divórcio é emitido para os dois e o casamento é revogado](../diagrams/civil-registry.png)
+
+Dois tipos privados que não vencem: `certidao-casamento` (uma credencial para **cada cônjuge**, a mesma matrícula, cada uma nomeando o outro) e `certidao-divorcio` (a matrícula do casamento que encerra). Na aba **Certidões** do Emissor o cartório registra o casamento (duas confirmações no dispositivo) e depois o divórcio: o Emissor monta as certidões de divórcio a partir das de casamento (nomes e matrícula não divergem), confere que o divórcio é depois do casamento, propõe as duas e só então dá o voto de **revogação** das certidões de casamento; os outros membros completam o quórum (em teste, `make devnet-cosign` simula). A chain guarda só os compromissos; os dados ficam com cada titular. Código: `crates/teko-credentials/src/civil.rs` (regras), `apps/issuer/src-tauri/src/commands.rs` (`civil_*`). Teste em nós reais: `tools/devnet-sim/tests/civil.rs`.
+
 ## Limites honestos
 Sem validade jurídica; sem auditoria; só devnet. A **credencial de identidade cívica** é o tipo `civic` ([fluxo 03](03-credentials-and-reissue.md), [ADR-0038](../adr/0038-id-civico-como-credencial-na-chain.md)). As **candidaturas** (tipo público `candidato`) e o **eleito** (tipo de sistema `eleito`, vitalício, criado do resultado certificado pelas instituições) estão no [ADR-0040](../adr/0040-candidatos-por-credencial-resultado-certificado-e-eleito.md) e no [fluxo 07](07-tally-and-results.md).

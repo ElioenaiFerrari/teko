@@ -165,11 +165,14 @@ pub fn init_economy(
 /// The credential types of the local test network (ADR-0037): name, public claims, contest
 /// window (s) and validity (s). Each has an organ of 3 members, 2-of-3: the `issuer` wallet (when
 /// given) and simulated test members whose keys live in `orgmember-<type>-<i>.key`.
-pub const DEVNET_CRED_TYPES: [(&str, bool, u64, u64); 4] = [
+pub const DEVNET_CRED_TYPES: [(&str, bool, u64, u64); 6] = [
     ("civic", false, 1_200, 315_360_000),
     ("cnh-a", false, 1_200, 315_360_000),
     ("cnh-b", false, 1_200, 315_360_000),
     ("candidato", true, 120, 31_536_000),
+    // civil registry (ADR-0047): private, never expire (validity 0); a divorce revokes the marriage
+    ("certidao-casamento", false, 1_200, 0),
+    ("certidao-divorcio", false, 1_200, 0),
 ];
 
 /// File of the simulated organ member `i` of a credential type (TEST key).

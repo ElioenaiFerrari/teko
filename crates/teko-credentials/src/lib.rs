@@ -17,6 +17,7 @@
 
 pub mod candidate;
 pub mod civic;
+pub mod civil;
 mod module;
 mod query;
 mod types;

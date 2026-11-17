@@ -23,12 +23,18 @@
       cred({ id: H('3'), status: 'pending', active_at: now + 900, can_veto: true }),
       cred({ id: H('4'), status: 'vetoed', reason: 'fraude documental' }),
     ] },
+    { ctype: 'certidao-casamento', public: false, threshold: 2, members: 3, contest_secs: 1200, validity_secs: 0, is_member: true, credentials: [] },
+    { ctype: 'certidao-divorcio', public: false, threshold: 2, members: 3, contest_secs: 1200, validity_secs: 0, is_member: true, credentials: [] },
     { ctype: 'candidato', public: true, threshold: 2, members: 3, contest_secs: 1200, validity_secs: 31536000, is_member: false, credentials: [
       cred({ id: H('5'), ctype: 'candidato', claims: 'cargo=governador;uf=SP;numero=13;nome=Ana Souza', status: 'pending', active_at: now + 600 }),
     ] },
   ];
   const prompt = async (kind, ms = 800) => { emit('device-prompt', kind); await wait(ms); };
+  const marriages = [{ matricula: '2020.0145.77', data: '2020-02-29', regime: 'comunhao-parcial', cartorio: '1º Ofício de Registro Civil de São Paulo', active: true, spouses: [{ nome: 'Ana Souza', conjuge: 'Beto Lima', id: H('a'), status: 'active' }, { nome: 'Beto Lima', conjuge: 'Ana Souza', id: H('b'), status: 'active' }] }];
   const handlers = {
+    civil_marriages: async () => marriages,
+    civil_marriage_issue: async ({ form }) => { await prompt('sign_credential_op', 900); await prompt('sign_credential_op', 900); return [{ nome: form.a.nome, id: H('c'), error: '' }, { nome: form.b.nome, id: H('d'), error: '' }]; },
+    civil_divorce_issue: async () => { await prompt('sign_credential_op', 900); return [{ nome: 'Ana Souza', id: H('e'), error: '' }, { nome: 'Beto Lima', id: H('f'), error: '' }]; },
     device_status: async () => status(),
     unlock: async () => { await prompt('pin_entry'); dev.locked = false; return { result: 'unlocked' }; },
     overview: async () => {

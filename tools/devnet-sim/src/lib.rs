@@ -328,6 +328,52 @@ pub fn cosign(dir: &Path, ctype: Option<&str>) -> Result<String, String> {
         let tname = String::from_utf8_lossy(&name).to_string();
         let sims = teko_node::load_orgmember_keys(dir, &tname);
         for (id, rec) in teko_credentials::credentials_of_type(World::ledger(&world), &name) {
+            // a REVOCATION a real member started (a divorce ends a marriage, ADR-0047): the simulated
+            // members complete the quorum
+            let now = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map_or(0, |d| d.as_secs());
+            if rec.status_at(now) == Status::Active
+                && !rec.revoke_votes.is_empty()
+                && rec.revoke_votes.len() < t.threshold as usize
+            {
+                let mut votes = rec.revoke_votes.clone();
+                let mut done = 0;
+                for k in &sims {
+                    if votes.len() >= t.threshold as usize {
+                        break;
+                    }
+                    let me = teko_ledger::address_of(&teko_crypto::public_key_bytes(k));
+                    if !t.members.iter().any(|m| m.as_slice() == me) || votes.contains(&me.to_vec())
+                    {
+                        continue;
+                    }
+                    let tx = teko_ledger::Tx::new_signed(
+                        k,
+                        world.chain_id(),
+                        world.nonce(&me),
+                        CREDENTIALS_MODULE,
+                        Op::Revoke(VoteOp {
+                            ctype: name.clone(),
+                            id: id.clone(),
+                            reason: "revogação simulada".into(),
+                        })
+                        .encode(),
+                    );
+                    world.submit(tx)?;
+                    votes.push(me.to_vec());
+                    done += 1;
+                }
+                if done > 0 {
+                    lines.push(format!(
+                        "{tname}: {done} membro(s) simulado(s) revogou(aram) {}… ({}/{} votos)",
+                        teko_crypto::hex::encode(&id[..4.min(id.len())]),
+                        votes.len(),
+                        t.threshold
+                    ));
+                }
+                continue;
+            }
             if rec.status_at(0) != Status::Proposed {
                 continue;
             }
@@ -370,7 +416,7 @@ pub fn cosign(dir: &Path, ctype: Option<&str>) -> Result<String, String> {
     }
     if lines.is_empty() {
         return Err(
-            "nenhuma credencial esperando aprovação (ou os membros simulados já aprovaram)".into(),
+            "nenhuma credencial esperando aprovação ou revogação (ou os membros simulados já votaram)".into(),
         );
     }
     Ok(lines.join("\n"))

@@ -55,7 +55,7 @@ devnet-founder: ## Define a carteira do fundador (recebe as recompensas) e zera 
 devnet-equivocate: ## SIMULAÇÃO (só dev): o validador de teste assina 2 votos conflitantes e leva Slash. Uso: make devnet-equivocate [VALIDATOR=0]. Antes, trave stake na Suite (Validadores)
 	$(CARGO) run -q -p devnet-sim -- equivocate --dir $(NET) --validator $(or $(VALIDATOR),0)
 
-devnet-cosign: ## SIMULA os membros de teste dos órgãos aprovando credenciais pendentes (TYPE=cnh-b opcional); só dev
+devnet-cosign: ## SIMULA os membros de teste dos órgãos aprovando credenciais pendentes e completando revogações iniciadas (TYPE=cnh-b opcional); só dev
 	@$(CARGO) run -q -p devnet-sim -- cosign --dir $(NET) $(if $(TYPE),--type $(TYPE))
 
 candidates: ## SIMULA o órgão emitindo as candidaturas de exemplo na chain (ELECTION=geral-2026); depois: make election (só dev)

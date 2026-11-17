@@ -133,6 +133,21 @@ def credential_issuance():
     d.legend([(MUTED, "transação do membro (dispositivo)", False), (GREEN, "efeito", True), (RED, "veto ou revogação", False)])
     return d
 
+def civil_registry():
+    d = D("civil-registry", 1100, 0, "Certidões de casamento e divórcio", "Uma certidão para cada cônjuge; o divórcio encerra o casamento e fica como prova", "CREDENCIAIS")
+    A = [("c", "Cartório", "Emissor + dispositivo", "onca", 110), ("l", "Livro de economia", "só compromissos", "focal", 420), ("t", "Cônjuges", "guardam os dados", "boto", 720), ("o", "Outros membros", "completam o quórum", "plain", 990)]
+    M = [("c", "l", "casamento: uma Propose para cada cônjuge (mesma matrícula)", "default", False),
+         ("o", "l", "Approve: ativas depois da janela, sem vencimento", "default", False),
+         ("c", "t", "dados e sal de cada um, fora da chain", "boto", False),
+         ("c", "l", "divórcio: uma Propose para cada um (matrícula do casamento)", "default", False),
+         ("c", "l", "Revoke do casamento, só depois das duas de divórcio", "bad", False),
+         ("o", "l", "Revoke completa o quórum: o casamento deixa de valer", "bad", False),
+         ("l", "t", "divórcio ativa: fica como prova", "ok", True)]
+    N = [(1, "l", "A chain nunca vê nomes, datas nem regime", 420), (4, "l", "O Emissor confere nomes, matrícula e datas antes de pedir ao dispositivo", 420)]
+    d.sequence(A, M, notas=N, passo=36)
+    d.legend([(MUTED, "transação do membro (dispositivo)", False), (BOTO, "entrega ao titular", False), (GREEN, "efeito", True), (RED, "revogação", False)])
+    return d
+
 def suite_architecture():
     d = D("suite-architecture", 1100, 480, "Dentro da Teko Suite", "Interface fina, regras no Rust; o PIN nunca passa por aqui", "SUITE")
     d.arrow([(240, 178), (310, 178)], "default", label="IPC Tauri", at=(275, 164))

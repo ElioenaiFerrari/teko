@@ -573,7 +573,10 @@ pub async fn vote(
     issuer: State<'_, Issuer>,
     form: VoteForm,
 ) -> Result<String, UiError> {
-    let issuer = issuer.inner().clone();
+    vote_inner(app, issuer.inner().clone(), form).await
+}
+
+async fn vote_inner(app: AppHandle, issuer: Issuer, form: VoteForm) -> Result<String, UiError> {
     let kind = match form.op.as_str() {
         "approve" => CredentialOpKind::Approve,
         "veto" => CredentialOpKind::Veto,
@@ -981,6 +984,311 @@ pub async fn candidacies_issue(
                 error: e.message,
             },
         });
+    }
+    Ok(out)
+}
+
+// ───────────────────────── civil registry: marriage and divorce (ADR-0047) ─────────────────────────
+
+#[derive(Deserialize, Clone)]
+pub struct SpouseForm {
+    nome: String,
+    /// Hex of the spouse's credential key for the type (from `GetCredentialKey` on THEIR device).
+    holder_key: String,
+}
+
+#[derive(Deserialize)]
+pub struct MarriageForm {
+    matricula: String,
+    /// `AAAA-MM-DD`.
+    data: String,
+    regime: String,
+    cartorio: String,
+    a: SpouseForm,
+    b: SpouseForm,
+}
+
+#[derive(Serialize)]
+pub struct CivilResult {
+    nome: String,
+    id: String,
+    error: String,
+}
+
+fn spouse_key(f: &SpouseForm) -> Result<Vec<u8>, UiError> {
+    hex::decode(f.holder_key.trim())
+        .ok()
+        .filter(|k| k.len() == 33 || k.len() == 65)
+        .ok_or_else(|| {
+            ui_err(
+                "InvalidArgument",
+                format!("chave de credencial de {} inválida (hex)", f.nome.trim()),
+            )
+        })
+}
+
+/// The registry issues a marriage certificate to EACH spouse: the same registry number, each naming
+/// the other. Everything is validated before the first device confirmation; a failure of one does not
+/// stop the other (the registry can issue the missing one again).
+#[tauri::command]
+pub async fn civil_marriage_issue(
+    app: AppHandle,
+    issuer: State<'_, Issuer>,
+    form: MarriageForm,
+) -> Result<Vec<CivilResult>, UiError> {
+    use teko_credentials::civil::{MARRIAGE_TYPE, Marriage, Regime, iso_date, marriage_claims};
+    let regime = Regime::parse(form.regime.trim())
+        .ok_or_else(|| ui_err("InvalidArgument", "regime de bens desconhecido"))?;
+    if form.data.trim() > iso_date(now_secs()).as_str() {
+        return Err(ui_err("InvalidArgument", "a data do casamento é futura"));
+    }
+    let mut jobs = Vec::new();
+    for (me, other) in [(&form.a, &form.b), (&form.b, &form.a)] {
+        let claims = marriage_claims(&Marriage {
+            matricula: form.matricula.trim().to_string(),
+            data: form.data.trim().to_string(),
+            regime,
+            nome: me.nome.trim().to_string(),
+            conjuge: other.nome.trim().to_string(),
+            cartorio: form.cartorio.trim().to_string(),
+        })
+        .map_err(|m| ui_err("InvalidArgument", m))?;
+        jobs.push((me.nome.clone(), spouse_key(me)?, claims));
+    }
+    if jobs[0].1 == jobs[1].1 {
+        return Err(ui_err(
+            "InvalidArgument",
+            "os dois cônjuges não podem ter a mesma chave",
+        ));
+    }
+    let mut out = Vec::new();
+    for (nome, holder, claims) in jobs {
+        let r = issue_inner(
+            app.clone(),
+            issuer.inner().clone(),
+            MARRIAGE_TYPE.to_string(),
+            holder,
+            claims,
+            1,
+        )
+        .await;
+        out.push(match r {
+            Ok(r) => CivilResult {
+                nome,
+                id: r.id,
+                error: String::new(),
+            },
+            Err(e) => CivilResult {
+                nome,
+                id: String::new(),
+                error: e.message,
+            },
+        });
+    }
+    Ok(out)
+}
+
+#[derive(Serialize)]
+pub struct SpouseView {
+    nome: String,
+    conjuge: String,
+    id: String,
+    status: &'static str,
+}
+
+#[derive(Serialize)]
+pub struct MarriageView {
+    matricula: String,
+    data: String,
+    regime: String,
+    cartorio: String,
+    spouses: Vec<SpouseView>,
+    /// Both certificates are valid now: this marriage can be ended by a divorce.
+    active: bool,
+}
+
+/// The marriages THIS registry issued (it keeps the claims of what it issued), grouped by registry
+/// number, with the state of each certificate on the chain.
+fn marriages_issued() -> Result<Vec<MarriageView>, UiError> {
+    use teko_credentials::civil::{MARRIAGE_TYPE, parse_marriage};
+    let world = open_world()?;
+    let now = now_secs();
+    let ledger = World::ledger(&world);
+    let mut out: Vec<MarriageView> = Vec::new();
+    let Ok(dir) = fs::read_dir(issued_dir()) else {
+        return Ok(out);
+    };
+    for entry in dir.flatten() {
+        let Ok(text) = fs::read_to_string(entry.path()) else {
+            continue;
+        };
+        let Ok(b) = serde_json::from_str::<Bundle>(&text) else {
+            continue;
+        };
+        if b.ctype != MARRIAGE_TYPE {
+            continue;
+        }
+        let Ok(id) = hex::decode(&b.id) else { continue };
+        let Some(rec) = teko_credentials::credential(ledger, MARRIAGE_TYPE.as_bytes(), &id) else {
+            continue;
+        };
+        // only a bundle that matches the commitment on the chain counts
+        let Some((claims, _)) = load_bundle(&id, &rec) else {
+            continue;
+        };
+        let Some(m) = parse_marriage(&claims) else {
+            continue;
+        };
+        let view = SpouseView {
+            nome: m.nome.clone(),
+            conjuge: m.conjuge.clone(),
+            id: b.id.clone(),
+            status: status_name(rec.status_at(now)),
+        };
+        match out.iter_mut().find(|x| x.matricula == m.matricula) {
+            Some(x) => x.spouses.push(view),
+            None => out.push(MarriageView {
+                matricula: m.matricula,
+                data: m.data,
+                regime: m.regime.name().to_string(),
+                cartorio: m.cartorio,
+                spouses: vec![view],
+                active: false,
+            }),
+        }
+    }
+    for m in &mut out {
+        m.spouses.sort_by(|a, b| a.nome.cmp(&b.nome));
+        m.active = m.spouses.len() == 2 && m.spouses.iter().all(|s| s.status == "active");
+    }
+    out.sort_by(|a, b| b.data.cmp(&a.data).then(a.matricula.cmp(&b.matricula)));
+    Ok(out)
+}
+
+#[tauri::command]
+pub async fn civil_marriages() -> Result<Vec<MarriageView>, UiError> {
+    tauri::async_runtime::spawn_blocking(marriages_issued)
+        .await
+        .map_err(|e| ui_err("Internal", e))?
+}
+
+#[derive(Deserialize)]
+pub struct DivorceForm {
+    /// The registry number of the marriage it ends.
+    matricula: String,
+    data: String,
+    /// `judicial` or `extrajudicial`.
+    forma: String,
+    cartorio: String,
+}
+
+/// The registry ends a marriage: a divorce certificate to each former spouse, built from the
+/// marriage it issued (so the names and the registry number cannot disagree), and then the marriage
+/// certificates are REVOKED (the organ's vote; the quorum completes it). The marriage stops being
+/// valid and the divorce stays as the proof.
+#[tauri::command]
+pub async fn civil_divorce_issue(
+    app: AppHandle,
+    issuer: State<'_, Issuer>,
+    form: DivorceForm,
+) -> Result<Vec<CivilResult>, UiError> {
+    use teko_credentials::civil::{
+        DIVORCE_TYPE, Divorce, Forma, MARRIAGE_TYPE, divorce_claims, divorce_ends, iso_date,
+        parse_marriage,
+    };
+    let forma = Forma::parse(form.forma.trim())
+        .ok_or_else(|| ui_err("InvalidArgument", "forma: judicial ou extrajudicial"))?;
+    if form.data.trim() > iso_date(now_secs()).as_str() {
+        return Err(ui_err("InvalidArgument", "a data do divórcio é futura"));
+    }
+    let marriages = tauri::async_runtime::spawn_blocking(marriages_issued)
+        .await
+        .map_err(|e| ui_err("Internal", e))??;
+    let m = marriages
+        .into_iter()
+        .find(|m| m.matricula == form.matricula.trim())
+        .ok_or_else(|| ui_err("InvalidArgument", "casamento desconhecido deste cartório"))?;
+    if !m.active {
+        return Err(ui_err(
+            "InvalidArgument",
+            "só um casamento com as duas certidões válidas pode ser encerrado",
+        ));
+    }
+    // build and CHECK every divorce before the first confirmation
+    let mut jobs = Vec::new();
+    for sp in &m.spouses {
+        let id = hex::decode(&sp.id).map_err(|_| ui_err("Internal", "id"))?;
+        let rec = {
+            let world = open_world()?;
+            teko_credentials::credential(World::ledger(&world), MARRIAGE_TYPE.as_bytes(), &id)
+                .ok_or_else(|| ui_err("Internal", "certidão desconhecida"))?
+        };
+        let (claims, _) = load_bundle(&id, &rec)
+            .ok_or_else(|| ui_err("Internal", "dados da certidão não encontrados"))?;
+        let marriage = parse_marriage(&claims)
+            .ok_or_else(|| ui_err("Internal", "certidão de casamento inválida"))?;
+        let divorce = Divorce {
+            matricula: marriage.matricula.clone(),
+            data: form.data.trim().to_string(),
+            forma,
+            nome: marriage.nome.clone(),
+            conjuge: marriage.conjuge.clone(),
+            cartorio: form.cartorio.trim().to_string(),
+        };
+        divorce_ends(&marriage, &divorce).map_err(|e| ui_err("InvalidArgument", e))?;
+        let text = divorce_claims(&divorce).map_err(|e| ui_err("InvalidArgument", e))?;
+        jobs.push((sp.nome.clone(), rec.subject.clone(), text, sp.id.clone()));
+    }
+    let mut out = Vec::new();
+    let mut issued = true;
+    for (nome, holder, claims, _) in &jobs {
+        let r = issue_inner(
+            app.clone(),
+            issuer.inner().clone(),
+            DIVORCE_TYPE.to_string(),
+            holder.clone(),
+            claims.clone(),
+            1,
+        )
+        .await;
+        match r {
+            Ok(r) => out.push(CivilResult {
+                nome: nome.clone(),
+                id: r.id,
+                error: String::new(),
+            }),
+            Err(e) => {
+                issued = false;
+                out.push(CivilResult {
+                    nome: nome.clone(),
+                    id: String::new(),
+                    error: e.message,
+                });
+            }
+        }
+    }
+    // the marriage is revoked only when BOTH divorces were issued
+    if issued {
+        for (nome, _, _, marriage_id) in &jobs {
+            let r = vote_inner(
+                app.clone(),
+                issuer.inner().clone(),
+                VoteForm {
+                    op: "revoke".into(),
+                    ctype: MARRIAGE_TYPE.to_string(),
+                    id: marriage_id.clone(),
+                    reason: format!("divórcio, matrícula {}", m.matricula),
+                },
+            )
+            .await;
+            if let Err(e) = r {
+                out.push(CivilResult {
+                    nome: format!("revogação do casamento de {nome}"),
+                    id: String::new(),
+                    error: e.message,
+                });
+            }
+        }
     }
     Ok(out)
 }

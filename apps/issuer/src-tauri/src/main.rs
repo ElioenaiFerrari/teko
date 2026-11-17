@@ -29,6 +29,9 @@ fn main() {
             commands::civic_issue,
             commands::civic_deliver,
             commands::candidacies_issue,
+            commands::civil_marriage_issue,
+            commands::civil_marriages,
+            commands::civil_divorce_issue,
         ])
         .run(tauri::generate_context!());
     if let Err(e) = result {

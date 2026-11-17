@@ -1,6 +1,6 @@
 # Teko — atalhos. Rode `make` (ou `make help`) para ver tudo.
 .DEFAULT_GOAL := help
-.PHONY: candidates claim runoff issuer devnet-cosign help setup emulator suite reset demo issuer-help preview fmt lint test check build clean-dev verify-fw release-check repro fund docs-check diagrams coin-demo assets-demo devnet close devnet-dkg devnet-economy explorer devnet-equivocate devnet-veto tally-time devnet-founder devnet-stop devnet-status devnet-reset devnet-blocks devnet-blocks-sim dev tie devnet-rotate testnet-help election publish simulate simulate-live tally reset-board
+.PHONY: candidates claim runoff issuer devnet-cosign help setup emulator suite reset demo issuer-help preview fmt lint test check build clean-dev verify-fw release-check repro fund docs-check diagrams coin-demo assets-demo devnet close devnet-dkg devnet-economy explorer devnet-equivocate devnet-veto tally-time devnet-founder devnet-stop devnet-status devnet-reset devnet-blocks devnet-blocks-sim dev tie devnet-rotate testnet-help genesis-hash election publish simulate simulate-live tally reset-board
 
 CARGO ?= cargo
 PIN   ?= 482913
@@ -107,9 +107,14 @@ devnet-reset: ## Apaga a cadeia de teste (só os blocos; mantém as chaves). Par
 	@$(NODE) reset --dir $(NET)
 
 testnet-help: ## Como montar uma testnet em várias máquinas (a mainnet está TRAVADA)
-	@echo "Testnet: teko-node init --network testnet --dir <pasta>; distribua node-<i>/validator.key a cada instituição;"
-	@echo "edite peers.txt com os endereços reais. Por padrão o nó só escuta em loopback (de propósito)."
-	@echo "Mainnet: travada nesta fase (docs/NETWORKS.md)."
+	@echo "Testnet (ADR-0048): cada instituição roda teko-node keygen --dir net/node-I NA PRÓPRIA máquina e envia só a chave pública;"
+	@echo "o coordenador monta tudo com teko-node genesis --dir net --validators validators.txt e distribui network.txt/peers.txt;"
+	@echo "todos conferem teko-node genesis-hash --dir net e sobem teko-node run --dir net --index I --listen-peer 0.0.0.0:7901 --listen-public 0.0.0.0:7911 --advertise-peer HOST:7901 --advertise-public HOST:7911 --allow-remote."
+	@echo "Passo a passo: docs/TESTNET.md. Mainnet: travada nesta fase (docs/NETWORKS.md)."
+
+genesis-hash: ## Hash do genesis da rede em NET (padrão dev/net): todas as instituições devem ver o MESMO (ADR-0048)
+	@$(CARGO) build -q -p teko-node
+	@$(NODE) genesis-hash --dir $(NET)
 
 election: ## Recria a eleição de exemplo (7 pleitos, datas novas), com os candidatos das credenciais ativas da chain (ELECTION=geral-2026); sem rede, usa a lista de exemplo. Apaga o quadro e o marcador de simulação
 	@$(CARGO) run -q -p election-admin-cli -- build-election --election $(or $(ELECTION),geral-2026) 2>/tmp/teko-election.err || { echo "(sem rede ou sem candidaturas na chain: lista de exemplo)"; $(CARGO) run -q -p issuer-cli -- dev-election; }

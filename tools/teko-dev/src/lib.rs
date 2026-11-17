@@ -210,6 +210,15 @@ pub static CATALOG: &[Item] = &[
     ),
     item(
         "Devnet",
+        "Hash do genesis da rede (ADR-0048)",
+        &["genesis-hash"],
+        &[],
+        Any,
+        C,
+        "todas as instituições devem ver o mesmo; entra no handshake entre nós",
+    ),
+    item(
+        "Devnet",
         "Status (altura, mempool, pares)",
         &["devnet-status"],
         &[],

@@ -24,9 +24,9 @@ fn free_port_base() -> u16 {
     use std::sync::atomic::{AtomicU16, Ordering};
     static NEXT: AtomicU16 = AtomicU16::new(0);
     loop {
-        let off = NEXT.fetch_add(4, Ordering::SeqCst);
+        let off = NEXT.fetch_add(16, Ordering::SeqCst);
         let base = 30_000 + (std::process::id() % 2_000) as u16 * 10 + off;
-        if (0..4).all(|k| TcpListener::bind(("127.0.0.1", base + k)).is_ok()) {
+        if (0..16).all(|k| TcpListener::bind(("127.0.0.1", base + k)).is_ok()) {
             return base;
         }
     }
@@ -57,7 +57,9 @@ fn start_node(dir: &std::path::Path, i: usize) -> NodeHandle {
             profile,
             key: load_validator_key(dir, i).unwrap(),
             index: i,
-            peers: net.peers,
+            links: net.links,
+            listen_peer: None,
+            advertise: None,
             allow_remote: false,
             trust: None,
             economy: None,
@@ -335,7 +337,9 @@ fn a_node_refuses_to_listen_outside_loopback_and_a_wrong_key() {
         profile: net.profile.clone(),
         key: load_validator_key(&d, key_of).unwrap(),
         index,
-        peers: net.peers.clone(),
+        links: net.links.clone(),
+        listen_peer: None,
+        advertise: None,
         allow_remote: false,
         trust: None,
         economy: None,

@@ -5,7 +5,6 @@
 //! the status reply.
 
 use std::collections::BTreeMap;
-use std::net::SocketAddr;
 use std::path::Path;
 use std::sync::Arc;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
@@ -18,7 +17,9 @@ use teko_ledger::Tx;
 
 use crate::error::NodeError;
 use crate::lane::{self, Kinds, Lane, LaneApp, Setup, ack, lock_lane, send_all};
+use crate::net::Net;
 use crate::node::Shared;
+use crate::setup::PeerLink;
 use crate::wire::{self, EconStatusReply, EconValidator, Msg, SubmitTxs};
 
 /// Public configuration of the economy chain of this network.
@@ -143,7 +144,8 @@ pub(crate) fn open(
     cfg: &EconomyConfig,
     key: &SigningKey,
     index: usize,
-    peers: Vec<SocketAddr>,
+    peers: Vec<PeerLink>,
+    net: Arc<Net>,
     batch: Duration,
 ) -> Result<Econ, NodeError> {
     let chain = EconomyChain::new(cfg.genesis.clone())
@@ -157,6 +159,7 @@ pub(crate) fn open(
             key,
             index,
             peers,
+            net,
             kinds: KINDS,
             batch,
         },
@@ -228,9 +231,9 @@ pub(crate) fn handle(s: &Arc<Shared>, req: &Msg) -> Option<Msg> {
                 }
                 if req.kind == wire::ECON_TX && !fwd.is_empty() {
                     let m = wire::msg(wire::ECON_TX_FWD, &SubmitTxs { txs: fwd });
-                    let (peers, index) = (e.peers.clone(), e.index);
+                    let (net, peers) = (e.net.clone(), e.peers.clone());
                     drop(e);
-                    send_all(&peers, index, vec![m]);
+                    send_all(&net, &peers, vec![m]);
                 }
             }
             ack(true, "queued", accepted)
@@ -263,8 +266,19 @@ mod tests {
         let genesis =
             EconomyGenesis::test_defaults("teko-test-economy", public_key_bytes(&me), owner);
         let cfg = EconomyConfig { genesis };
-        let mut e = open(&d, &cfg, &me, 0, Vec::new(), Duration::from_millis(20)).unwrap();
         let chain_id = cfg.genesis.chain_id.clone();
+        let identity = teko_p2p::NetIdentity::generate(me.clone(), &chain_id, b"g").unwrap();
+        let net = crate::net::Net::new(
+            identity,
+            &chain_id,
+            Vec::new(),
+            crate::net::Advertise {
+                peer: "127.0.0.1:1".into(),
+                public: "127.0.0.1:2".into(),
+            },
+            &d,
+        );
+        let mut e = open(&d, &cfg, &me, 0, Vec::new(), net, Duration::from_millis(20)).unwrap();
         let a = teko_bft::Vote::new(&chain_id, &bad, VoteKind::Prevote, 1, 0, Some(&[1; 32]));
         let b = teko_bft::Vote::new(&chain_id, &bad, VoteKind::Prevote, 1, 0, Some(&[2; 32]));
         let ev = Evidence {

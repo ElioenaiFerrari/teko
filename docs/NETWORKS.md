@@ -7,7 +7,7 @@ Status: **implementado como prova de conceito local**. A rede de votos roda em *
 | Rede | Para quê | Estado |
 |---|---|---|
 | `devnet` | Sua máquina: **4** validadores em loopback por padrão (`make devnet NODES=3` sobe 3, que **não toleram falha**; com 4 uma pode cair) | ✅ `make devnet` |
-| `testnet` | Várias máquinas, dados fictícios, regras iguais às de produção | ✅ perfil e `init`; rodar em várias máquinas exige editar `peers.txt` e habilitar escuta fora de loopback (não é o padrão) |
+| `testnet` | Várias máquinas, dados fictícios, regras iguais às de produção | ✅ funciona em várias máquinas ([TESTNET.md](TESTNET.md), [ADR-0048](adr/0048-rede-de-testnet-multi-maquina.md)): cada instituição gera a própria chave, o coordenador monta o genesis, os nós se autenticam por sessões Noise |
 | `mainnet` | A eleição de verdade | 🔒 **TRAVADA**: `NetworkProfile::new(Mainnet)` e `network=mainnet` no arquivo são recusados |
 
 Cada rede tem um `chain_id` (`teko-devnet-1`, `teko-testnet-1`). Ele entra no **cabeçalho de cada bloco** e no **manifesto assinado da eleição** (`ElectionManifest.chain_id`). O dispositivo (`trust.txt: chain_id=`) recusa manifesto de outra rede, e a apuração (`Tallier::with_chain_id`) ignora e conta manifestos de outra rede.
@@ -58,4 +58,13 @@ Sem rede rodando, tudo continua funcionando com o arquivo local (`dev/board.log`
 
 Garante: **finalidade** (um bloco decidido não é desfeito); nenhum bloco sem mais de 2/3 das instituições; censura por um proponente deixa de bastar (a rodada seguinte tem outro); sem quórum a rede pausa em vez de bifurcar; réplicas independentes reconstroem o mesmo log e conferem tudo; um nó fora do ar não para a rede (com 4 instituições ou mais).
 
-**Não garante:** segurança com 1/3 ou mais das instituições em conluio (podem parar a rede; com 2/3 ou mais podem decidir o que quiserem); privacidade do voto além da cifra das cédulas ([ADR-0019](adr/0019-cedulas-cifradas-elgamal-de-limiar.md)); proteção de rede (TCP simples em loopback, sem criptografia entre nós: a integridade vem dos certificados); proteção contra mais de 2/3 do conjunto em vigor aprovando uma troca maliciosa (a rotação confia na mesma supermaioria do BFT, ADR-0045). Não há mineração nem tokens na rede de votos. Sem auditoria.
+**Não garante:** segurança com 1/3 ou mais das instituições em conluio (podem parar a rede; com 2/3 ou mais podem decidir o que quiserem); privacidade do voto além da cifra das cédulas ([ADR-0019](adr/0019-cedulas-cifradas-elgamal-de-limiar.md)); proteção da porta pública (sem cifra nem login: o cliente reverifica tudo; só leitura e envio, com limites), NAT traversal, nós observadores (ADR-0048); proteção contra mais de 2/3 do conjunto em vigor aprovando uma troca maliciosa (a rotação confia na mesma supermaioria do BFT, ADR-0045). Não há mineração nem tokens na rede de votos. Sem auditoria.
+
+## Rede entre máquinas (ADR-0048)
+
+![Conexão entre instituições: handshake Noise com prova da chave de consenso, conferência do conjunto em vigor, pedidos cifrados com limites, e a porta pública para clientes](diagrams/p2p-session.png)
+
+- **Porta de pares (Noise):** só uma chave do conjunto em vigor entra; a prova amarra a chave de consenso à chave da conexão, à rede e ao genesis. Pedidos cifrados, com limite de tamanho por tipo, de taxa por sessão e banimento temporário por mau comportamento.
+- **Porta pública (sem login):** só leitura e envio do que se autoassina, com limites por IP. Os clientes (Suite, explorador, `election-admin`) usam esta.
+- **Endereços:** `peers.txt` (`index peer=… public=… key=…`) é o bootstrap; registros de endereço **assinados** pelas instituições e trocados entre elas dizem onde cada uma está agora.
+- **Operação:** `teko-node keygen | genesis | economy-init | genesis-hash | run --listen-peer … --advertise-peer … --allow-remote`; runbook em [TESTNET.md](TESTNET.md).

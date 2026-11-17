@@ -11,10 +11,9 @@
 
 use std::fs::{File, OpenOptions};
 use std::io::{Read, Write};
-use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Mutex, MutexGuard};
+use std::sync::{Arc, Mutex, MutexGuard};
 use std::thread;
 use std::time::{Duration, Instant};
 
@@ -24,11 +23,13 @@ use teko_bft::{
 };
 use teko_crypto::SigningKey;
 
-use crate::client::call;
 use crate::error::NodeError;
+use crate::net::{Chan, Net};
+use crate::setup::PeerLink;
 use crate::wire::{self, Ack, BftEnvelope, BlocksReply, GetBlocks, Msg};
 
-const PEER_TIMEOUT: Duration = Duration::from_millis(1_500);
+/// A catch-up request may carry a page of blocks back.
+const SYNC_TIMEOUT: Duration = Duration::from_secs(10);
 const RESEND_EVERY: Duration = Duration::from_millis(1_000);
 const SYNC_EVERY: Duration = Duration::from_millis(1_000);
 const MAX_FUTURE: usize = 4_000;
@@ -54,6 +55,13 @@ pub(crate) trait LaneApp: App + Send + 'static {
     fn height(&self) -> u64;
     /// The validators of the NEXT height.
     fn validator_set(&self) -> Option<ValidatorSet>;
+    /// The consensus keys that may open a peer session for this chain: the validators of the next
+    /// height (a vote chain adds the sets of changes still pending, ADR-0045).
+    fn peer_keys(&self) -> Vec<Vec<u8>> {
+        self.validator_set()
+            .map(|s| s.validators().iter().map(|v| v.key.clone()).collect())
+            .unwrap_or_default()
+    }
     fn pending(&self) -> usize;
     /// Verifies a final block completely and applies it (every block is re-verified at startup).
     fn apply(&mut self, d: Self::Decided) -> Result<(), NodeError>;
@@ -78,11 +86,15 @@ struct Timer {
 
 pub(crate) struct Lane<A: LaneApp> {
     pub(crate) engine: Engine<A>,
-    pub(crate) peers: Vec<SocketAddr>,
+    /// Every node of `peers.txt`, by index (this node's own included).
+    pub(crate) peers: Vec<PeerLink>,
+    pub(crate) net: Arc<Net>,
     /// `peers.txt` of the network, re-read now and then: nodes that join by a rotation are APPENDED
     /// to it (ADR-0045) and the running nodes must learn their addresses.
     pub(crate) peers_file: Option<std::path::PathBuf>,
     pub(crate) last_peers_read: Instant,
+    /// This node's position in `peers.txt` (kept for diagnostics: peers are addressed by KEY).
+    #[allow(dead_code)]
     pub(crate) index: usize,
     blocks_file: File,
     wal_path: PathBuf,
@@ -182,7 +194,8 @@ pub(crate) struct Setup<'a> {
     pub key: &'a SigningKey,
     /// This node's index among `peers`.
     pub index: usize,
-    pub peers: Vec<SocketAddr>,
+    pub peers: Vec<PeerLink>,
+    pub net: Arc<Net>,
     pub kinds: Kinds,
     /// How long the first waiting entry/transaction waits so a burst shares one block.
     pub batch: Duration,
@@ -195,6 +208,7 @@ impl<A: LaneApp> Lane<A> {
             key,
             index,
             peers,
+            net,
             kinds,
             batch,
         } = setup;
@@ -209,6 +223,7 @@ impl<A: LaneApp> Lane<A> {
         Ok(Self {
             engine,
             peers,
+            net,
             peers_file: dir.parent().map(|p| p.join("peers.txt")),
             last_peers_read: Instant::now(),
             index,
@@ -438,18 +453,10 @@ impl<A: LaneApp> Lane<A> {
     }
 }
 
-pub(crate) fn send_all(peers: &[SocketAddr], index: usize, msgs: Vec<Msg>) {
-    for m in msgs {
-        for (i, addr) in peers.iter().enumerate() {
-            if i == index {
-                continue;
-            }
-            let (m, addr) = (m.clone(), *addr);
-            thread::spawn(move || {
-                let _ = call(addr, &m, PEER_TIMEOUT);
-            });
-        }
-    }
+/// Queues `msgs` for every other node (one bounded queue and sender per peer, see `Net::broadcast`).
+pub(crate) fn send_all(net: &Arc<Net>, peers: &[PeerLink], msgs: Vec<Msg>) {
+    let keys: Vec<Vec<u8>> = peers.iter().map(|p| p.key.clone()).collect();
+    net.broadcast(&keys, msgs);
 }
 
 pub(crate) fn ack(ok: bool, info: &str, accepted: u32) -> Msg {
@@ -478,17 +485,14 @@ impl<A: LaneApp> Lane<A> {
         else {
             return;
         };
-        let mut listed: Vec<(usize, SocketAddr)> = text
-            .lines()
-            .filter_map(|l| {
-                let (i, a) = l.trim().split_once('=')?;
-                Some((i.trim().parse().ok()?, a.trim().parse().ok()?))
-            })
-            .collect();
-        listed.sort_by_key(|p| p.0);
-        for (i, a) in listed {
+        let Ok(listed) = crate::setup::parse_peers(&text) else {
+            return;
+        };
+        let links: Vec<PeerLink> = listed.iter().map(|(_, l)| l.clone()).collect();
+        self.net.learn(&links);
+        for (i, l) in listed {
             if i == self.peers.len() {
-                self.peers.push(a);
+                self.peers.push(l);
             }
         }
     }
@@ -499,37 +503,39 @@ pub(crate) fn run_loop<A: LaneApp>(stop: &AtomicBool, lane: &Mutex<Lane<A>>) {
     while !stop.load(Ordering::SeqCst) {
         thread::sleep(Duration::from_millis(40));
         let mut out = Vec::new();
-        let (peers, index, sync_now, from) = {
+        let (net, peers, sync_now, from) = {
             let mut e = lock_lane(lane);
             e.refresh_peers();
             e.tick(&mut out);
             let sync_now = e.last_sync.elapsed() >= SYNC_EVERY;
             if sync_now {
                 e.last_sync = Instant::now();
+                // who may open a peer session follows the chain (rotations, stake changes)
+                e.net.set_validators(A::NAME, e.app().peer_keys());
             }
-            (e.peers.clone(), e.index, sync_now, e.height() + 1)
+            (e.net.clone(), e.peers.clone(), sync_now, e.height() + 1)
         };
-        send_all(&peers, index, out);
+        send_all(&net, &peers, out);
         if sync_now {
-            sync_from_peers(lane, &peers, index, from);
+            sync_from_peers(lane, &net, &peers, from);
         }
     }
 }
 
 fn sync_from_peers<A: LaneApp>(
     lane: &Mutex<Lane<A>>,
-    peers: &[SocketAddr],
-    index: usize,
+    net: &Arc<Net>,
+    peers: &[PeerLink],
     from: u64,
 ) {
     let kinds = lock_lane(lane).kinds;
     let mut online = 0u32;
-    for (i, addr) in peers.iter().enumerate() {
-        if i == index {
+    for p in peers {
+        if p.key == net.me {
             continue;
         }
         let req = wire::msg(kinds.blocks, &GetBlocks { from, max: 100 });
-        let Ok(r) = call(*addr, &req, PEER_TIMEOUT) else {
+        let Ok(r) = net.call(&p.key, Chan::Rpc, &req, SYNC_TIMEOUT) else {
             continue;
         };
         online += 1;
@@ -545,7 +551,7 @@ fn sync_from_peers<A: LaneApp>(
                 let mut e = lock_lane(lane);
                 e.accept_decided(d, &mut out);
             }
-            send_all(peers, index, out);
+            send_all(net, peers, out);
         }
     }
     lock_lane(lane).peers_online = online;
@@ -570,12 +576,12 @@ pub(crate) fn handle<A: LaneApp>(lane: &Mutex<Lane<A>>, req: &Msg) -> Option<Msg
             return Some(ack(false, "malformed", 0));
         };
         let mut out = Vec::new();
-        let (peers, index) = {
+        let (net, peers) = {
             let mut e = lock_lane(lane);
             e.on_bft(m, &mut out);
-            (e.peers.clone(), e.index)
+            (e.net.clone(), e.peers.clone())
         };
-        send_all(&peers, index, out);
+        send_all(&net, &peers, out);
         return Some(ack(true, "ok", 0));
     }
     if req.kind == kinds.commit {
@@ -583,12 +589,12 @@ pub(crate) fn handle<A: LaneApp>(lane: &Mutex<Lane<A>>, req: &Msg) -> Option<Msg
             return Some(ack(false, "malformed", 0));
         };
         let mut out = Vec::new();
-        let (peers, index) = {
+        let (net, peers) = {
             let mut e = lock_lane(lane);
             e.accept_decided(d, &mut out);
-            (e.peers.clone(), e.index)
+            (e.net.clone(), e.peers.clone())
         };
-        send_all(&peers, index, out);
+        send_all(&net, &peers, out);
         return Some(ack(true, "ok", 0));
     }
     if req.kind == kinds.blocks {

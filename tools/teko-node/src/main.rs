@@ -17,7 +17,12 @@ USO:
   teko-node init   [--dir dev/net] [--network devnet|testnet] [--nodes 3] [--port 7901] [--founder tekow1…] [--issuer tekow1…] [--alloc TEKO] [--founder-target TEKO] [--force]
                    --issuer: carteira MEMBRO dos órgãos de credenciais de teste (padrão: o --founder)
                    --founder: endereço da CARTEIRA (do dispositivo) que recebe as recompensas do fundador (opção B, ADR-0028)
-  teko-node run    [--dir dev/net] --index I        sobe o validador I (só loopback)
+  teko-node keygen [--dir node-X] [--force]       cria a chave de consenso DESTA instituição (nesta máquina) e imprime a pública
+  teko-node genesis --dir NET --validators ARQUIVO [--network testnet] [--force]   monta network.txt e peers.txt (linhas: CHAVE_PUBLICA_HEX peer=HOST:PORTA public=HOST:PORTA)
+  teko-node economy-init --dir NET --founder tekow1… [--issuer …] [--alloc TEKO] [--founder-target TEKO] [--force]   cria economy.txt
+  teko-node genesis-hash [--dir NET]               hash do genesis (todas as instituições devem ver o MESMO; entra no handshake)
+  teko-node run    [--dir dev/net] --index I [--listen-peer ADDR] [--listen-public ADDR] [--advertise-peer HOST:PORT] [--advertise-public HOST:PORT] [--allow-remote]
+                   sobe o validador I; por padrão escuta em loopback; --allow-remote libera outros endereços (a porta de pares exige a chave da instituição; a pública é só leitura e envio, com limites)
   teko-node stop   [--dir dev/net]                  para os validadores iniciados com `run` (pelos arquivos .pid)
   teko-node reset  [--dir dev/net]                  apaga SÓ os blocos (votes.blocks, economy.blocks) de cada nó; mantém as chaves e volta aos nós da gênese
   teko-node status [--dir dev/net]                  altura, raiz e pares de cada nó
@@ -37,7 +42,7 @@ fn flags(args: &[String]) -> Result<HashMap<String, String>, String> {
     let mut i = 0;
     while i < args.len() {
         let k = args[i].strip_prefix("--").ok_or("argumento inesperado")?;
-        if k == "force" {
+        if k == "force" || k == "allow-remote" {
             m.insert(k.to_string(), "1".to_string());
             i += 1;
         } else {
@@ -70,6 +75,46 @@ fn save_pending(dir: &std::path::Path, c: &teko_bft::ValidatorSetChange) -> Resu
     .map_err(|x| x.to_string())
 }
 
+/// The economy genesis from the `--founder`, `--issuer`, `--alloc`, `--founder-target`, `--force` flags.
+fn economy_from_flags(
+    dir: &std::path::Path,
+    f: &HashMap<String, String>,
+) -> Result<(teko_economy::EconomyGenesis, Option<teko_ledger::Address>), String> {
+    let e = |x: teko_node::NodeError| x.to_string();
+    let owner = match f.get("founder") {
+        Some(a) => Some(
+            teko_crypto::parse_wallet_address(a)
+                .map_err(|_| "--founder: endereço tekow1… inválido (confira o checksum)")?,
+        ),
+        None => None,
+    };
+    let target = match f.get("founder-target") {
+        Some(v) => Some(
+            teko_crypto::amount::parse_amount(v).map_err(|x| format!("--founder-target: {x}"))?,
+        ),
+        None => None,
+    };
+    let alloc = founder_alloc(f, owner.is_some())?;
+    // the wallet that is a MEMBER of the credential organs (default: the founder's)
+    let issuer = match f.get("issuer") {
+        Some(a) => Some(
+            teko_crypto::parse_wallet_address(a)
+                .map_err(|_| "--issuer: endereço tekow1… inválido (confira o checksum)")?,
+        ),
+        None => owner,
+    };
+    let g = teko_node::init_economy_with_issuer(
+        dir,
+        owner,
+        issuer,
+        target,
+        alloc,
+        f.contains_key("force"),
+    )
+    .map_err(e)?;
+    Ok((g, owner))
+}
+
 fn run(args: Vec<String>) -> Result<(), String> {
     let Some(cmd) = args.first().map(String::as_str) else {
         print!("{HELP}");
@@ -95,38 +140,7 @@ fn run(args: Vec<String>) -> Result<(), String> {
                 .map_or(Ok(7901), |v| v.parse())
                 .map_err(|_| "--port inválido")?;
             let n = init_network(&dir, kind, nodes, port, f.contains_key("force")).map_err(e)?;
-            let owner = match f.get("founder") {
-                Some(a) => Some(
-                    teko_crypto::parse_wallet_address(a)
-                        .map_err(|_| "--founder: endereço tekow1… inválido (confira o checksum)")?,
-                ),
-                None => None,
-            };
-            let target = match f.get("founder-target") {
-                Some(v) => Some(
-                    teko_crypto::amount::parse_amount(v)
-                        .map_err(|x| format!("--founder-target: {x}"))?,
-                ),
-                None => None,
-            };
-            let alloc = founder_alloc(&f, owner.is_some())?;
-            // the wallet that is a MEMBER of the credential organs (default: the founder's)
-            let issuer = match f.get("issuer") {
-                Some(a) => Some(
-                    teko_crypto::parse_wallet_address(a)
-                        .map_err(|_| "--issuer: endereço tekow1… inválido (confira o checksum)")?,
-                ),
-                None => owner,
-            };
-            let g = teko_node::init_economy_with_issuer(
-                &dir,
-                owner,
-                issuer,
-                target,
-                alloc,
-                f.contains_key("force"),
-            )
-            .map_err(e)?;
+            let (g, owner) = economy_from_flags(&dir, &f)?;
             match owner {
                 Some(a) => {
                     println!(
@@ -155,6 +169,62 @@ fn run(args: Vec<String>) -> Result<(), String> {
                 n.profile.chain_id
             );
         }
+        "keygen" => {
+            // each institution makes ITS consensus key on ITS machine; only the public key travels
+            let key_file = dir.join("validator.key");
+            if key_file.exists() && !f.contains_key("force") {
+                let key = teko_node::read_validator_key(&dir).map_err(e)?;
+                println!(
+                    "A chave já existe em {} (use --force para trocar).\nChave pública (envie esta ao coordenador): {}",
+                    key_file.display(),
+                    teko_crypto::hex::encode(&teko_crypto::public_key_bytes(&key))
+                );
+            } else {
+                let key = teko_node::generate_validator_key(&dir).map_err(e)?;
+                println!(
+                    "Chave criada em {} (SECRETA: não saia desta máquina).\nChave pública (envie esta ao coordenador): {}",
+                    key_file.display(),
+                    teko_crypto::hex::encode(&teko_crypto::public_key_bytes(&key))
+                );
+            }
+        }
+        "genesis" => {
+            // the coordinator assembles network.txt and peers.txt from the institutions' PUBLIC keys
+            let kind = match f.get("network").map_or("testnet", String::as_str) {
+                "devnet" => NetworkKind::Devnet,
+                "testnet" => NetworkKind::Testnet,
+                "mainnet" => return Err("a mainnet está travada nesta fase".into()),
+                _ => return Err("--network: devnet ou testnet".into()),
+            };
+            let file = f.get("validators").ok_or("faltou --validators ARQUIVO")?;
+            let text = std::fs::read_to_string(file).map_err(|x| format!("{file}: {x}"))?;
+            let n = teko_node::genesis_network(&dir, kind, &text, f.contains_key("force"))
+                .map_err(e)?;
+            println!(
+                "Rede {} montada em {}: {} instituições, o bloco é final com mais de 2/3, chain_id={}.\nDistribua network.txt, peers.txt (e economy.txt, se houver) e CONFIRA o hash do genesis com cada instituição: teko-node genesis-hash --dir {}",
+                n.profile.kind.name(),
+                dir.display(),
+                n.profile.validators.len(),
+                n.profile.chain_id,
+                dir.display()
+            );
+        }
+        "economy-init" => {
+            let (g, owner) = economy_from_flags(&dir, &f)?;
+            println!(
+                "Economia {} criada (fundador: {}). Distribua economy.txt junto com network.txt e peers.txt e confira o hash do genesis.",
+                g.chain_id,
+                owner
+                    .and_then(|a| teko_crypto::wallet_address(&a).ok())
+                    .unwrap_or_else(|| "conta do nó 0".into())
+            );
+        }
+        "genesis-hash" => {
+            println!(
+                "{}",
+                teko_crypto::hex::encode(&teko_node::genesis_hash_of(&dir).map_err(e)?)
+            );
+        }
         "run" => {
             let net = load_network(&dir).map_err(e)?;
             let index: usize = f
@@ -162,15 +232,37 @@ fn run(args: Vec<String>) -> Result<(), String> {
                 .ok_or("faltou --index")?
                 .parse()
                 .map_err(|_| "--index inválido")?;
-            let addr = *net.peers.get(index).ok_or("índice fora da rede")?;
+            let addr = f
+                .get("listen-public")
+                .map(|a| {
+                    a.parse::<std::net::SocketAddr>()
+                        .map_err(|_| "--listen-public inválido")
+                })
+                .transpose()?
+                .or_else(|| net.peers.get(index).copied())
+                .ok_or("índice fora da rede")?;
+            let listen_peer = f
+                .get("listen-peer")
+                .map(|a| {
+                    a.parse::<std::net::SocketAddr>()
+                        .map_err(|_| "--listen-peer inválido")
+                })
+                .transpose()?;
+            let advertise = match (f.get("advertise-peer"), f.get("advertise-public")) {
+                (Some(p), Some(q)) => Some((p.clone(), q.clone())),
+                (None, None) => None,
+                _ => return Err("use --advertise-peer e --advertise-public juntos".into()),
+            };
             let key = teko_node::load_validator_key(&dir, index).map_err(e)?;
             let cfg = NodeConfig {
                 dir: teko_node::node_dir(&dir, index),
                 profile: net.profile.clone(),
                 key,
                 index,
-                peers: net.peers,
-                allow_remote: false,
+                links: net.links,
+                listen_peer,
+                advertise,
+                allow_remote: f.contains_key("allow-remote"),
                 economy: teko_node::load_economy(&dir).map_err(e)?,
                 // `dev/net` sits next to `dev/trust.txt` (governance keys + bound network).
                 trust: dir
@@ -260,8 +352,9 @@ fn run(args: Vec<String>) -> Result<(), String> {
                     let kept: Vec<&str> = text
                         .lines()
                         .filter(|l| {
-                            l.split_once('=')
-                                .and_then(|(i, _)| i.trim().parse::<usize>().ok())
+                            l.split_whitespace()
+                                .next()
+                                .and_then(|i| i.parse::<usize>().ok())
                                 .is_none_or(|i| i < genesis)
                         })
                         .collect();

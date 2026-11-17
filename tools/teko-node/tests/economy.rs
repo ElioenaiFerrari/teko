@@ -25,9 +25,9 @@ fn free_port_base() -> u16 {
     use std::sync::atomic::{AtomicU16, Ordering};
     static NEXT: AtomicU16 = AtomicU16::new(0);
     loop {
-        let off = NEXT.fetch_add(4, Ordering::SeqCst);
+        let off = NEXT.fetch_add(16, Ordering::SeqCst);
         let base = 36_000 + (std::process::id() % 2_000) as u16 * 10 + off;
-        if (0..4).all(|k| TcpListener::bind(("127.0.0.1", base + k)).is_ok()) {
+        if (0..16).all(|k| TcpListener::bind(("127.0.0.1", base + k)).is_ok()) {
             return base;
         }
     }
@@ -53,7 +53,9 @@ fn start_node(dir: &std::path::Path, i: usize, ec: &EconomyConfig) -> NodeHandle
             profile,
             key: load_validator_key(dir, i).unwrap(),
             index: i,
-            peers: net.peers,
+            links: net.links,
+            listen_peer: None,
+            advertise: None,
             allow_remote: false,
             trust: None,
             economy: Some(ec.clone()),
@@ -199,12 +201,12 @@ fn the_genesis_gives_the_founder_the_first_coins_so_the_network_can_start_with_n
     }
 }
 
-/// Sends one wire message to a node (a forged consensus message, as a malicious peer would).
-fn send_raw(addr: std::net::SocketAddr, m: &teko_node::wire::Msg) {
-    let mut s = std::net::TcpStream::connect(addr).unwrap();
-    s.set_read_timeout(Some(Duration::from_secs(5))).unwrap();
-    teko_node::wire::write_msg(&mut s, m).unwrap();
-    let _ = teko_node::wire::read_msg(&mut s);
+/// Sends one wire message to a node over the authenticated peer port AS institution `from` (a
+/// consensus message that institution signed: here, two conflicting votes).
+fn send_raw(dir: &std::path::Path, from: usize, to: usize, m: &teko_node::wire::Msg) {
+    let link = load_network(dir).unwrap().links[to].clone();
+    let me = teko_node::PeerClient::open_as(dir, from).unwrap();
+    me.call(&link, m, Duration::from_secs(5)).unwrap();
 }
 
 #[test]
@@ -277,7 +279,6 @@ fn an_institution_that_equivocates_on_the_vote_chain_loses_ten_percent_of_its_bo
 
     // institution 1 signs two conflicting prevotes for the same height and round
     let vote_chain = load_network(&net.dir).unwrap().profile.chain_id;
-    let target = load_network(&net.dir).unwrap().peers[0];
     for tag in [1u8, 2u8] {
         let v = Vote::new(
             &vote_chain,
@@ -291,7 +292,7 @@ fn an_institution_that_equivocates_on_the_vote_chain_loses_ten_percent_of_its_bo
             proposal: Vec::new(),
             vote: v.encode_to_vec(),
         };
-        send_raw(target, &wire::msg(wire::VOTE_BFT, &env));
+        send_raw(&net.dir, 1, 0, &wire::msg(wire::VOTE_BFT, &env));
     }
 
     // node 0 detected it live, took it to the economy, and 10% of the bond was BURNED

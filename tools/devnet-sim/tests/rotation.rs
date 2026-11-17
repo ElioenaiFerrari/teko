@@ -22,7 +22,7 @@ fn ports() -> u16 {
     loop {
         let l = TcpListener::bind("127.0.0.1:0").unwrap();
         let p = l.local_addr().unwrap().port();
-        if p < 60_000 && (1..5).all(|k| TcpListener::bind(("127.0.0.1", p + k)).is_ok()) {
+        if p < 60_000 && (1..16).all(|k| TcpListener::bind(("127.0.0.1", p + k)).is_ok()) {
             return p;
         }
     }
@@ -42,7 +42,9 @@ fn start(
             profile: net.profile.with_block_interval_ms(150).unwrap(),
             key: load_validator_key(&dir.join("net"), i).unwrap(),
             index: i,
-            peers: net.peers,
+            links: net.links,
+            listen_peer: None,
+            advertise: None,
             allow_remote: false,
             trust,
             economy: Some(ec.clone()),
@@ -103,9 +105,13 @@ fn an_institution_is_replaced_while_the_chain_runs_and_the_next_election_is_deci
     devnet_sim::blocks(&net, devnet_sim::BlocksKind::Votes, 3).unwrap();
 
     // 1) rotate: institution 3 is replaced by a brand-new one (no election yet, so it is allowed)
-    let port = {
+    let port = loop {
         let l = TcpListener::bind("127.0.0.1:0").unwrap();
-        l.local_addr().unwrap().port()
+        let p = l.local_addr().unwrap().port();
+        // the newcomer's peer port and its public port (8 above) must both be free
+        if p < 60_000 && TcpListener::bind(("127.0.0.1", p + 8)).is_ok() {
+            break p;
+        }
     };
     let r = rotation::dev_rotate(&net, 3, port).unwrap();
     assert_eq!(r.change.epoch, 1);

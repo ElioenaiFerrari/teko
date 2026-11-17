@@ -80,3 +80,7 @@ pub const CRED_ID: &str = "teko/v2/credential-id";
 pub const CRED_CLAIMS: &str = "teko/v2/credential-claims";
 /// Hash of the off-chain metadata record of an asset (ADR-0032).
 pub const ASSET_METADATA: &str = "teko/v2/asset-metadata";
+/// Binds a node's Noise static key to its consensus key in the peer handshake (ADR-0048).
+pub const NET_BIND: &str = "teko/v2/net-bind";
+/// A peer's signed address record (ADR-0048).
+pub const NET_RECORD: &str = "teko/v2/net-record";

@@ -148,6 +148,22 @@ def civil_registry():
     d.legend([(MUTED, "transação do membro (dispositivo)", False), (BOTO, "entrega ao titular", False), (GREEN, "efeito", True), (RED, "revogação", False)])
     return d
 
+def p2p_session():
+    d = D("p2p-session", 1100, 0, "Conexão entre instituições", "Só quem prova a chave de consenso entra; o cliente usa outra porta, só de leitura e envio", "REDE")
+    A = [("a", "Instituição A", "quem disca", "onca", 110), ("b", "Instituição B", "porta de pares", "focal", 450), ("p", "Porta pública", "sem login, com limites", "plain", 790), ("c", "Cliente", "Suite, explorador", "boto", 990)]
+    M = [("a", "b", "Noise XX: chaves efêmeras e estáticas", "default", False),
+         ("b", "a", "prova: a chave de consenso assina a chave Noise, a rede e o genesis", "boto", False),
+         ("a", "b", "a prova de A, no mesmo formato", "boto", False),
+         ("b", "b", "A está no conjunto em vigor? senão a conexão cai", "ok", True),
+         ("a", "b", "pedidos cifrados, com limite de tamanho e de taxa", "default", False),
+         ("b", "b", "abuso: pontos, depois banimento temporário", "bad", False),
+         ("c", "p", "só ler blocos e enviar o que se autoassina", "default", False),
+         ("p", "c", "o cliente reverifica tudo e não confia no nó", "ok", True)]
+    N = [(1, "b", "A prova amarra ESTA conexão: não serve em outra chave nem em outra rede", 330), (4, "b", "A lista de pares vem de registros assinados trocados entre validadores", 330)]
+    d.sequence(A, M, notas=N, passo=36)
+    d.legend([(MUTED, "mensagem", False), (BOTO, "prova de identidade", False), (GREEN, "conferência", True), (RED, "abuso", False)])
+    return d
+
 def suite_architecture():
     d = D("suite-architecture", 1100, 480, "Dentro da Teko Suite", "Interface fina, regras no Rust; o PIN nunca passa por aqui", "SUITE")
     d.arrow([(240, 178), (310, 178)], "default", label="IPC Tauri", at=(275, 164))

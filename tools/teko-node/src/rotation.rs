@@ -180,7 +180,7 @@ pub struct CeremonyPlan {
     pub epoch: u64,
     pub session: String,
     /// The institutions in force, in the order of their set (ceremony index = position + 1).
-    pub participants: Vec<std::net::SocketAddr>,
+    pub participants: Vec<crate::setup::PeerLink>,
     pub threshold: usize,
 }
 
@@ -192,13 +192,14 @@ pub fn ceremony_plan(dir: &Path) -> Result<CeremonyPlan, NodeError> {
     let epoch = chain.epoch_at(chain.height() + 1).clone();
     let mut participants = Vec::new();
     for member in &epoch.set {
-        let addr = (0..net.peers.len())
-            .find(|i| load_validator_key(dir, *i).is_ok_and(|k| &public_key_bytes(&k) == member))
-            .and_then(|i| net.peers.get(i).copied())
-            .ok_or_else(|| {
-                refuse("uma instituição do conjunto em vigor não tem pasta de nó aqui")
-            })?;
-        participants.push(addr);
+        // the institution's link (key and addresses) from `peers.txt`; no key folder is needed here
+        let link = net
+            .links
+            .iter()
+            .find(|l| &l.key == member)
+            .cloned()
+            .ok_or_else(|| refuse("uma instituição do conjunto em vigor não está no peers.txt"))?;
+        participants.push(link);
     }
     let session = if epoch.epoch == 0 {
         format!("{}|tally-key", net.profile.chain_id)
@@ -244,7 +245,7 @@ pub fn dev_rotate(dir: &Path, out: usize, port: u16) -> Result<DevRotation, Node
         return Err(refuse("não existe essa instituição no conjunto em vigor"));
     }
     let net = load_network(dir)?;
-    let new_index = net.peers.len();
+    let new_index = net.links.len();
     let key: SigningKey = generate_signing_key(&mut rand::rand_core::UnwrapErr(rand::rngs::SysRng));
     let new_pub = public_key_bytes(&key);
     // the new node's folder, key and address (the key file format of `init`)
@@ -255,7 +256,12 @@ pub fn dev_rotate(dir: &Path, out: usize, port: u16) -> Result<DevRotation, Node
     if !peers.ends_with('\n') {
         peers.push('\n');
     }
-    peers.push_str(&format!("{new_index}=127.0.0.1:{port}\n"));
+    let link = crate::setup::PeerLink {
+        key: new_pub.clone(),
+        peer: format!("127.0.0.1:{port}"),
+        public: format!("127.0.0.1:{}", port + crate::setup::PUBLIC_PORT_OFFSET),
+    };
+    peers.push_str(&link.to_line(new_index));
     std::fs::write(dir.join("peers.txt"), peers)?;
     // the proposal: the same order, the newcomer in the outgoing slot
     let mut set = last.set.clone();
@@ -266,7 +272,7 @@ pub fn dev_rotate(dir: &Path, out: usize, port: u16) -> Result<DevRotation, Node
         if pos == out {
             continue;
         }
-        let Some(i) = (0..net.peers.len())
+        let Some(i) = (0..net.links.len())
             .find(|i| load_validator_key(dir, *i).is_ok_and(|k| &public_key_bytes(&k) == member))
         else {
             continue;
@@ -275,8 +281,9 @@ pub fn dev_rotate(dir: &Path, out: usize, port: u16) -> Result<DevRotation, Node
     }
     let mut lines = submit(dir, &change)?;
     lines.push(format!(
-        "novo nó {new_index}: chave {} em 127.0.0.1:{port}",
-        hex::encode(&new_pub[..8])
+        "novo nó {new_index}: chave {} em 127.0.0.1:{port} (pública {})",
+        hex::encode(&new_pub[..8]),
+        port + crate::setup::PUBLIC_PORT_OFFSET
     ));
     Ok(DevRotation {
         change,

@@ -44,3 +44,10 @@ O conjunto de instituições deixa de ser fixo: uma **troca** (época + 1, conju
 ![Rotação das instituições: a proposta, a aprovação de mais de 2/3, a entrada no quadro, a economia e o dispositivo que segue os elos](../diagrams/validator-rotation.png)
 
 Código: `crates/teko-bft/src/rotation.rs` (o documento), `crates/teko-chain/src/chain.rs` (épocas e regras), `crates/teko-credentials/src/module.rs` (`RotateVoteSet`), `crates/teko-device-core` (`institutions_at` e a catraca), `tools/teko-node/src/rotation.rs` (propor, assinar, enviar, `dev_rotate`). Teste em nós reais: `tools/devnet-sim/tests/rotation.rs`.
+
+## Transporte entre máquinas (ADR-0048)
+Os validadores falam por sessões **Noise** na **porta de pares**: o handshake leva uma prova (a chave de consenso assina a chave da conexão, a rede e o genesis) e só uma chave do conjunto em vigor segue adiante; depois os pedidos e respostas vão cifrados, com limite de tamanho por tipo, taxa por sessão e banimento temporário. Cada par tem duas sessões (gossip e chamadas), para um download de blocos não atrasar um voto, e o envio usa uma fila limitada por par. Os clientes usam a **porta pública** (só leitura e envio do que se autoassina). Os endereços vêm de **registros assinados** trocados a cada 20 s, com `peers.txt` como ponto de partida. A cerimônia de chave só entrega a parte do índice `r` à instituição dona de `r`.
+
+![Conexão entre instituições: Noise, prova da chave de consenso, conferência do conjunto em vigor, pedidos cifrados com limites e a porta pública para clientes](../diagrams/p2p-session.png)
+
+Código: `crates/teko-p2p` (handshake, sessão, limites, registros), `tools/teko-node/src/net.rs` (pares, envio, descoberta), `serve.rs` (as duas portas), `dkg.rs`. Testes: `tools/teko-node/tests/security.rs` e `tests/network.rs`, `tests/economy.rs` (consenso e economia pelo canal seguro). Runbook: [TESTNET.md](../TESTNET.md).

@@ -14,6 +14,8 @@ pub enum NodeError {
     Economy(String),
     #[error("no node reachable")]
     Unreachable,
+    #[error("network: {0}")]
+    Net(#[from] teko_p2p::NetError),
 }
 
 impl NodeError {

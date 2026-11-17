@@ -10,6 +10,8 @@ use teko_chain::BlockEntry;
 use crate::error::NodeError;
 
 pub const MAX_MSG: usize = 16 * 1024 * 1024;
+/// The most a client may send in one request to the public port.
+pub const MAX_PUBLIC: usize = 10 * 1024 * 1024;
 
 pub const SUBMIT: u32 = 1; // client -> node: SubmitEntries (node forwards to peers)
 pub const FORWARD: u32 = 2; // node -> node: SubmitEntries (NOT re-forwarded)
@@ -20,6 +22,8 @@ pub const VOTE_BFT: u32 = 10; // node -> node: one vote-chain consensus message 
 pub const DKG_START: u32 = 7; // coordinator -> node: begin the key ceremony (round 1)
 pub const DKG_PACKAGES: u32 = 8; // coordinator -> node: everyone's round-1 packages; node finishes
 pub const DKG_SHARE: u32 = 9; // node -> node: the secret share for the requester (loopback only)
+pub const PEERS: u32 = 30; // node -> node: signed address records, both ways (ADR-0048)
+pub const PEERS_REPLY: u32 = 106;
 pub const DKG_REPLY: u32 = 104;
 // Economy ledger on BFT (ADR-0028)
 pub const ECON_TX: u32 = 20; // client -> node: SubmitTxs (node forwards to peers)
@@ -129,6 +133,40 @@ pub fn read_msg(r: &mut impl Read) -> Result<Msg, NodeError> {
     Msg::decode(buf.as_slice()).map_err(|_| NodeError::Protocol("malformed message".into()))
 }
 
+/// Reads one message of the plain protocol before `deadline`, however slowly the bytes come, and never
+/// allocates more than the bytes that actually arrived (a lying length costs nothing).
+pub fn read_msg_by(
+    r: &mut std::net::TcpStream,
+    deadline: std::time::Instant,
+) -> Result<Msg, NodeError> {
+    use std::time::Instant;
+    let mut fill = |want: usize| -> Result<Vec<u8>, NodeError> {
+        let mut buf = Vec::with_capacity(want.min(64 * 1024));
+        let mut chunk = [0u8; 16 * 1024];
+        while buf.len() < want {
+            let left = deadline.saturating_duration_since(Instant::now());
+            if left.is_zero() {
+                return Err(NodeError::Protocol("timed out".into()));
+            }
+            r.set_read_timeout(Some(left))?;
+            let take = (want - buf.len()).min(chunk.len());
+            let n = r.read(&mut chunk[..take])?;
+            if n == 0 {
+                return Err(NodeError::Io(std::io::ErrorKind::UnexpectedEof.into()));
+            }
+            buf.extend_from_slice(&chunk[..n]);
+        }
+        Ok(buf)
+    };
+    let head = fill(4)?;
+    let n = u32::from_be_bytes([head[0], head[1], head[2], head[3]]) as usize;
+    if n > MAX_PUBLIC {
+        return Err(NodeError::Protocol("message too large".into()));
+    }
+    let body = fill(n)?;
+    Msg::decode(body.as_slice()).map_err(|_| NodeError::Protocol("malformed message".into()))
+}
+
 pub fn decode<M: Message + Default>(m: &Msg) -> Result<M, NodeError> {
     M::decode(m.body.as_slice()).map_err(|_| NodeError::Protocol("malformed body".into()))
 }
@@ -148,6 +186,10 @@ pub struct DkgStart {
     /// current set, in the order of that set (ADR-0045).
     #[prost(uint32, tag = "4")]
     pub index: u32,
+    /// The consensus keys of the ceremony's participants, in ceremony order (index = position + 1):
+    /// a share is only given to the institution that owns the index it asks for (ADR-0048).
+    #[prost(bytes = "vec", repeated, tag = "5")]
+    pub participants: Vec<Vec<u8>>,
 }
 
 #[derive(Clone, PartialEq, Message)]
@@ -159,8 +201,16 @@ pub struct DkgPackages {
     #[prost(message, repeated, tag = "3")]
     pub packages: Vec<Round1Msg>,
     /// The participants' addresses in ceremony order (position + 1 = ceremony index); empty = all peers.
-    #[prost(string, repeated, tag = "4")]
-    pub participants: Vec<String>,
+    /// Kept for the file format; the participants are the keys the ceremony started with.
+    #[prost(bytes = "vec", repeated, tag = "4")]
+    pub participants: Vec<Vec<u8>>,
+}
+
+/// Signed address records of validators (ADR-0048): what a node knows, sent and answered alike.
+#[derive(Clone, PartialEq, Message)]
+pub struct PeerRecords {
+    #[prost(message, repeated, tag = "1")]
+    pub records: Vec<teko_p2p::PeerRecord>,
 }
 
 #[derive(Clone, PartialEq, Message)]
@@ -235,4 +285,35 @@ pub struct EconStatusReply {
     pub evidence: u32,
     #[prost(uint64, tag = "11")]
     pub founder_target: u64,
+}
+
+#[cfg(test)]
+mod fuzz {
+    use super::*;
+    use proptest::prelude::*;
+    use std::io::Write;
+    use std::net::{TcpListener, TcpStream};
+    use std::time::{Duration, Instant};
+
+    proptest! {
+        #![proptest_config(ProptestConfig::with_cases(24))]
+
+        /// The public port reads whatever a stranger sends without panicking, without waiting past the
+        /// deadline and without trusting a length it was told.
+        #[test]
+        fn any_bytes_on_the_public_wire_end_in_a_message_or_an_error(junk in proptest::collection::vec(any::<u8>(), 0..600)) {
+            let l = TcpListener::bind("127.0.0.1:0").unwrap();
+            let addr = l.local_addr().unwrap();
+            let h = std::thread::spawn(move || {
+                let (mut s, _) = l.accept().unwrap();
+                let t = Instant::now();
+                let r = read_msg_by(&mut s, Instant::now() + Duration::from_millis(300));
+                (r.is_ok(), t.elapsed())
+            });
+            let mut c = TcpStream::connect(addr).unwrap();
+            let _ = c.write_all(&junk);
+            let (_ok, took) = h.join().unwrap();
+            prop_assert!(took < Duration::from_secs(2));
+        }
+    }
 }

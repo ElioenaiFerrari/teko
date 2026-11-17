@@ -22,7 +22,7 @@ fn ports() -> u16 {
     loop {
         let l = TcpListener::bind("127.0.0.1:0").unwrap();
         let p = l.local_addr().unwrap().port();
-        if p < 60_000 && (1..5).all(|k| TcpListener::bind(("127.0.0.1", p + k)).is_ok()) {
+        if p < 60_000 && (1..16).all(|k| TcpListener::bind(("127.0.0.1", p + k)).is_ok()) {
             return p;
         }
     }
@@ -42,7 +42,9 @@ fn start(
             profile: net.profile.with_block_interval_ms(150).unwrap(),
             key: load_validator_key(&dir.join("net"), i).unwrap(),
             index: i,
-            peers: net.peers,
+            links: net.links,
+            listen_peer: None,
+            advertise: None,
             allow_remote: false,
             trust,
             economy: Some(ec.clone()),

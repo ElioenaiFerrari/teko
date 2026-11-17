@@ -19,6 +19,7 @@ members = [
   "crates/teko-explorer",
   "crates/teko-device-core",
   "crates/teko-transport",
+  "crates/teko-p2p",
   "crates/teko-client",
   "tools/device-emulator",
   "tools/issuer-cli",
@@ -56,6 +57,7 @@ teko-device-core = { path = "crates/teko-device-core" }
 teko-attestation = { path = "crates/teko-attestation" }
 teko-election = { path = "crates/teko-election" }
 teko-bulletin = { path = "crates/teko-bulletin" }
+teko-p2p = { path = "crates/teko-p2p" }
 teko-registration = { path = "crates/teko-registration" }
 teko-chain = { path = "crates/teko-chain" }
 teko-ballot-crypto = { path = "crates/teko-ballot-crypto" }

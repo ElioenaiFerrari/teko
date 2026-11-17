@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 use std::fs;
-use std::net::{SocketAddr, TcpListener, TcpStream};
+use std::net::{SocketAddr, TcpListener, ToSocketAddrs};
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard};
@@ -13,6 +13,8 @@ use teko_crypto::{SigningKey, public_key_bytes};
 
 use crate::error::NodeError;
 use crate::lane::{self, lock_lane};
+use crate::net::{Advertise, Caller, Net};
+use crate::setup::PeerLink;
 use crate::wire::{self, Ack, Msg, SubmitEntries};
 
 pub struct NodeConfig {
@@ -21,8 +23,15 @@ pub struct NodeConfig {
     pub profile: NetworkProfile,
     pub key: SigningKey,
     pub index: usize,
-    /// Every validator's address, by index (this node's own included).
-    pub peers: Vec<SocketAddr>,
+    /// Every node of `peers.txt`, by index (this node's own included): the keys that may open a peer
+    /// session and where to dial them (ADR-0048).
+    pub links: Vec<PeerLink>,
+    /// Where the authenticated PEER port listens; `None` = the own link's `peer` address. Separate
+    /// from the address the node ANNOUNCES (`advertise`), so a node behind a firewall or a proxy can
+    /// listen on `0.0.0.0` and tell the others its public name.
+    pub listen_peer: Option<SocketAddr>,
+    /// `(peer, public)` addresses this node announces in its signed record; `None` = its own link.
+    pub advertise: Option<(String, String)>,
     /// Loopback only unless this is set (never on by default).
     pub allow_remote: bool,
     /// Public trust anchors (`trust.txt`): governance keys and the network the
@@ -41,6 +50,8 @@ pub(crate) struct DkgState {
     pub threshold: usize,
     /// This node's 1-based index in THIS ceremony.
     pub index: u32,
+    /// The consensus keys of the participants, in ceremony order (position + 1 = ceremony index).
+    pub participants: Vec<Vec<u8>>,
 }
 
 struct State {
@@ -65,6 +76,8 @@ pub(crate) struct Shared {
     /// The vote chain: bulletin entries ordered by BFT among the institutions (ADR-0034).
     pub(crate) votes: Mutex<crate::votes::Votes>,
     pub(crate) econ: Option<Mutex<crate::economy::Econ>>,
+    /// Identity, peer sessions, discovery and limits (ADR-0048).
+    pub(crate) net: Arc<Net>,
 }
 
 pub struct Node;
@@ -80,45 +93,97 @@ fn lock(s: &Shared) -> MutexGuard<'_, State> {
 }
 
 impl Node {
+    /// Starts a node. `listen` is where the PUBLIC port listens (what clients dial); the peer port
+    /// listens on `cfg.listen_peer` or on the own `peers.txt` link.
     pub fn start(cfg: NodeConfig, listen: SocketAddr) -> Result<NodeHandle, NodeError> {
-        if !cfg.allow_remote && !listen.ip().is_loopback() {
-            return Err(NodeError::Refused(
-                "the node only listens on loopback (this is a local test network)".into(),
-            ));
-        }
         fs::create_dir_all(&cfg.dir)?;
         let me = public_key_bytes(&cfg.key);
         // a genesis institution holds its own slot; a node that joined LATER (a rotation, ADR-0045)
         // sits after them in `peers.txt` and becomes an institution only when the chain says so
         let genesis_slot = cfg.profile.validators.get(cfg.index);
-        let joined_later = cfg.index >= cfg.profile.validators.len() && cfg.index < cfg.peers.len();
+        let joined_later = cfg.index >= cfg.profile.validators.len() && cfg.index < cfg.links.len();
         if genesis_slot != Some(&me) && !joined_later {
             return Err(NodeError::Refused(
                 "this key is not validator `index` of the network".into(),
             ));
         }
+        let own = cfg
+            .links
+            .get(cfg.index)
+            .ok_or_else(|| NodeError::Refused("this node is not in peers.txt".into()))?;
+        if own.key != me {
+            return Err(NodeError::Refused(
+                "peers.txt lists another key for this index".into(),
+            ));
+        }
+        let peer_listen: SocketAddr = match cfg.listen_peer {
+            Some(a) => a,
+            None => own
+                .peer
+                .to_socket_addrs()?
+                .next()
+                .ok_or_else(|| NodeError::Refused("cannot resolve the peer address".into()))?,
+        };
+        // Loopback only unless asked: the PUBLIC port has no login, and a local test network has no
+        // reason to be reachable from outside.
+        if !cfg.allow_remote && !(listen.ip().is_loopback() && peer_listen.ip().is_loopback()) {
+            return Err(NodeError::Refused(
+                "the node only listens on loopback unless remote listening is enabled".into(),
+            ));
+        }
+        let (adv_peer, adv_public) = cfg
+            .advertise
+            .clone()
+            .unwrap_or_else(|| (own.peer.clone(), own.public.clone()));
+        let genesis = crate::net::genesis_hash(&cfg.profile, cfg.economy.as_ref());
+        let identity = teko_p2p::NetIdentity::load_or_create(
+            cfg.key.clone(),
+            &cfg.profile.chain_id,
+            &genesis,
+            &cfg.dir.join("noise.key"),
+        )?;
+        let net = Net::new(
+            identity,
+            &cfg.profile.chain_id,
+            cfg.links.clone(),
+            Advertise {
+                peer: adv_peer,
+                public: adv_public,
+            },
+            &cfg.dir,
+        );
         let batch = Duration::from_millis(cfg.profile.block_interval_ms);
-        let votes = Mutex::new(crate::votes::open(
+        let votes = crate::votes::open(
             &cfg.dir,
             &cfg.profile,
             &cfg.key,
             cfg.index,
-            cfg.peers.clone(),
-        )?);
+            cfg.links.clone(),
+            net.clone(),
+        )?;
+        net.set_validators("votes", crate::lane::LaneApp::peer_keys(votes.app()));
+        let votes = Mutex::new(votes);
         let econ = match cfg.economy.as_ref() {
-            Some(ec) => Some(Mutex::new(crate::economy::open(
-                &cfg.dir,
-                ec,
-                &cfg.key,
-                cfg.index,
-                cfg.peers.clone(),
-                batch,
-            )?)),
+            Some(ec) => {
+                let e = crate::economy::open(
+                    &cfg.dir,
+                    ec,
+                    &cfg.key,
+                    cfg.index,
+                    cfg.links.clone(),
+                    net.clone(),
+                    batch,
+                )?;
+                net.set_validators("economy", crate::lane::LaneApp::peer_keys(e.app()));
+                Some(Mutex::new(e))
+            }
             None => None,
         };
-        let listener = TcpListener::bind(listen)?;
-        listener.set_nonblocking(true)?;
-        let addr = listener.local_addr()?;
+        let peer_door = TcpListener::bind(peer_listen)?;
+        peer_door.set_nonblocking(true)?;
+        let public_door = TcpListener::bind(listen)?;
+        public_door.set_nonblocking(true)?;
+        let addr = public_door.local_addr()?;
         let shared = Arc::new(Shared {
             state: Mutex::new(State {
                 tally: crate::dkg::load_share(&cfg.dir),
@@ -133,10 +198,19 @@ impl Node {
             stop: AtomicBool::new(false),
             votes,
             econ,
+            net,
         });
         let mut threads = Vec::new();
         let s = shared.clone();
-        threads.push(thread::spawn(move || accept_loop(&s, &listener)));
+        threads.push(thread::spawn(move || {
+            crate::serve::peer_accept_loop(&s, &peer_door);
+        }));
+        let s = shared.clone();
+        threads.push(thread::spawn(move || {
+            crate::serve::public_accept_loop(&s, &public_door);
+        }));
+        let s = shared.clone();
+        threads.push(thread::spawn(move || s.net.discovery_loop()));
         let s = shared.clone();
         threads.push(thread::spawn(move || {
             lane::run_loop(&s.stop, &s.votes);
@@ -175,36 +249,14 @@ impl NodeHandle {
 
     pub fn stop(mut self) {
         self.shared.stop.store(true, Ordering::SeqCst);
+        self.shared.net.stop.store(true, Ordering::SeqCst);
         for t in self.threads.drain(..) {
             let _ = t.join();
         }
     }
 }
 
-fn accept_loop(s: &Arc<Shared>, listener: &TcpListener) {
-    while !s.stop.load(Ordering::SeqCst) {
-        match listener.accept() {
-            Ok((stream, _)) => {
-                let s2 = s.clone();
-                thread::spawn(move || {
-                    let _ = serve(&s2, stream);
-                });
-            }
-            Err(_) => thread::sleep(Duration::from_millis(15)),
-        }
-    }
-}
-
-fn serve(s: &Arc<Shared>, mut stream: TcpStream) -> Result<(), NodeError> {
-    stream.set_nonblocking(false)?;
-    stream.set_read_timeout(Some(Duration::from_secs(10)))?;
-    stream.set_write_timeout(Some(Duration::from_secs(10)))?;
-    let req = wire::read_msg(&mut stream)?;
-    let reply = handle(s, &req);
-    wire::write_msg(&mut stream, &reply)
-}
-
-fn ack(ok: bool, info: &str, accepted: u32) -> Msg {
+pub(crate) fn ack(ok: bool, info: &str, accepted: u32) -> Msg {
     wire::msg(
         wire::ACK,
         &Ack {
@@ -215,23 +267,43 @@ fn ack(ok: bool, info: &str, accepted: u32) -> Msg {
     )
 }
 
-fn handle(s: &Arc<Shared>, req: &Msg) -> Msg {
+/// Answers one request. The caller (a client on the public port, or a validator that proved its
+/// key) has already been allowed this KIND; what the handler adds is per-caller checks of its own
+/// (the key ceremony).
+pub(crate) fn handle(s: &Arc<Shared>, req: &Msg, caller: &Caller<'_>) -> Msg {
     if let Some(r) = crate::economy::handle(s, req) {
         return r;
     }
     if let Some(r) = crate::votes::handle(s, req) {
         return r;
     }
+    let Caller::Peer(caller_key) = caller else {
+        return ack(false, "unknown message", 0);
+    };
     match req.kind {
+        wire::PEERS => match wire::decode::<wire::PeerRecords>(req) {
+            Ok(m) => {
+                s.net.merge_records(m.records);
+                wire::msg(
+                    wire::PEERS_REPLY,
+                    &wire::PeerRecords {
+                        records: s.net.records_to_share(),
+                    },
+                )
+            }
+            Err(_) => ack(false, "malformed", 0),
+        },
         wire::DKG_START => match wire::decode::<wire::DkgStart>(req) {
             Ok(m) => {
                 let mut st = lock(s);
-                crate::dkg::dkg_msg(crate::dkg::start(&mut st.dkg, s.cfg.index, &m))
+                crate::dkg::dkg_msg(crate::dkg::start(&mut st.dkg, s.cfg.index, &s.net.me, &m))
             }
             Err(_) => ack(false, "malformed", 0),
         },
         wire::DKG_SHARE => match wire::decode::<wire::DkgShareReq>(req) {
-            Ok(m) => crate::dkg::dkg_msg(crate::dkg::share_for(&lock(s).dkg, m.requester)),
+            Ok(m) => {
+                crate::dkg::dkg_msg(crate::dkg::share_for(&lock(s).dkg, m.requester, caller_key))
+            }
             Err(_) => ack(false, "malformed", 0),
         },
         wire::DKG_PACKAGES => match wire::decode::<wire::DkgPackages>(req) {
@@ -249,7 +321,7 @@ fn dkg_finish(s: &Arc<Shared>, m: &wire::DkgPackages) -> Msg {
     let Some(st) = lock(s).dkg.take() else {
         return dkg_msg(reply(false, "no ceremony"));
     };
-    let result = finish(&st, s.cfg.index, &s.cfg.peers, m);
+    let result = finish(&st, &s.net, m);
     let mut guard = lock(s);
     match result {
         Ok(ks) => {
@@ -290,12 +362,12 @@ fn punish_vote_equivocations(s: &Arc<Shared>) {
     let Some(econ) = s.econ.as_ref().filter(|_| !evidence.is_empty()) else {
         return;
     };
-    let (msgs, peers, index) = {
+    let (msgs, net, peers) = {
         let mut e = lock_lane(econ);
         let msgs = crate::economy::punish_vote_equivocations(&mut e, &s.cfg.key, &evidence);
-        (msgs, e.peers.clone(), e.index)
+        (msgs, e.net.clone(), e.peers.clone())
     };
-    lane::send_all(&peers, index, msgs);
+    lane::send_all(&net, &peers, msgs);
 }
 
 /// The OUTCOME service (ADR-0040): once a contest is CLOSED and its totals are final (revealed, if

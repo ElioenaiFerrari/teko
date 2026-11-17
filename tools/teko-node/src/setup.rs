@@ -1,7 +1,7 @@
 //! Network files on disk (one folder for the whole local network):
 //! ```text
 //! <dir>/network.txt          public profile (chain_id, validators, threshold)
-//! <dir>/peers.txt            `index=ip:port` per validator
+//! <dir>/peers.txt            `index peer=HOST:PORT public=HOST:PORT key=HEX` per validator (ADR-0048)
 //! <dir>/node-<i>/validator.key   SECRET (hex), mode 0600, test keys only
 //! ```
 
@@ -16,9 +16,81 @@ use teko_crypto::{SigningKey, generate_signing_key, hex, public_key_bytes};
 
 use crate::error::NodeError;
 
+/// One line of `peers.txt`: where to reach a validator and which consensus key it must prove.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PeerLink {
+    /// The institution's consensus key (SEC1 compressed).
+    pub key: Vec<u8>,
+    /// The authenticated peer port (`host:port`, an IP or a DNS name).
+    pub peer: String,
+    /// The public read/submit port clients use.
+    pub public: String,
+}
+
 pub struct NetFiles {
     pub profile: NetworkProfile,
+    /// The PUBLIC addresses of the nodes, by index (what clients dial).
     pub peers: Vec<SocketAddr>,
+    /// The peer links, by index (what nodes dial; carries the keys).
+    pub links: Vec<PeerLink>,
+}
+
+/// How far the public port sits above the peer port in the local test network.
+pub const PUBLIC_PORT_OFFSET: u16 = 8;
+
+impl PeerLink {
+    /// The line of `peers.txt`.
+    pub fn to_line(&self, index: usize) -> String {
+        format!(
+            "{index} peer={} public={} key={}\n",
+            self.peer,
+            self.public,
+            hex::encode(&self.key)
+        )
+    }
+}
+
+fn resolve(a: &str) -> Result<SocketAddr, NodeError> {
+    use std::net::ToSocketAddrs;
+    a.to_socket_addrs()
+        .ok()
+        .and_then(|mut it| it.next())
+        .ok_or_else(|| NodeError::Protocol(format!("peers.txt: cannot resolve {a}")))
+}
+
+/// Parses `peers.txt`: `index peer=… public=… key=…` per line, `#` comments.
+pub fn parse_peers(text: &str) -> Result<Vec<(usize, PeerLink)>, NodeError> {
+    let bad = |m: &str| NodeError::Protocol(format!("peers.txt: {m}"));
+    let mut out = Vec::new();
+    for line in text.lines() {
+        let line = line.trim();
+        if line.is_empty() || line.starts_with('#') {
+            continue;
+        }
+        let mut it = line.split_whitespace();
+        let index: usize = it
+            .next()
+            .and_then(|i| i.parse().ok())
+            .ok_or_else(|| bad("a line must start with the index (old format? recreate the network: make devnet-reset)"))?;
+        let (mut peer, mut public, mut key) = (None, None, None);
+        for f in it {
+            match f.split_once('=') {
+                Some(("peer", v)) => peer = Some(v.to_string()),
+                Some(("public", v)) => public = Some(v.to_string()),
+                Some(("key", v)) => key = hex::decode(v).ok(),
+                _ => return Err(bad("unknown field")),
+            }
+        }
+        let (Some(peer), Some(public), Some(key)) = (peer, public, key) else {
+            return Err(bad("each line needs peer=, public= and key="));
+        };
+        if !teko_p2p::valid_addr(&peer) || !teko_p2p::valid_addr(&public) || key.len() != 33 {
+            return Err(bad("bad address or key"));
+        }
+        out.push((index, PeerLink { key, peer, public }));
+    }
+    out.sort_by_key(|p| p.0);
+    Ok(out)
 }
 
 fn write_private(path: &Path, content: &str) -> std::io::Result<()> {
@@ -53,21 +125,36 @@ pub fn init_network(
     let pubs: Vec<Vec<u8>> = keys.iter().map(public_key_bytes).collect();
     // M-of-N: a strict majority.
     let profile = NetworkProfile::new(kind, pubs, nodes / 2 + 1)?;
+    if nodes > PUBLIC_PORT_OFFSET as usize {
+        return Err(NodeError::Refused(format!(
+            "a local network has at most {PUBLIC_PORT_OFFSET} nodes"
+        )));
+    }
     let mut peers = Vec::new();
-    let mut peers_txt = String::from("# index=address (loopback: this machine only)\n");
+    let mut links = Vec::new();
+    let mut peers_txt = String::from(
+        "# index peer=HOST:PORT public=HOST:PORT key=HEX (loopback: this machine only)\n",
+    );
     for (i, k) in keys.iter().enumerate() {
         let nd = dir.join(format!("node-{i}"));
         fs::create_dir_all(&nd)?;
         write_private(&nd.join("validator.key"), &hex::encode(&k.to_bytes()))?;
-        let addr: SocketAddr = format!("127.0.0.1:{}", base_port + i as u16)
-            .parse()
-            .map_err(|_| NodeError::Protocol("bad address".into()))?;
-        peers_txt.push_str(&format!("{i}={addr}\n"));
-        peers.push(addr);
+        let link = PeerLink {
+            key: public_key_bytes(k),
+            peer: format!("127.0.0.1:{}", base_port + i as u16),
+            public: format!("127.0.0.1:{}", base_port + PUBLIC_PORT_OFFSET + i as u16),
+        };
+        peers_txt.push_str(&link.to_line(i));
+        peers.push(resolve(&link.public)?);
+        links.push(link);
     }
     fs::write(dir.join("network.txt"), profile.to_text())?;
     fs::write(dir.join("peers.txt"), peers_txt)?;
-    Ok(NetFiles { profile, peers })
+    Ok(NetFiles {
+        profile,
+        peers,
+        links,
+    })
 }
 
 pub fn load_network(dir: &Path) -> Result<NetFiles, NodeError> {
@@ -78,37 +165,104 @@ pub fn load_network(dir: &Path) -> Result<NetFiles, NodeError> {
         ))
     })?;
     let profile = NetworkProfile::parse(&text)?;
-    let peers_text = fs::read_to_string(dir.join("peers.txt"))?;
-    let mut peers: Vec<(usize, SocketAddr)> = Vec::new();
-    for line in peers_text.lines() {
-        let line = line.trim();
-        if line.is_empty() || line.starts_with('#') {
-            continue;
-        }
-        let (i, a) = line
-            .split_once('=')
-            .ok_or_else(|| NodeError::Protocol("bad peers.txt".into()))?;
-        peers.push((
-            i.trim()
-                .parse()
-                .map_err(|_| NodeError::Protocol("bad peers.txt".into()))?,
-            a.trim()
-                .parse()
-                .map_err(|_| NodeError::Protocol("bad peers.txt".into()))?,
-        ));
-    }
-    peers.sort_by_key(|p| p.0);
+    let listed = parse_peers(&fs::read_to_string(dir.join("peers.txt"))?)?;
     // every genesis institution has an address; nodes that joined LATER (a rotation, ADR-0045) are
     // listed after them and only add to the list
-    if peers.len() < profile.validators.len() {
+    if listed.len() < profile.validators.len()
+        || listed.iter().enumerate().any(|(i, (n, _))| *n != i)
+        || listed
+            .iter()
+            .zip(&profile.validators)
+            .any(|((_, l), v)| &l.key != v)
+    {
         return Err(NodeError::Protocol(
             "peers.txt does not match the validators".into(),
         ));
     }
+    let mut peers = Vec::new();
+    let mut links = Vec::new();
+    for (_, l) in listed {
+        peers.push(resolve(&l.public)?);
+        links.push(l);
+    }
     Ok(NetFiles {
         profile,
-        peers: peers.into_iter().map(|p| p.1).collect(),
+        peers,
+        links,
     })
+}
+
+/// Assembles `network.txt` and `peers.txt` from the institutions' PUBLIC keys and addresses
+/// (`HEXKEY peer=HOST:PORT public=HOST:PORT` per line, the order is the validator order). Nothing
+/// secret is involved: every institution made its own key with `keygen` (ADR-0048).
+pub fn genesis_network(
+    dir: &Path,
+    kind: NetworkKind,
+    validators_text: &str,
+    force: bool,
+) -> Result<NetFiles, NodeError> {
+    if dir.join("network.txt").exists() && !force {
+        return Err(NodeError::Refused(format!(
+            "{} already has a network (use --force)",
+            dir.display()
+        )));
+    }
+    let bad = |m: &str| NodeError::Protocol(format!("validators: {m}"));
+    let mut links = Vec::new();
+    for line in validators_text.lines() {
+        let line = line.trim();
+        if line.is_empty() || line.starts_with('#') {
+            continue;
+        }
+        let (key, rest) = line
+            .split_once(char::is_whitespace)
+            .ok_or_else(|| bad("line: KEY peer=… public=…"))?;
+        let parsed = parse_peers(&format!("{} {} key={}", links.len(), rest.trim(), key))?;
+        let (_, link) = parsed.into_iter().next().ok_or_else(|| bad("empty line"))?;
+        // the key must be a real SEC1 point, and no key may appear twice
+        if teko_crypto::verifying_key_from_bytes(&link.key).is_err() {
+            return Err(bad("a public key is not a valid P-256 point"));
+        }
+        if links.iter().any(|l: &PeerLink| l.key == link.key) {
+            return Err(bad("an institution appears twice"));
+        }
+        links.push(link);
+    }
+    if links.len() < 2 {
+        return Err(bad("at least two institutions"));
+    }
+    let profile = NetworkProfile::new(
+        kind,
+        links.iter().map(|l| l.key.clone()).collect(),
+        links.len() / 2 + 1,
+    )?;
+    fs::create_dir_all(dir)?;
+    let mut peers_txt = String::from("# index peer=HOST:PORT public=HOST:PORT key=HEX\n");
+    let mut peers = Vec::new();
+    for (i, l) in links.iter().enumerate() {
+        peers_txt.push_str(&l.to_line(i));
+        peers.push(resolve(&l.public)?);
+    }
+    fs::write(dir.join("network.txt"), profile.to_text())?;
+    fs::write(dir.join("peers.txt"), peers_txt)?;
+    Ok(NetFiles {
+        profile,
+        peers,
+        links,
+    })
+}
+
+/// Makes a new consensus key in `node_dir` (hex, mode 0600) and returns it.
+pub fn generate_validator_key(node_dir: &Path) -> Result<SigningKey, NodeError> {
+    fs::create_dir_all(node_dir)?;
+    let key = generate_signing_key(&mut UnwrapErr(rand::rngs::SysRng));
+    write_validator_key(node_dir, &key)?;
+    Ok(key)
+}
+
+/// Reads the consensus key of `node_dir`.
+pub fn read_validator_key(node_dir: &Path) -> Result<SigningKey, NodeError> {
+    load_key(&node_dir.join("validator.key"))
 }
 
 pub fn node_dir(dir: &Path, index: usize) -> PathBuf {

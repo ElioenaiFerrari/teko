@@ -29,7 +29,7 @@ Um milhão de cédulas de 12 opções leva ~5 h de verificação em um núcleo (
 2. **Sigilo de longo prazo:** ElGamal em curva elíptica é quebrável por computador quântico futuro; cédulas cifradas e públicas hoje poderiam ser abertas depois ("colher agora, decifrar depois"). Sem alternativa de limiar pós-quântica pronta e auditada; risco aceito.
 3. **Viés do DKG de Pedersen** (GJKR 1999): um adversário ativo pode enviesar a distribuição da chave pública, não escolhê-la nem aprendê-la; aceito como Helios/Belenios. A prova de posse impede o ataque de chave maliciosa.
 4. **Receipt-freeness só "honest-but-remembering":** a aleatoriedade nasce e morre no dispositivo; um firmware malicioso poderia vazá-la e permitir compra de voto. Mitigação do projeto: firmware M-de-N e build reproduzível.
-5. **Canal entre validadores:** no protótipo, loopback sem autenticação nem cifra; numa cerimônia real exige canal autenticado e cifrado entre instituições, difusão consistente e tratamento de reclamações.
+5. **Canal entre validadores:** a rede usa sessões Noise autenticadas pela chave de consenso (ADR-0048): `DKG_SHARE` só entrega a parte ao dono do índice. (Antes: loopback sem autenticação nem cifra; numa cerimônia real exige canal autenticado e cifrado entre instituições, difusão consistente e tratamento de reclamações.
 6. **Sem ZK de elegibilidade nem nullifier** (etapa à parte); a unicidade vem do registro cego e da chave de eleitor por pleito.
 7. **Implementação criptográfica própria, sem auditoria** (`teko-ballot-crypto`, sobre `p256` 0.14): não há crate auditado de ElGamal de limiar para P-256.
 

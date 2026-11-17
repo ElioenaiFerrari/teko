@@ -30,6 +30,7 @@ tools/devnet-sim/           (Fase 2) simuladores SÓ de dev: equivocação do va
 tools/teko-dev/            (Fase 2) menu de desenvolvimento com setas (ratatui) sobre o Makefile: `make dev`; só dev, nunca em release
 tools/explorer-server/     (Fase 2) explorador: web local + API JSON somente leitura (`make explorer`)
 tools/teko-node/           (Fase 2) validador (gossip, rodízio, troca de turno) + cliente que não confia em nós
+crates/teko-p2p/           (Fase 2) transporte entre validadores: Noise vinculado à chave de consenso, sessão cifrada, limites, registros de endereço assinados (ADR-0048)
 crates/teko-bulletin/      (Fase 2) log Merkle append-only, provas, head assinado, leitor tolerante
 tools/election-admin-cli/  (Fase 2) publicar no quadro, simular votos (rotulados), apurar
 tools/device-emulator/     4. "tela" e "botões" simulados, processo separado

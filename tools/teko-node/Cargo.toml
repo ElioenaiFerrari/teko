@@ -28,6 +28,7 @@ teko-coin.workspace = true
 teko-assets.workspace = true
 teko-economy.workspace = true
 teko-credentials.workspace = true
+teko-p2p.workspace = true
 prost = { workspace = true, features = ["std"] }
 rand.workspace = true
 thiserror = { workspace = true, features = ["std"] }

@@ -2,7 +2,6 @@
 //! institutions (equal power, no coin), hosted by the generic `Lane`. This module is what is
 //! specific to votes: the application glue, entry submission and the status reply.
 
-use std::net::SocketAddr;
 use std::path::Path;
 use std::sync::Arc;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
@@ -15,7 +14,9 @@ use teko_crypto::SigningKey;
 
 use crate::error::NodeError;
 use crate::lane::{self, Kinds, Lane, LaneApp, Setup, ack, lock_lane, send_all};
+use crate::net::Net;
 use crate::node::Shared;
+use crate::setup::PeerLink;
 use crate::wire::{self, Msg, StatusReply, SubmitEntries};
 
 pub(crate) type Votes = Lane<VoteApp>;
@@ -42,6 +43,18 @@ impl LaneApp for VoteApp {
 
     fn validator_set(&self) -> Option<ValidatorSet> {
         self.chain.validator_set().ok()
+    }
+
+    /// The institutions in force and those of a change that is still pending (ADR-0045): a newcomer
+    /// may connect before its set takes effect.
+    fn peer_keys(&self) -> Vec<Vec<u8>> {
+        let now = self.chain.epoch_at(self.chain.height() + 1).epoch;
+        self.chain
+            .epochs()
+            .iter()
+            .filter(|e| e.epoch >= now)
+            .flat_map(|e| e.set.clone())
+            .collect()
     }
 
     fn pending(&self) -> usize {
@@ -87,7 +100,8 @@ pub(crate) fn open(
     profile: &NetworkProfile,
     key: &SigningKey,
     index: usize,
-    peers: Vec<SocketAddr>,
+    peers: Vec<PeerLink>,
+    net: Arc<Net>,
 ) -> Result<Votes, NodeError> {
     let app = VoteApp::new(Chain::new(profile.clone()), key, Box::new(now_secs));
     Lane::open(
@@ -98,6 +112,7 @@ pub(crate) fn open(
             key,
             index,
             peers,
+            net,
             kinds: KINDS,
             batch: Duration::from_millis(profile.block_interval_ms),
         },
@@ -115,7 +130,7 @@ pub(crate) fn submit(s: &Arc<Shared>, b: &SubmitEntries, from_client: bool) -> M
         }
     }
     let mut accepted = 0u32;
-    let (peers, index) = {
+    let (net, peers) = {
         let mut v = lock_lane(&s.votes);
         for e in entries {
             match v.app_mut().submit(e) {
@@ -124,11 +139,11 @@ pub(crate) fn submit(s: &Arc<Shared>, b: &SubmitEntries, from_client: bool) -> M
                 Err(why) => return ack(false, &why, accepted),
             }
         }
-        (v.peers.clone(), v.index)
+        (v.net.clone(), v.peers.clone())
     };
     if from_client && accepted > 0 {
         // Gossip to the other institutions (they do not re-forward).
-        send_all(&peers, index, vec![wire::msg(wire::FORWARD, b)]);
+        send_all(&net, &peers, vec![wire::msg(wire::FORWARD, b)]);
     }
     ack(true, "queued", accepted)
 }
@@ -146,7 +161,7 @@ fn status(s: &Arc<Shared>) -> Msg {
             log_root: chain.board().root().to_vec(),
             mempool: v.app().mempool_len() as u32,
             peers_online: v.peers_online,
-            peers_total: s.cfg.peers.len().saturating_sub(1) as u32,
+            peers_total: s.cfg.links.len().saturating_sub(1) as u32,
             validator_index: s.cfg.index as u32,
             equivocations: v.evidence,
         },

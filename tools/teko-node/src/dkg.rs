@@ -3,12 +3,12 @@
 //! peer straight over the node-to-node connection. The coordinator (the `dkg`
 //! command) only relays PUBLIC data and never sees a share.
 //!
-//! Local test network: loopback, unauthenticated. A real ceremony needs
-//! authenticated, encrypted channels between institutions (ADR-0019).
+//! The shares travel only over authenticated, encrypted peer sessions (ADR-0048): a node gives
+//! the share meant for index `r` only to the institution whose key is the participant `r` of THIS
+//! ceremony, and the coordinator is itself a validator (it proves its key like any peer).
 
 use std::fs;
 use std::io::Write;
-use std::net::SocketAddr;
 use std::path::Path;
 use std::time::Duration;
 
@@ -20,9 +20,11 @@ use teko_ballot_crypto::{point_from_bytes, point_to_bytes, scalar_from_bytes, sc
 use teko_bulletin::{Entry, EntryKind};
 use teko_crypto::hex;
 
-use crate::client::{NodeClient, call};
+use crate::client::NodeClient;
 use crate::error::NodeError;
+use crate::net::{Chan, Net, PeerClient};
 use crate::node::DkgState;
+use crate::setup::PeerLink;
 use crate::wire::{self, DkgPackages, DkgReply, DkgShareReq, DkgStart};
 
 const T: Duration = Duration::from_secs(10);
@@ -42,15 +44,26 @@ pub(crate) fn dkg_msg(r: DkgReply) -> wire::Msg {
 }
 
 /// Round 1 at a node: make the polynomial, keep it, publish the commitments.
-pub(crate) fn start(state: &mut Option<DkgState>, my_index: usize, m: &DkgStart) -> DkgReply {
+pub(crate) fn start(
+    state: &mut Option<DkgState>,
+    my_index: usize,
+    my_key: &[u8],
+    m: &DkgStart,
+) -> DkgReply {
     // the node's place in THIS ceremony: the coordinator says (a rotated set), else its peer position
     let idx = if m.index > 0 {
         m.index
     } else {
         my_index as u32 + 1
     };
-    if m.n < 2 || m.threshold == 0 || m.threshold > m.n || idx > m.n {
+    if m.n < 2 || m.threshold == 0 || m.threshold > m.n || idx > m.n || idx == 0 {
         return reply(false, "bad parameters");
+    }
+    // the ceremony names its participants, and this node must be the one at its index
+    if m.participants.len() != m.n as usize
+        || m.participants.get(idx as usize - 1).map(Vec::as_slice) != Some(my_key)
+    {
+        return reply(false, "this node is not the participant at that index");
     }
     let mut rng = UnwrapErr(SysRng);
     match Participant::new(&mut rng, &m.session, idx, m.n, m.threshold as usize) {
@@ -61,6 +74,7 @@ pub(crate) fn start(state: &mut Option<DkgState>, my_index: usize, m: &DkgStart)
                 n: m.n,
                 threshold: m.threshold as usize,
                 index: idx,
+                participants: m.participants.clone(),
             });
             let mut out = reply(true, "round 1");
             out.round1 = Some(Round1Msg::from(&r1));
@@ -70,12 +84,19 @@ pub(crate) fn start(state: &mut Option<DkgState>, my_index: usize, m: &DkgStart)
     }
 }
 
-/// A peer asks for the share meant for it. Released only while a ceremony is running.
-pub(crate) fn share_for(state: &Option<DkgState>, requester: u32) -> DkgReply {
-    match state
-        .as_ref()
-        .and_then(|s| s.participant.share_for(requester))
-    {
+/// A peer asks for the share meant for it. Released only while a ceremony is running, and only to
+/// the institution that is the participant at `requester` (never to anyone else, nor for our own index).
+pub(crate) fn share_for(state: &Option<DkgState>, requester: u32, caller: &[u8]) -> DkgReply {
+    let Some(st) = state.as_ref() else {
+        return reply(false, "no ceremony or bad index");
+    };
+    let owner = (requester as usize)
+        .checked_sub(1)
+        .and_then(|i| st.participants.get(i));
+    if requester == st.index || owner.map(Vec::as_slice) != Some(caller) {
+        return reply(false, "that share is not yours");
+    }
+    match st.participant.share_for(requester) {
         Some(sh) => {
             let mut out = reply(true, "share");
             out.share = scalar_to_bytes(&sh).to_vec();
@@ -86,12 +107,7 @@ pub(crate) fn share_for(state: &Option<DkgState>, requester: u32) -> DkgReply {
 }
 
 /// Round 2 at a node: verify every package, collect the shares from the peers, finish.
-pub(crate) fn finish(
-    st: &DkgState,
-    my_index: usize,
-    peers: &[SocketAddr],
-    m: &DkgPackages,
-) -> Result<KeyShare, String> {
+pub(crate) fn finish(st: &DkgState, net: &Net, m: &DkgPackages) -> Result<KeyShare, String> {
     if m.session != st.session || m.threshold as usize != st.threshold {
         return Err("another ceremony".into());
     }
@@ -102,31 +118,25 @@ pub(crate) fn finish(
         .collect::<Option<Vec<_>>>()
         .ok_or("malformed package")?;
     verify_packages(&st.session, st.n, st.threshold, &packages).map_err(|e| format!("{e:?}"))?;
-    let _ = my_index;
     let me = st.index;
     let mut received = vec![(me, st.participant.share_for(me).ok_or("own share")?)];
-    // who the shares come from: the ceremony's participants (a rotated set) or all the peers
-    let from: Vec<SocketAddr> = if m.participants.is_empty() {
-        peers.to_vec()
-    } else {
-        m.participants
-            .iter()
-            .map(|a| {
-                a.parse::<SocketAddr>()
-                    .map_err(|_| "bad participant address")
-            })
-            .collect::<Result<_, _>>()?
-    };
-    if from.len() as u32 != st.n {
+    if st.participants.len() as u32 != st.n {
         return Err("the participants do not match the ceremony".into());
     }
-    for (i, addr) in from.iter().enumerate() {
+    // the shares come from the participants the ceremony STARTED with, never from addresses a caller
+    // supplies now; their addresses are the node's own (signed records and `peers.txt`)
+    for (i, key) in st.participants.iter().enumerate() {
         if i as u32 + 1 == me {
             continue;
         }
         let req = wire::msg(wire::DKG_SHARE, &DkgShareReq { requester: me });
-        let r = call(*addr, &req, T).map_err(|e| e.to_string())?;
+        let r = net
+            .call(key, Chan::Rpc, &req, T)
+            .map_err(|e| e.to_string())?;
         let rep: DkgReply = wire::decode(&r).map_err(|e| e.to_string())?;
+        if !rep.ok {
+            return Err(format!("a participant refused the share: {}", rep.info));
+        }
         let sh = scalar_from_bytes(&rep.share).ok_or("bad share encoding")?;
         received.push((i as u32 + 1, sh));
     }
@@ -186,15 +196,16 @@ pub fn load_share(dir: &Path) -> Option<KeyShare> {
 }
 
 /// Runs the ceremony across the running validator nodes and records it on the
-/// chain. Returns the on-chain record (public). `dir` gets `tally-key.pub`.
+/// chain. Returns the on-chain record (public). `dir` gets `tally-key.pub`. The coordinator proves a
+/// validator key of this folder (`PeerClient::open`).
 pub fn run_ceremony(
     client: &NodeClient,
     dir: &Path,
     session: &[u8],
     threshold: usize,
 ) -> Result<DkgRecord, NodeError> {
-    let addrs = client.addrs().to_vec();
-    run_ceremony_among(client, &addrs, dir, session, threshold)
+    let links = crate::setup::load_network(dir)?.links;
+    run_ceremony_among(client, &links, dir, session, threshold)
 }
 
 /// Like `run_ceremony`, among `participants` only (the institutions of the set in force after a
@@ -202,17 +213,18 @@ pub fn run_ceremony(
 /// chain through `client`, which may know more nodes.
 pub fn run_ceremony_among(
     client: &NodeClient,
-    participants: &[SocketAddr],
+    participants: &[PeerLink],
     dir: &Path,
     session: &[u8],
     threshold: usize,
 ) -> Result<DkgRecord, NodeError> {
-    let addrs = participants.to_vec();
-    let n = addrs.len() as u32;
+    let operator = PeerClient::open(dir)?;
+    let n = participants.len() as u32;
+    let keys: Vec<Vec<u8>> = participants.iter().map(|l| l.key.clone()).collect();
     let bad = |m: &str| NodeError::Refused(format!("key ceremony: {m}"));
     // round 1: every node publishes its commitments
     let mut packages = Vec::new();
-    for (pos, a) in addrs.iter().enumerate() {
+    for (pos, link) in participants.iter().enumerate() {
         // each participant learns its place in the ceremony from the coordinator
         let start_msg = wire::msg(
             wire::DKG_START,
@@ -221,9 +233,10 @@ pub fn run_ceremony_among(
                 n,
                 threshold: threshold as u32,
                 index: pos as u32 + 1,
+                participants: keys.clone(),
             },
         );
-        let r: DkgReply = wire::decode(&call(*a, &start_msg, T)?)?;
+        let r: DkgReply = wire::decode(&operator.call(link, &start_msg, T)?)?;
         if !r.ok {
             return Err(bad(&r.info));
         }
@@ -244,11 +257,11 @@ pub fn run_ceremony_among(
             session: session.to_vec(),
             threshold: threshold as u32,
             packages: packages.clone(),
-            participants: addrs.iter().map(ToString::to_string).collect(),
+            participants: Vec::new(),
         },
     );
-    for a in &addrs {
-        let r: DkgReply = wire::decode(&call(*a, &pk_msg, T)?)?;
+    for link in participants {
+        let r: DkgReply = wire::decode(&operator.call(link, &pk_msg, T)?)?;
         if !r.ok {
             return Err(bad(&r.info));
         }

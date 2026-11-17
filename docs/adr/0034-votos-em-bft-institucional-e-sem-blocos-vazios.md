@@ -55,3 +55,4 @@ Aceita provisoriamente com as três recomendações (1: poder igual e conjunto f
 - Testes: ver `docs/TEST-MATRIX.md` (etapa 6 e "Economia sem blocos vazios").
 - **Primeiras moedas na gênese:** sem blocos vazios o fundador não tem como ganhar a primeira recompensa, então `teko-node init --founder … --alloc TEKO` (padrão 1.000 TEKO de teste) põe as primeiras moedas **na gênese**, na carteira dele (decisão do dono do produto: "alloc como argumento ao subir a gênese"). A fundadora é a carteira do dono, criada no dispositivo e na Suite **antes** de subir a rede (README).
 
+> **Atualização (ADR-0048):** o gossip passou a trafegar em sessões Noise autenticadas entre as instituições (porta de pares), com a porta pública separada, limites e descoberta por registros assinados.

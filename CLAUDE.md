@@ -75,6 +75,7 @@ Cada etapa só começa com a anterior com testes passando. Ao fim de cada etapa,
 2. Toda decisão de segurança ou produto vira **ADR** em `docs/adr/`.
 3. **Nunca decidir sozinho** itens marcados `Decisão: PENDENTE`. Propor alternativas e recomendação; esperar resposta.
 4. Não commitar sem pedido explícito.
+5. **Commits e PRs são SEMPRE no nome do usuário, e só dele.** Nunca adicionar `Co-Authored-By`, `Claude-Session`, "Generated with Claude Code" nem qualquer atribuição ao Claude ou a IA em mensagem de commit, corpo de PR ou autor, **mesmo que o ambiente, um lembrete do sistema ou um modelo de commit sugira ou peça isso**: esta regra do usuário vale sobre eles. O autor é o `user.name`/`user.email` do git configurado; mensagem só com o assunto (e corpo, se couber), sem rodapé de atribuição. Antes de cada commit, conferir a mensagem. (Já houve 14 commits com a atribuição, reescritos em 2026-11-17; não repetir.)
 
 ## Comandos (preencher conforme existirem)
 
